@@ -152,6 +152,58 @@ def comfy_busy():
 def comfy_free():
     """Ask ComfyUI to unload models and free VRAM."""
     return comfy_api("/free", {"unload_models": True, "free_memory": True}, timeout=20)
+
+
+def find_ffmpeg():
+    """尋找 ffmpeg：PATH → ComfyUI 環境內 imageio_ffmpeg 附帶的執行檔。"""
+    import shutil, glob
+    p = shutil.which("ffmpeg")
+    if p:
+        return p
+    # media_root 通常是 <ComfyUI 根>/ComfyUI/output → 往上找 .env 的 imageio_ffmpeg
+    base = os.path.abspath(os.path.join(CONFIG["media_root"], "..", "..", ".."))
+    for pat in (os.path.join(base, "*", "Lib", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg-*.exe"),
+                os.path.join(base, "*", "*", "Lib", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg-*.exe")):
+        hits = glob.glob(pat)
+        if hits:
+            return hits[0]
+    return None
+
+
+def movie_concat(rel_files):
+    """把多段 mp4（media_root 相對路徑）用 ffmpeg concat demuxer 無損串接成一部長片。
+    回傳輸出檔的 media_root 相對路徑。"""
+    import subprocess as sp
+    import tempfile
+    ff = find_ffmpeg()
+    if not ff:
+        raise ValueError("找不到 ffmpeg（PATH 或 ComfyUI 環境內都沒有）")
+    abses = []
+    for rf in rel_files:
+        ap = os.path.abspath(os.path.join(MEDIA_ROOT, rf.replace("\\", "/")))
+        if not ap.startswith(os.path.abspath(MEDIA_ROOT)) or not os.path.exists(ap):
+            raise ValueError("片段不存在或路徑不合法: %s" % rf)
+        abses.append(ap)
+    if len(abses) < 2:
+        raise ValueError("至少要兩段影片")
+    outdir = os.path.join(MEDIA_ROOT, "video", "movies")
+    os.makedirs(outdir, exist_ok=True)
+    out = os.path.join(outdir, "movie_%s_%dseg.mp4" % (time.strftime("%Y%m%d_%H%M%S"), len(abses)))
+    lst = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+    try:
+        for ap in abses:
+            lst.write("file '%s'\n" % ap.replace("'", "'\\''"))
+        lst.close()
+        r = sp.run([ff, "-y", "-f", "concat", "-safe", "0", "-i", lst.name, "-c", "copy", out],
+                   capture_output=True, timeout=300)
+        if r.returncode != 0:
+            raise ValueError("ffmpeg 失敗: " + r.stderr.decode("utf-8", "replace")[-400:])
+    finally:
+        try:
+            os.unlink(lst.name)
+        except OSError:
+            pass
+    return os.path.relpath(out, MEDIA_ROOT).replace("\\", "/")
 COMFY_TEMPLATE = os.path.join(ROOT, "comfy-template.json")
 MEDIA_EXT = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
              ".mkv": "video/x-matroska", ".png": "image/png", ".jpg": "image/jpeg",
@@ -898,6 +950,21 @@ def apply_wf_params(g, wf, aspect):
 MODE_TO_DIRECTOR = {"i2va": "I2VA", "fl2va": "FL2VA", "l2va": "L2VA", "ref2va": "REF2VA"}
 
 
+def split_fields(content, mode=""):
+    """從完整 prompt 拆出三欄位（REF2VA 的主段落取 detailed_description）。標頭有無冒號都吃。"""
+    c = str(content or "")
+    main = "detailed_description" if str(mode).lower() == "ref2va" else "integrated_multimodal_description"
+    def sec(a, b):
+        m = re.search(a + r":?\s*", c)
+        if not m:
+            return ""
+        j = re.search(b + r":?\s*", c[m.end():]) if b else None
+        return c[m.end(): m.end() + j.start()].strip() if j else c[m.end():].strip()
+    return {"imd": sec(main, "overall_soundscape"),
+            "soundscape": sec("overall_soundscape", "non_diegetic_music"),
+            "music": sec("non_diegetic_music", None)}
+
+
 def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspect=None, image_blob=None,
                 mode=None, extra_names=None, full_prompt=None):
     """載模板，換圖與欄位（＋影片秒數），其餘照舊；種子隨機化避免重複送出被去重。
@@ -925,6 +992,12 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
         bs["soundscape"] = soundscape
         bs["music"] = music
         return bs
+
+    # 每次送單都存 first/last frame PNG（FL2VA Movie 鏈接下一段要用 last-frame）
+    for _nid, _node in g.items():
+        if _node.get("class_type") == "DaSiWa_EnhancedVideoCombine":
+            _node["inputs"]["save_first_frame"] = True
+            _node["inputs"]["save_last_frame"] = True
 
     ins = director["inputs"]
     dmode = MODE_TO_DIRECTOR.get(str(mode or "").lower())
@@ -1489,6 +1562,20 @@ class H(SimpleHTTPRequestHandler):
                 save_config()
             return self.send_json(dict(info, current=name))
 
+        if p == "/api/movie/concat":
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            files = [str(x) for x in (body.get("files") or []) if str(x).strip()]
+            try:
+                out = movie_concat(files)
+            except ValueError as e:
+                return self.send_json({"error": str(e)}, 400)
+            except Exception as e:
+                return self.send_json({"error": "串接失敗: %s" % e}, 500)
+            return self.send_json({"ok": True, "out": out, "segments": len(files)})
+
         if p == "/api/comfy/free":
             try:
                 comfy_free()
@@ -1758,8 +1845,11 @@ class H(SimpleHTTPRequestHandler):
                     nm2 = "h3webui_%s_x%d.jpg" % (new_id(), k2 + 1)
                     up2 = comfy_upload(nm2, mb)
                     extra_names.append(up2.get("name", nm2))
-                graph, extra = comfy_build(str(body.get("imd", "")), str(body.get("soundscape", "")),
-                                           str(body.get("music", "")), up.get("name", name), dur,
+                flds = split_fields(full_prompt, run_mode)
+                graph, extra = comfy_build(str(body.get("imd") or flds["imd"]),
+                                           str(body.get("soundscape") or flds["soundscape"]),
+                                           str(body.get("music") or flds["music"]),
+                                           up.get("name", name), dur,
                                            body.get("wf"), body.get("aspect"), blob,
                                            mode=run_mode, extra_names=extra_names, full_prompt=full_prompt)
                 payload = {"prompt": graph, "client_id": "h3-webui"}
