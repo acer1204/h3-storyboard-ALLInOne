@@ -73,6 +73,8 @@ body{background:var(--bg);color:var(--fg);
 .slot .plus{font-size:26px;line-height:1;margin-bottom:4px}
 .slot .slab{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:11px;color:var(--faint);z-index:2}
 .slot.has .slab{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.8)}
+.slot.locked{cursor:not-allowed;opacity:.55;border-style:solid;background:var(--code)}
+.slot.locked:hover{border-color:var(--line)}
 .nav.sub.on{font-weight:600}
 .app.collapsed #histsub{display:none}
 .nav.busy .cnt{color:var(--acc)}
@@ -746,14 +748,14 @@ $("#sreset").onclick = () => {
 const PAPI = "/api/prompts";
 const MODES = {i2va:"I2VA", fl2va:"FL2VA", l2va:"L2VA", ref2va:"REF2VA"};
 const MODE_INFO = {
-  i2va:  {title:"I2VA — 圖生影音", sub:"圖片＝影片第一幀。拖入多張圖片可批次逐一生成，每張完成即自動存進歷史紀錄。",
-          drop:"把圖片拖進來，或點此選檔", dropS:"每張圖片＝一筆生成，依檔名排序逐一跑", min:1, max:1, batch:true},
-  fl2va: {title:"FL2VA — 首尾幀生影音", sub:"兩張圖＝首幀＋尾幀，模型編寫連貫過渡劇情。點格子選圖或直接拖入，滿兩格按「加入生成清單」。",
-          drop:"拖入圖片會自動填入下方格子", dropS:"起始幀、結束幀各一格；點格子也可選圖", min:2, max:2, batch:false},
-  l2va:  {title:"L2VA — 末幀生影音", sub:"圖片＝影片最後一幀，劇情鋪陳並精準收束在這張圖。拖入多張可批次生成。",
-          drop:"把圖片拖進來，或點此選檔", dropS:"每張圖片＝一筆生成", min:1, max:1, batch:true},
+  i2va:  {title:"I2VA — 圖生影音", sub:"圖片＝影片第一幀。1 格；一次拖入多張會自動逐張各成一筆（批次）。",
+          drop:"拖圖到這裡，或點下方格子選圖", dropS:"多張＝批次，每張一筆", min:1, max:1},
+  fl2va: {title:"FL2VA — 首尾幀生影音", sub:"兩張圖＝首幀＋尾幀，模型編寫連貫過渡劇情。滿兩格按「加入生成清單」或直接按「開始」。",
+          drop:"拖圖到這裡，或點下方格子選圖", dropS:"起始幀、結束幀各一格", min:2, max:2},
+  l2va:  {title:"L2VA — 末幀生影音", sub:"圖片＝影片最後一幀（首幀鎖定，由模型自由鋪陳）。一次拖入多張會自動逐張各成一筆。",
+          drop:"拖圖到這裡，或點下方格子選圖", dropS:"只有「結束幀」一格可放圖", min:1, max:1, lockFirst:true},
   ref2va:{title:"REF2VA — 參考圖生影音", sub:"參考圖＝角色/物件外觀依據（非影格），1～9 張組成一筆。輸出六欄位參考格式。",
-          drop:"拖入圖片會自動填入下方格子", dropS:"點第 N 格選多張圖＝從第 N 格開始依序填入；✕ 移除、再點一次換圖", min:1, max:9, batch:false},
+          drop:"拖圖到這裡，或點下方格子選圖", dropS:"點第 N 格選多張圖＝從第 N 格開始依序填入；✕ 移除、再點一次換圖", min:1, max:9},
 };
 function curMode(){ const m = $("#mode").value; return MODES[m] ? m : "i2va"; }
 function PSEL(){ return "h3.prompt.all.v1"; }
@@ -774,7 +776,7 @@ window.setMode = m => {
   $("#runSub").textContent = inf.sub;
   $("#dropB").textContent = inf.drop;
   $("#dropS").textContent = inf.dropS;
-  $("#drop").classList.toggle("slim", !inf.batch);
+  $("#drop").classList.add("slim");
   $("#spmodetag").textContent = MODES[m];
   document.querySelectorAll('.nav[data-mode]').forEach(b =>
     b.classList.toggle("on", b.dataset.mode === m && $("#v-run").classList.contains("on")));
@@ -1390,28 +1392,26 @@ function add(fl){
   const files=[...fl].filter(f=>f.type.startsWith("image/"));
   files.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
   const mode = curMode(), inf = MODE_INFO[mode];
-  if (inf.batch){
-    // I2VA / L2VA：每張圖一筆
+  if (inf.max === 1){
+    // I2VA / L2VA（1 格）：多張＝批次，前面的自動組成一筆，最後一張留在格子裡
     for (const f of files){
-      const u = URL.createObjectURL(f);
-      items.push({mode, files:[f], file:f, name:f.name, state:"pending", preview:u, previews:[u]});
+      const S = slotsArr();
+      if (S[0]) composeSlots();
+      setSlot(0, f);
     }
-  } else {
-    // FL2VA / REF2VA：拖進來的圖從第一個空格開始填入格子（各模式的格子互相獨立）
-    const S = slotsArr();
-    let i = S.findIndex(s => !s);
-    if (i < 0) i = S.length < slotCount() ? S.length : 0;
-    for (const f of files){
-      if (i >= slotCount()) break;
-      setSlot(i++, f);
-    }
+    if (files.length > 1) composeSlots();   // 批次拖入：全部直接成筆
     renderSlots();
     return;
   }
-  items.forEach(arFromPreview);
-  render(); $("#run").disabled = !modeItems().length;
-  $("#prog").textContent = `${modeItems().length} 筆待處理`;
-  updateNavCounts();
+  // FL2VA / REF2VA：拖進來的圖從第一個空格開始填入格子（各模式的格子互相獨立）
+  const S = slotsArr();
+  let i = S.findIndex(s => !s);
+  if (i < 0) i = S.length < slotCount() ? S.length : 0;
+  for (const f of files){
+    if (i >= slotCount()) break;
+    setSlot(i++, f);
+  }
+  renderSlots();
 }
 
 /* ===== 每個模式自己的清單視角與側欄計數 ===== */
@@ -1430,7 +1430,13 @@ const SLOTS_BY = {fl2va: [], ref2va: []};
 let slotPick = 0;
 function slotsArr(){ return SLOTS_BY[curMode()] || (SLOTS_BY[curMode()] = []); }
 function slotCount(){ return MODE_INFO[curMode()].max; }
-function slotLabel(i){ return curMode() === "fl2va" ? (i === 0 ? "起始幀" : "結束幀") : "圖 " + (i + 1); }
+function slotLabel(i){
+  const m = curMode();
+  if (m === "fl2va") return i === 0 ? "起始幀" : "結束幀";
+  if (m === "i2va")  return "起始幀";
+  if (m === "l2va")  return "結束幀";
+  return "圖 " + (i + 1);
+}
 function setSlot(i, f){
   const S = slotsArr();
   if (S[i] && S[i].url){ try{ URL.revokeObjectURL(S[i].url); }catch(e){} }
@@ -1444,11 +1450,15 @@ function clearSlots(){
 function renderSlots(){
   const zone = $("#slotzone");
   const inf = MODE_INFO[curMode()];
-  zone.classList.toggle("hide", inf.batch);
-  if (inf.batch) return;
+  zone.classList.remove("hide");         // 四個模式都有自己的格子
   const n = slotCount();
   const S = slotsArr();
-  $("#slotgrid").innerHTML = Array.from({length: n}, (_, i) => {
+  const lockCell = inf.lockFirst
+    ? `<div class="slot locked" title="L2VA：首幀由模型自由鋪陳，不放圖">
+         <span class="sno">🔒</span><span class="plus" style="opacity:.35">—</span>
+         <span class="slab">首幀（鎖定）</span></div>`
+    : "";
+  $("#slotgrid").innerHTML = lockCell + Array.from({length: n}, (_, i) => {
     const s = S[i];
     return `<div class="slot ${s ? "has" : ""}" data-i="${i}" title="${s ? "點擊從此格重新選圖" : "點擊選圖（可多選，從此格依序填入）"}">
       <span class="sno">${i + 1}</span>
@@ -1456,7 +1466,7 @@ function renderSlots(){
       <span class="slab">${slotLabel(i)}${s ? "" : ""}</span>
     </div>`;
   }).join("");
-  document.querySelectorAll("#slotgrid .slot").forEach(el => el.onclick = e => {
+  document.querySelectorAll("#slotgrid .slot[data-i]").forEach(el => el.onclick = e => {
     if (e.target.closest(".sx")) return;
     slotPick = +el.dataset.i;
     $("#slotfiles").click();
@@ -1472,6 +1482,7 @@ function renderSlots(){
   $("#slotStat").textContent = filled
     ? `已放 ${filled} 張` + (filled < need ? `（此模式至少需要 ${need} 張）` : "")
     : "";
+  $("#run").disabled = !(modeItems().length || filled >= need);
 }
 $("#slotfiles").onchange = e => {
   const fs = [...e.target.files].filter(f => f.type.startsWith("image/"));
@@ -1707,6 +1718,7 @@ async function runOne(it){
   it.raw = best.raw;
   { const la = loraApply(best.content); it.content = la.content; it.lora = la.lora; }
   it.ctx = genContext();          // snapshot while LORA_NOTE is still set (note-forced keys included)
+  it.ctx.mode = it.mode || it.ctx.mode;   // 用項目自己的模式，避免生成期間切換側欄污染紀錄
   LORA_NOTE = "";
   it.v = best.v;
   it.attempts = best.attempts;
@@ -1795,7 +1807,7 @@ async function runQueue(list, label){
 }
 $("#run").onclick = () => {
   // 格子模式：格子裡有圖但還沒按「加入清單」→ 自動組成一筆再跑
-  if (!MODE_INFO[curMode()].batch && slotsArr().some(Boolean)){
+  if (slotsArr().some(Boolean)){
     if (!composeSlots()) return;
   }
   runQueue(modeItems().filter(i=>i.state==="pending"||i.state==="error"), "處理中");

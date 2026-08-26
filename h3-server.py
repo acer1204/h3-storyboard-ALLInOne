@@ -1002,11 +1002,17 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
                 if isinstance(v, (str, int)) and v in swaps:
                     wv[i] = swaps[v]
             # duration only on the Director's own UI node (a bare int would collide elsewhere)
-            if new_dur is not None and n.get("type") == "MiniMaxH3Director" and str(n.get("id")) == str(director_id):
-                for i, v in enumerate(wv):
-                    if v == old_dur and isinstance(v, int):
-                        wv[i] = new_dur
-                        break
+            if n.get("type") == "MiniMaxH3Director" and str(n.get("id")) == str(director_id):
+                if new_dur is not None:
+                    for i, v in enumerate(wv):
+                        if v == old_dur and isinstance(v, int):
+                            wv[i] = new_dur
+                            break
+                # 內嵌 metadata 也要反映本次實際執行：mode widget（第 0 欄）與 prompt widget（第 1 欄）
+                if dmode and len(wv) >= 1 and isinstance(wv[0], str):
+                    wv[0] = dmode
+                if full_prompt and str(full_prompt).strip() and len(wv) >= 2 and isinstance(wv[1], str):
+                    wv[1] = str(full_prompt)
     extra = dict(extra)
     extra["client_id"] = "h3-webui"
     return g, extra
