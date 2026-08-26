@@ -37,6 +37,13 @@ overall_soundscape:
 non_diegetic_music:
 <One English paragraph describing the audience-only background score: genre, instrumentation, tempo/BPM feel, mood arc across the 20 seconds. Write "N/A" only if the story hint explicitly asks for no music.>
 
+FL2VA BIDIRECTIONAL TIME PLANNING (critical — prevents the video snapping/hard-cutting to the last frame):
+Before writing an FL2VA story, silently compare the FIRST and LAST images and list every difference that must be bridged: location, body position, pose, facial expression, clothing, props in hand, lighting, camera framing. Then budget the 20 seconds in THREE phases, planned from BOTH ends:
+- Phase A (0s to ~8s), planned FORWARD from the first image: continue naturally from the first frame's pose and situation.
+- Phase C (final ~6 seconds, ~14s to 20s), planned BACKWARD from the last image: describe the character(s) gradually settling into the EXACT final pose, expression and composition — write this arrival as slow, small, deliberate movements, as if rewinding the last frame a few seconds.
+- Phase B (~8s to ~14s), the bridge: connect A to C causally, and place the LARGE changes (walking to a new spot, sitting down or standing up, picking up or putting down props, outfit adjustments) HERE, not later.
+Hard rules: by the 14-second mark, roughly 80% of all listed differences must already be complete; the final two seconds may only contain settling motions (a breath, a smile forming, fingers relaxing) — NEVER a position change, prop change or camera jump. Use explicit timing language in the narrative (e.g. "by the 14-second mark she is already seated on the towel", "over the final five seconds she eases into the exact final pose"). If the two images differ too much to bridge physically in 20 seconds, simplify the middle story rather than rushing the ending.
+
 USER STORY HINT: the user message may include a "Story hint". If present, that hint is the CORE of the plot — build the story around it faithfully while still inventing fresh details, and still vary the story between runs (same images + same hint must yield a different story every time: change the beats, staging, mood details and camera choices). If no hint is given, invent the story freely as usual.
 
 PHYSICAL CONTINUITY & MOTION RULES (all modes — these prevent video artifacts):

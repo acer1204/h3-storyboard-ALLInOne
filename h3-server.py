@@ -155,18 +155,27 @@ def comfy_free():
 
 
 def find_ffmpeg():
-    """尋找 ffmpeg：PATH → ComfyUI 環境內 imageio_ffmpeg 附帶的執行檔。"""
+    """尋找 ffmpeg：PATH → ComfyUI 安裝目錄下任何 Python 環境（含 .env 等點開頭資料夾，
+    glob 預設跳過點開頭所以改用 listdir）附帶的 imageio_ffmpeg 執行檔。"""
     import shutil, glob
     p = shutil.which("ffmpeg")
     if p:
         return p
-    # media_root 通常是 <ComfyUI 根>/ComfyUI/output → 往上找 .env 的 imageio_ffmpeg
-    base = os.path.abspath(os.path.join(CONFIG["media_root"], "..", "..", ".."))
-    for pat in (os.path.join(base, "*", "Lib", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg-*.exe"),
-                os.path.join(base, "*", "*", "Lib", "site-packages", "imageio_ffmpeg", "binaries", "ffmpeg-*.exe")):
-        hits = glob.glob(pat)
-        if hits:
-            return hits[0]
+    seen = set()
+    for updepth in (2, 3):    # media_root 通常是 <根>/ComfyUI/output → 根在上兩層
+        base = os.path.abspath(os.path.join(CONFIG["media_root"], *[".."] * updepth))
+        if base in seen or not os.path.isdir(base):
+            continue
+        seen.add(base)
+        try:
+            subs = os.listdir(base)
+        except OSError:
+            continue
+        for sub in subs:
+            hits = glob.glob(os.path.join(base, sub, "Lib", "site-packages",
+                                          "imageio_ffmpeg", "binaries", "ffmpeg-*.exe"))
+            if hits:
+                return hits[0]
     return None
 
 
