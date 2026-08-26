@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StoryDirector-VA — I2VA / FL2VA / L2VA 生成器</title>
+<style>
+:root { --bg:#f6f7fb; --card:#fff; --ink:#1b2230; --sub:#63708a; --line:#e2e6f0; --acc:#3f51b5; --accink:#fff; --jp:#fff3cd; --lip:#d8f3dc; --bad:#c62828; --ok:#2e7d32; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#11141b; --card:#1a1f2a; --ink:#e8ecf5; --sub:#93a0b8; --line:#2a3245; --acc:#7986cb; --accink:#11141b; --jp:#4a3f14; --lip:#1d4028; --bad:#ef5350; --ok:#66bb6a; }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font-family:"Segoe UI","Noto Sans TC",sans-serif; line-height:1.7; }
+main { max-width:900px; margin:0 auto; padding:20px; }
+h1 { font-size:1.35rem; margin:8px 0 2px; }
+.sub { color:var(--sub); font-size:.9rem; margin-bottom:14px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px 20px; margin:14px 0; }
+.modes { display:flex; gap:10px; flex-wrap:wrap; }
+.mode { flex:1 1 200px; border:2px solid var(--line); border-radius:12px; padding:12px 14px; cursor:pointer; transition:.15s; }
+.mode:hover { border-color:var(--acc); }
+.mode.sel { border-color:var(--acc); background:color-mix(in srgb, var(--acc) 10%, var(--card)); }
+.mode b { font-size:1.05rem; }
+.mode p { margin:4px 0 0; font-size:.82rem; color:var(--sub); }
+.drops { display:flex; gap:12px; flex-wrap:wrap; margin-top:10px; }
+.drop { flex:1 1 260px; border:2px dashed var(--line); border-radius:12px; min-height:190px; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; text-align:center; color:var(--sub); font-size:.9rem; padding:10px; position:relative; }
+.drop.has { border-style:solid; }
+.drop img { max-height:220px; max-width:100%; border-radius:8px; }
+.drop .tag { position:absolute; top:8px; left:10px; background:var(--acc); color:var(--accink); border-radius:20px; padding:1px 10px; font-size:.75rem; font-weight:600; }
+.row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+button { border:0; border-radius:10px; padding:10px 22px; font-size:1rem; cursor:pointer; font-weight:600; }
+#go, #spSave { background:var(--acc); color:var(--accink); }
+#go:disabled { opacity:.45; cursor:not-allowed; }
+.ghost { background:var(--bg); color:var(--ink); border:1px solid var(--line); }
+input[type=text] { background:var(--bg); border:1px solid var(--line); color:var(--ink); border-radius:8px; padding:8px 10px; width:320px; max-width:100%; }
+label.small { font-size:.82rem; color:var(--sub); }
+.status { font-size:.9rem; color:var(--sub); }
+.status.err { color:var(--bad); }
+.checks span { display:inline-block; margin:2px 12px 2px 0; font-size:.85rem; }
+.ok { color:var(--ok); font-weight:700; } .bad { color:var(--bad); font-weight:700; }
+.sec { margin-top:14px; }
+.sec h3 { margin:0 0 4px; font-size:.95rem; color:var(--acc); display:flex; align-items:center; gap:8px; }
+.sec h3 .cp { font-size:.75rem; padding:2px 10px; }
+.sec pre { white-space:pre-wrap; font-family:Consolas,monospace; font-size:.87rem; background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:12px; margin:0; overflow-x:auto; }
+mark.jp { background:var(--jp); color:inherit; border-radius:3px; padding:0 2px; }
+mark.lip { background:var(--lip); color:inherit; border-radius:3px; padding:0 2px; }
+.spin { display:inline-block; width:16px; height:16px; border:3px solid var(--line); border-top-color:var(--acc); border-radius:50%; animation:sp 1s linear infinite; vertical-align:-3px; }
+@keyframes sp { to { transform:rotate(360deg); } }
+.hide { display:none; }
+.refgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(110px,1fr)); gap:10px; margin-top:10px; }
+.refgrid .cell { position:relative; border:1px solid var(--line); border-radius:10px; overflow:hidden; aspect-ratio:1; cursor:pointer; }
+.refgrid .cell img { width:100%; height:100%; object-fit:cover; display:block; }
+.refgrid .cell .no { position:absolute; top:4px; left:6px; background:var(--acc); color:var(--accink); border-radius:12px; padding:0 8px; font-size:.72rem; font-weight:700; }
+.refgrid .cell.add { border:2px dashed var(--line); display:flex; align-items:center; justify-content:center; color:var(--sub); font-size:1.8rem; }
+.refgrid .cell.add:hover { border-color:var(--acc); }
+.tabs { display:flex; gap:8px; margin:4px 0 2px; }
+.tab { background:var(--card); color:var(--sub); border:1px solid var(--line); border-radius:10px 10px 0 0; padding:8px 20px; }
+.tab.sel { color:var(--ink); border-bottom:2px solid var(--acc); font-weight:700; }
+.hitem { border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:12px 0; }
+.hitem .hmeta { font-size:.82rem; color:var(--sub); }
+.hitem .hthumbs img { height:74px; border-radius:6px; margin:6px 6px 0 0; border:1px solid var(--line); }
+.hitem .hhint { font-size:.88rem; margin-top:4px; }
+.hitem details { margin-top:6px; }
+.hitem summary { cursor:pointer; font-size:.88rem; color:var(--acc); }
+.badge { display:inline-block; background:var(--acc); color:var(--accink); border-radius:12px; padding:0 10px; font-size:.75rem; font-weight:700; margin-right:8px; }
+.badge.fail { background:var(--bad); }
+</style>
+</head>
+<body>
+<main>
+<h1>🎬 StoryDirector-VA 劇情 Prompt 生成器</h1>
+<div class="sub">選擇模式 → 上傳圖片 → 生成 20 秒影音劇情 Prompt（qwen3.8-27b @ llama-server）</div>
+
+<div class="tabs">
+  <button class="tab sel" id="tabGen">✨ 生成</button>
+  <button class="tab" id="tabHist">🗂️ 歷史紀錄 <span id="histCount"></span></button>
+  <button class="tab" id="tabPrompt">📝 Prompt</button>
+</div>
+
+<div id="pageGen">
+<div class="card">
+  <b>1. 選擇模式</b>
+  <div class="modes" id="modes">
+    <div class="mode sel" data-m="I2VA"><b>I2VA</b><p>圖片＝第一幀。從這張圖開始向後發展 20 秒劇情。需 1 張圖。</p></div>
+    <div class="mode" data-m="FL2VA"><b>FL2VA</b><p>兩張圖＝首幀＋尾幀。編寫從第一張自然過渡到第二張的劇情。需 2 張圖。</p></div>
+    <div class="mode" data-m="L2VA"><b>L2VA</b><p>圖片＝最後一幀。劇情鋪陳並精準收束在這張圖。需 1 張圖。</p></div>
+    <div class="mode" data-m="REF2VA"><b>REF2VA</b><p>參考圖＝角色/物件/場景的外觀依據（非影格）。1～9 張圖。含日文對話與音景/配樂（暫不支援聲音參考檔）。</p></div>
+  </div>
+</div>
+
+<div class="card">
+  <b>2. 上傳圖片</b>（點擊或拖曳；會自動壓縮至長邊 1024px 再上傳）
+  <div class="drops">
+    <div class="drop" id="d0"><span class="tag" id="t0">起始幀</span><span id="p0">點擊或拖曳圖片到這裡</span></div>
+    <div class="drop hide" id="d1"><span class="tag">結束幀</span><span id="p1">點擊或拖曳圖片到這裡</span></div>
+  </div>
+  <div class="hide" id="refzone">
+    <div class="refgrid" id="refgrid"></div>
+    <div class="row"><span class="status" id="refcount">已選 0 / 9 張參考圖（點縮圖可移除）</span></div>
+  </div>
+  <input type="file" id="f0" accept="image/*" class="hide">
+  <input type="file" id="f1" accept="image/*" class="hide">
+  <input type="file" id="fref" accept="image/*" multiple class="hide">
+</div>
+
+<div class="card">
+  <b>3. 劇情提示（選填）</b>
+  <div class="row" style="margin-top:6px;">
+    <textarea id="hint" rows="2" placeholder="留空＝自由創作。輸入提示（中/英/日皆可）＝以此為劇情核心，例如：她在雪地裡撿到一隻迷路的小企鵝" style="flex:1 1 100%;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:8px 10px;font-family:inherit;font-size:.92rem;resize:vertical;"></textarea>
+  </div>
+</div>
+
+<div class="card">
+  <b>4. 生成</b>
+  <div class="row">
+    <button id="go" disabled>✨ 生成劇情</button>
+    <button class="ghost" id="again" disabled>🎲 同圖再來一個（隨機）</button>
+    <span class="status" id="st"></span>
+  </div>
+  <div class="row">
+    <label class="small">伺服器：<input type="text" id="api" value="http://llamaserver.com:10011"></label>
+    <label class="small"><input type="checkbox" id="autoretry" checked> 未達標自動重生成（最多 3 次）</label>
+  </div>
+</div>
+
+<div class="card hide" id="out">
+  <b>生成結果</b> <span class="status" id="meta"></span>
+  <div class="checks" id="checks"></div>
+  <div id="secs"></div>
+  <div class="row"><button class="ghost" id="cpall">📋 複製完整 Prompt</button></div>
+</div>
+</div><!-- /pageGen -->
+
+<div id="pageHist" class="hide">
+  <div class="card">
+    <div class="row" style="margin-top:0;justify-content:space-between;">
+      <b>歷史生成紀錄（保存在本機瀏覽器）</b>
+      <button class="ghost" id="clearHist">🗑️ 全部清除</button>
+    </div>
+    <div id="histList"></div>
+  </div>
+</div>
+
+<div id="pagePrompt" class="hide">
+  <div class="card">
+    <div class="row" style="margin-top:0;justify-content:space-between;">
+      <b>System Prompt（送給模型的系統指令）</b>
+      <span class="status" id="spStatus"></span>
+    </div>
+    <p class="status" style="margin:6px 0 8px;">在這裡修改後按「儲存」，之後的生成都會使用你的版本（存在本機瀏覽器）。「還原預設」會回到內建版本。</p>
+    <textarea id="spEdit" spellcheck="false" style="width:100%;min-height:60vh;background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:12px;font-family:Consolas,monospace;font-size:.84rem;line-height:1.55;resize:vertical;"></textarea>
+    <div class="row">
+      <button id="spSave">💾 儲存</button>
+      <button class="ghost" id="spReset">↩️ 還原預設</button>
+      <button class="ghost" id="spCopy">📋 複製</button>
+    </div>
+  </div>
+</div>
+</main>
+
+<script>
+const SYSTEM_PROMPT = `You are "StoryDirector-VA", a professional AI video-prompt screenwriter for MiniMax H3 (Hailuo) image-conditioned video+audio generation. You support three task modes:
+- I2VA  (Image-to-Video-Audio): the given image is the FIRST frame; the 20-second video starts exactly from it and evolves forward.
+- FL2VA (First-Last-to-Video-Audio): two images are given; the video starts at the first image and must end exactly at the last image, with one continuous, logical transition between them.
+- L2VA  (Last-to-Video-Audio): the given image is the LAST frame; the video must build up and conclude exactly at it.
+- REF2VA (Reference-to-Video): 1 to 9 reference images ("pictures") are given. They are NOT frames of the video; they define the identity, appearance, outfit and style of the character(s)/object(s) that must appear in the video. Keep every referenced subject visually consistent with its picture, and freely invent the 20-second scene featuring them. REF2VA includes dialogue like the other modes: AT LEAST TWO Japanese dialogue lines using (S#) says: <d>[Japanese] ...</d> syntax — speaker numbers matching Subject numbers, every </d> immediately followed by the lip-sync sentence; for lines spoken together write "(S1)(S2)(S3)(S4) say in unison: <d>[Japanese] ...</d> Their lips move in natural sync with the spoken words." No <Audio N> references (no audio reference files are provided yet). REF2VA uses its OWN output format — output exactly these six sections, each as a header line ending with a colon, in this order, nothing else. Reference tokens are written in angle brackets: <Subject N> for characters/objects, <Picture N> for the N-th given image (in the order given). Example lines are shown after each header:
+
+subject_definitions:
+<One line per subject, then one line per picture stating its role. Pictures and subjects are NOT necessarily one-to-one: first LOOK at all pictures and decide whether some of them show the SAME character/object from different angles (front view, back view, side view, close-up) or in different outfits — multiple views of one character must be merged into ONE subject. Format:
+"<Subject 1> is the woman shown in <Picture 1> (front view) and <Picture 2> (back view), with short dark hair and a red coat." (precise English visual definition — gender, hair, eyes, outfit, distinctive features, art style)
+"<Picture 1> is the front-view appearance reference for <Subject 1>."
+"<Picture 2> is the back-view appearance reference for <Subject 1>."
+Cover ALL given pictures — every picture must be assigned to a subject and a role; number subjects and pictures in the order the images were given.>
+
+summary:
+<One line starting with a bracketed task tag, then the usage statement and a 1-2 sentence plot summary. Format:
+"[reference generation] Use <Subject 1> from <Picture 1> and <Subject 2> from <Picture 2>. <short plot summary>">
+
+retention_analysis:
+<One line per subject/picture stating its retention level and what is preserved, using levels fully_preserved / attribute_transfer / weak_reference. Format:
+"<Subject 1> (appears in [Shot 1], [Shot 2]): fully_preserved - identity, face, hairstyle and clothing remain consistent."
+"<Picture 1> (appearance reference): fully_preserved - outfit colors and art style are retained.">
+
+detailed_description:
+<The 20-second timeline. Starts with "[Shot 1] ". You MAY use 1 to 3 shots: [Shot 1] has no timestamp; each later shot starts with "[Shot 2] At 00:0X.000, camera cuts to ..." with strictly increasing timestamps within 20 seconds. WITHIN each shot the physical-continuity rules fully apply: smooth type-first camera moves, no teleporting motion, subjects referenced as <Subject N>. Include the dialogue lines here (>=2, per the rules above). CHARACTER VISIBILITY CONTROL (prevents extra characters bleeding into shots): every shot that does not include ALL subjects must begin by explicitly declaring who is on screen and who is not, e.g. "Only <Subject 1> and <Subject 2> are visible in this shot; <Subject 3> and <Subject 4> are completely off-screen." Never use words like "nearby", "beside them", "in the background" about off-screen subjects, and never mention an off-screen subject's actions inside a shot they do not appear in. The retention_analysis "(appears in [Shot N])" lists must exactly match these per-shot visibility declarations. THIS SECTION ALONE must be AT LEAST 450 English words (write generously and unhurriedly, never fewer than 400) — do not let the other sections shorten it.>
+
+overall_soundscape:
+<One English paragraph describing the diegetic ambient audio: environment tone, foley tied to on-screen actions, non-verbal human sounds, spatial qualities, evolution across the 20 seconds. No music here.>
+
+non_diegetic_music:
+<One English paragraph describing the audience-only background score: genre, instrumentation, tempo/BPM feel, mood arc across the 20 seconds. Write "N/A" only if the story hint explicitly asks for no music.>
+
+USER STORY HINT: the user message may include a "Story hint". If present, that hint is the CORE of the plot — build the story around it faithfully while still inventing fresh details, and still vary the story between runs (same images + same hint must yield a different story every time: change the beats, staging, mood details and camera choices). If no hint is given, invent the story freely as usual.
+
+PHYSICAL CONTINUITY & MOTION RULES (all modes — these prevent video artifacts):
+- Every movement must be physically plausible, continuous and visibly motivated. NO instantaneous, teleporting or snapping motions; NO word "suddenly" for limb movements.
+- Describe each significant action as a smooth arc with duration, e.g. "over about two seconds she slowly reaches out, her fingers closing around the cup".
+- Characters may ONLY interact with objects that are VISIBLE in frame and already established in the scene. NEVER invent hidden, invisible or off-screen mechanisms (no hidden strings, unseen buttons, magic triggers).
+- Objects never change state without an on-screen physical cause performed at natural speed.
+- Budget the 20 seconds with FEW, deliberate actions (2-4 major beats). Avoid rapid back-and-forth movements; a hand that reaches out must complete its motion naturally before doing anything else.
+- Keep body poses continuous between beats: a character who is sitting must visibly stand up before walking, etc.
+
+From the visual evidence in the image(s) — characters, expressions, actions, clothing, props, surroundings, lighting, atmosphere — invent ONE fun, engaging, coherent 20-second mini-story. Be imaginative: every run must produce a DIFFERENT story even for the same image. Pick a fresh dramatic angle each time (a surprise, a small mishap, a joke, a discovery, a tender moment, a tiny adventure...).
+
+STRICT OUTPUT FORMAT (MiniMax H3 compatible) — output exactly these three sections, each as a header line followed by its content, nothing else, no markdown, no extra commentary:
+
+integrated_multimodal_description
+<Begin this section with "[Shot 1] " and write ONE single continuous English narrative of AT LEAST 350 words (this section alone must exceed 350 English words — write generously, never fewer than 320) describing the full 20-second unbroken take as a timeline: visual style, the scene, the character(s), their actions, expressions and emotional beats, synchronized on-screen sound events, and the camera work. There is EXACTLY ONE shot: never write [Shot 2], never write "camera cuts to", no timestamps — ABSOLUTELY NO hard cuts, no jump cuts, no scene changes. For pacing inside the shot use phrases like "halfway through" or "in the final seconds". Specify each camera movement by type first, then amplitude and speed (e.g. "camera makes a slow, small-amplitude push toward her face", "camera arcs clockwise with small amplitude at slow speed"); allowed moves: slow push-in, gentle pan, slow arc, crane, rack focus, handheld drift. The story must flow causally from beat to beat. Assign every speaking character a fixed speaker ID (S1, S2 ...). Include AT LEAST TWO spoken dialogue lines using EXACTLY this MiniMax H3 dialogue syntax: the character (S1) says: <d>[Japanese] exact Japanese words.</d> — the dialogue text inside the <d> tags MUST be written in Japanese script, and EVERY </d> must be immediately followed by this exact English sentence: Her lips move in natural sync with the spoken words. (use "His" if the speaker is male). Dialogue must be meaningful sentences — no fillers, no interjections, no meaningless sounds like えっ/あの/うーん alone. Any on-screen text uses straight double-quotes.>
+
+overall_soundscape
+<One English paragraph with ONLY the physical/diegetic ambient audio of the whole clip: environment tone, foley tied to on-screen actions, non-verbal human sounds, spatial qualities, and how it evolves across the 20 seconds. No music here.>
+
+non_diegetic_music
+<One English paragraph describing the audience-only background score: genre, instrumentation, tempo/BPM feel, mood arc across the 20 seconds, and how it supports the story beats.>
+
+Rules recap: English only for all descriptions; Japanese only inside <d></d> tags; >=300 words in integrated_multimodal_description; >=2 dialogue lines in (S#) says: <d>[Japanese] ...</d> syntax; the lip-sync sentence after every dialogue; exactly one continuous [Shot 1], natural camera motion, no cuts, no timestamps; story coherent and fun; high variability between runs. Exception — REF2VA mode: six colon-suffixed sections with <Subject N>/<Picture N> tokens; up to 3 shots allowed with "At 00:0X.000" timestamps on [Shot 2] onward; dialogue and both audio sections follow the same rules as the other modes; no <Audio N> references.`;
+
+const ANGLES = ["a playful surprise twist","a tiny everyday adventure","a heartwarming quiet moment","a comedic small mishap","an unexpected discovery","a mischievous prank","a moment of triumph","a magical little coincidence","a secret finally shared","a sudden change of weather that changes the mood"];
+
+let mode = "I2VA";
+let imgs = [null, null];   // data URLs (compressed)
+let refImgs = [];          // REF2VA reference images (max 9)
+
+const $ = id => document.getElementById(id);
+
+// --- mode selection ---
+document.querySelectorAll('.mode').forEach(el => el.onclick = () => {
+  document.querySelectorAll('.mode').forEach(x => x.classList.remove('sel'));
+  el.classList.add('sel');
+  mode = el.dataset.m;
+  const isRef = mode === 'REF2VA';
+  $('d0').classList.toggle('hide', isRef);
+  $('d1').classList.toggle('hide', mode !== 'FL2VA');
+  $('refzone').classList.toggle('hide', !isRef);
+  $('t0').textContent = mode === 'L2VA' ? '結束幀' : '起始幀';
+  updateGo();
+});
+
+// --- REF2VA multi-upload grid ---
+function renderRefs() {
+  const g = $('refgrid');
+  g.innerHTML = '';
+  refImgs.forEach((u, i) => {
+    const c = document.createElement('div');
+    c.className = 'cell'; c.title = '點擊移除';
+    c.innerHTML = `<img src="${u}"><span class="no">${i + 1}</span>`;
+    c.onclick = () => { refImgs.splice(i, 1); renderRefs(); updateGo(); };
+    g.appendChild(c);
+  });
+  if (refImgs.length < 9) {
+    const a = document.createElement('div');
+    a.className = 'cell add'; a.textContent = '＋';
+    a.onclick = () => $('fref').click();
+    g.appendChild(a);
+  }
+  $('refcount').textContent = `已選 ${refImgs.length} / 9 張參考圖（點縮圖可移除）`;
+}
+renderRefs();
+$('fref').onchange = async () => {
+  for (const f of Array.from($('fref').files).slice(0, 9 - refImgs.length)) {
+    refImgs.push(await compress(f));
+  }
+  $('fref').value = '';
+  renderRefs(); updateGo();
+};
+
+// --- upload & compress ---
+function compress(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const M = 1024, r = Math.min(1, M / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * r); c.height = Math.round(img.height * r);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      res(c.toDataURL('image/jpeg', 0.88));
+    };
+    img.onerror = rej;
+    img.src = URL.createObjectURL(file);
+  });
+}
+[0,1].forEach(i => {
+  const d = $('d'+i), f = $('f'+i);
+  d.onclick = () => f.click();
+  f.onchange = async () => { if (f.files[0]) await setImg(i, f.files[0]); };
+  d.ondragover = e => { e.preventDefault(); };
+  d.ondrop = async e => { e.preventDefault(); if (e.dataTransfer.files[0]) await setImg(i, e.dataTransfer.files[0]); };
+});
+async function setImg(i, file) {
+  imgs[i] = await compress(file);
+  const d = $('d'+i);
+  d.classList.add('has');
+  $('p'+i).innerHTML = '';
+  let im = d.querySelector('img'); if (!im) { im = document.createElement('img'); d.appendChild(im); }
+  im.src = imgs[i];
+  updateGo();
+}
+function updateGo() {
+  const need = mode === 'REF2VA' ? refImgs.length >= 1
+             : mode === 'FL2VA' ? (imgs[0] && imgs[1]) : imgs[0];
+  $('go').disabled = !need;
+  $('again').disabled = !need;
+}
+
+// --- normalization: enforce H3 dialogue syntax / REF2VA header colons ---
+function normalize(text) {
+  text = text
+    .replace(/<d>\s*(?!\[Japanese\])/g, '<d>[Japanese] ')   // 補上缺少的語言標記
+    .replace(/\b(?:The|Her|His|She|He) \((S\d)\) says:/g, '($1) says:');  // "Her (S1) says" → "(S1) says"
+  if (mode === 'REF2VA') {
+    text = text.replace(/^(subject_definitions|summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music)\s*$/gm, '$1:');
+  }
+  return text;
+}
+
+const REF_HEADERS = ["subject_definitions:","summary:","retention_analysis:","detailed_description:","overall_soundscape:","non_diegetic_music:"];
+
+// 複製到剪貼簿：非 HTTPS/localhost 環境下 navigator.clipboard 不存在，退回 execCommand
+function copyText(text, btn, okLabel, normalLabel) {
+  const done = ok => {
+    if (!btn) return;
+    btn.textContent = ok ? okLabel : '複製失敗';
+    setTimeout(() => btn.textContent = normalLabel, 1200);
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => done(true), () => fallback());
+  } else fallback();
+  function fallback() {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:-9999px;opacity:0;';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    done(ok);
+  }
+}
+
+// --- validation ---
+function validate(text) {
+  const shot1 = text.includes('[Shot 1]');
+  const noCuts = !text.includes('[Shot 2]') && !/cuts to/i.test(text);
+  if (mode === 'REF2VA') {
+    const secs = REF_HEADERS.every(h => text.includes(h));
+    const m = text.match(/detailed_description:\s*([\s\S]*?)\s*overall_soundscape:/);
+    const words = m ? m[1].split(/\s+/).filter(Boolean).length : 0;
+    const subj = new Set(text.match(/<Subject \d+>/g) || []).size;
+    const pics = new Set(text.match(/<Picture \d+>/g) || []).size;
+    const ret = (text.match(/fully_preserved|attribute_transfer|weak_reference/g) || []).length;
+    const tag = /summary:\s*\[/.test(text);
+    const dial = (text.match(/<d>\[Japanese\][^<]*[぀-ヿ一-鿿][^<]*<\/d>/g) || []).length;
+    const lip = (text.match(/lips move in natural sync with the spoken words/g) || []).length;
+    const ss = text.match(/overall_soundscape:\s*(\S[^\n]*)/);
+    const mus = text.match(/non_diegetic_music:\s*(\S[^\n]*)/);
+    const audio = !!(ss && ss[1].length > 20 && mus && mus[1].length > 20);
+    const need = refImgs.length;
+    return { secs, words, subj, pics, ret, tag, dial, lip, audio, shot1,
+             pass: secs && words >= 300 && subj >= 1 && pics >= need && ret >= 1 && tag && dial >= 2 && lip >= dial && audio && shot1 };
+  }
+  const secs = ["integrated_multimodal_description","overall_soundscape","non_diegetic_music"].every(s => text.includes(s));
+  const m = text.match(/integrated_multimodal_description\s*([\s\S]*?)\s*overall_soundscape/);
+  const words = m ? m[1].split(/\s+/).filter(Boolean).length : 0;
+  const lip = (text.match(/lips move in natural sync with the spoken words/g) || []).length;
+  const dial = (text.match(/\(S\d\) says: <d>\[Japanese\][^<]*[぀-ヿ一-鿿][^<]*<\/d>/g) || []).length;
+  return { secs, words, lip, dial, shot1, noCuts, pass: secs && words >= 300 && dial >= 2 && lip >= 2 && shot1 && noCuts };
+}
+
+// --- generation ---
+async function callAPI() {
+  const angle = ANGLES[Math.floor(Math.random() * ANGLES.length)];
+  const seed = Math.floor(Math.random() * 2147483647);
+  let text = `Task mode: ${mode}. Creative angle for this run: ${angle}. Analyze the image(s) and write the story prompt in the strict format for this mode.`;
+  const hint = $('hint').value.trim();
+  if (hint) text += ` Story hint (build the plot around this): "${hint}"`;
+  const content = [{ type: "text", text }];
+  const use = mode === 'REF2VA' ? refImgs : mode === 'FL2VA' ? [imgs[0], imgs[1]] : [imgs[0]];
+  use.forEach(u => content.push({ type: "image_url", image_url: { url: u } }));
+  const r = await fetch($('api').value.replace(/\/$/, '') + '/v1/chat/completions', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'qwen3.8-27b',
+      messages: [{ role: 'system', content: getSystemPrompt() }, { role: 'user', content }],
+      temperature: 1.0, top_p: 0.95, seed, max_tokens: mode === 'REF2VA' ? 3600 : 2200
+    })
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + (await r.text()).slice(0, 200));
+  const j = await r.json();
+  return { text: normalize(j.choices[0].message.content.trim()), angle, seed };
+}
+
+let lastText = '';
+async function generate() {
+  $('go').disabled = true; $('again').disabled = true;
+  $('out').classList.add('hide');
+  const maxTry = $('autoretry').checked ? 3 : 1;
+  let best = null;
+  try {
+    for (let t = 1; t <= maxTry; t++) {
+      $('st').innerHTML = `<span class="spin"></span> 生成中（第 ${t} 次）… 模式 ${mode}`;
+      $('st').classList.remove('err');
+      const t0 = performance.now();
+      const res = await callAPI();
+      res.elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+      res.v = validate(res.text);
+      if (!best || res.v.pass) best = res;
+      if (res.v.pass) break;
+    }
+    show(best);
+    $('st').textContent = '';
+  } catch (e) {
+    $('st').textContent = '錯誤：' + e.message;
+    $('st').classList.add('err');
+  }
+  updateGo();
+}
+function hl(t) {
+  const esc = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return esc
+    .replace(/((?:Her|His) lips move in natural sync with the spoken words\.?)/g, '<mark class="lip">$1</mark>')
+    .replace(/(\(S\d\) says: &lt;d&gt;\[Japanese\][^&]*&lt;\/d&gt;)/g, '<mark class="jp">$1</mark>');
+}
+function splitSections(text, headers) {
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return headers.map((h, i) => {
+    const next = headers.slice(i + 1).map(esc).join('|');
+    const re = next ? new RegExp(esc(h) + '\\s*([\\s\\S]*?)\\s*(?=' + next + ')')
+                    : new RegExp(esc(h) + '\\s*([\\s\\S]*)$');
+    const m = text.match(re);
+    return { name: h, body: m ? m[1].trim() : '' };
+  });
+}
+function show(res) {
+  lastText = res.text;
+  const v = res.v;
+  const headers = mode === 'REF2VA' ? REF_HEADERS
+    : ["integrated_multimodal_description","overall_soundscape","non_diegetic_music"];
+  const secs = splitSections(res.text, headers);
+  $('secs').innerHTML = secs.map((s, i) =>
+    `<div class="sec"><h3>${s.name.replace(':','')} <button class="ghost cp" data-s="${i}">複製</button></h3><pre id="s${i}"></pre></div>`).join('');
+  secs.forEach((s, i) => { $('s' + i).innerHTML = hl(s.body || (i === 0 ? res.text : '')); });
+  document.querySelectorAll('.cp').forEach(b => b.onclick = () => {
+    copyText($('s' + b.dataset.s).innerText, b, '已複製', '複製');
+  });
+  const ok = b => b ? '<span class="ok">✔</span>' : '<span class="bad">✘</span>';
+  if (mode === 'REF2VA') {
+    $('checks').innerHTML =
+      `<span>${ok(v.secs)} 六欄位格式</span><span>${ok(v.words>=300)} detailed_description ${v.words} 詞</span>` +
+      `<span>${ok(v.subj>=1)} &lt;Subject&gt; ${v.subj} 位</span><span>${ok(v.pics>=refImgs.length)} &lt;Picture&gt; ${v.pics} 張全數對應</span>` +
+      `<span>${ok(v.ret>=1)} 保留等級標註</span><span>${ok(v.tag)} summary 任務標籤</span>` +
+      `<span>${ok(v.dial>=2)} 日文對話 ${v.dial} 句</span><span>${ok(v.lip>=v.dial)} lip-sync 句 ${v.lip} 次</span>` +
+      `<span>${ok(v.audio)} 音景/配樂內容</span><span>${ok(v.shot1)} [Shot 1] 開頭</span>`;
+  } else {
+    $('checks').innerHTML =
+      `<span>${ok(v.secs)} 三段式格式</span><span>${ok(v.words>=300)} 主段落 ${v.words} 詞</span>` +
+      `<span>${ok(v.dial>=2)} 日文對話 ${v.dial} 句（&lt;d&gt; 語法）</span><span>${ok(v.lip>=2)} lip-sync 句 ${v.lip} 次</span>` +
+      `<span>${ok(v.shot1)} [Shot 1] 開頭</span><span>${ok(v.noCuts)} 無硬切/無 Shot 2</span>`;
+  }
+  const hint = $('hint').value.trim();
+  $('meta').textContent = `｜模式 ${mode}｜seed ${res.seed}｜創意角度：${res.angle}${hint ? '｜提示：' + hint.slice(0, 30) : ''}｜耗時 ${res.elapsed}s`;
+  $('out').classList.remove('hide');
+  $('out').scrollIntoView({ behavior: 'smooth' });
+  saveHistory(res).catch(e => console.warn('history save failed:', e));
+}
+$('go').onclick = generate;
+$('again').onclick = generate;
+$('cpall').onclick = () => {
+  copyText(lastText, $('cpall'), '📋 已複製！', '📋 複製完整 Prompt');
+};
+
+// ===== 歷史紀錄（IndexedDB，含上傳圖片） =====
+let db = null;
+function openDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('storydirector', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('history', { keyPath: 'id', autoIncrement: true });
+    r.onsuccess = () => { db = r.result; res(db); };
+    r.onerror = () => rej(r.error);
+  });
+}
+function dbOp(mode, fn) {
+  return new Promise(async (res, rej) => {
+    if (!db) await openDB();
+    const tx = db.transaction('history', mode);
+    const store = tx.objectStore('history');
+    const req = fn(store);
+    tx.oncomplete = () => res(req && req.result);
+    tx.onerror = () => rej(tx.error);
+  });
+}
+async function saveHistory(res) {
+  const images = mode === 'REF2VA' ? refImgs.slice() : (mode === 'FL2VA' ? [imgs[0], imgs[1]] : [imgs[0]]);
+  await dbOp('readwrite', s => s.add({
+    ts: Date.now(), mode, hint: $('hint').value.trim(),
+    seed: res.seed, angle: res.angle, elapsed: res.elapsed,
+    pass: !!res.v.pass, images, text: res.text
+  }));
+  updateHistCount();
+}
+async function getAllHistory() {
+  return (await dbOp('readonly', s => s.getAll())) || [];
+}
+async function updateHistCount() {
+  const n = (await dbOp('readonly', s => s.count())) || 0;
+  $('histCount').textContent = n ? `(${n})` : '';
+}
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function renderHistory() {
+  const list = (await getAllHistory()).sort((a, b) => b.ts - a.ts);
+  const box = $('histList');
+  if (!list.length) { box.innerHTML = '<p class="status" style="margin-top:10px;">尚無紀錄。生成成功後會自動保存在這裡。</p>'; return; }
+  box.innerHTML = '';
+  list.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'hitem';
+    const thumbs = item.images.filter(Boolean).map(u => `<img src="${u}">`).join('');
+    const hintHtml = item.hint ? `<div class="hhint">💡 ${item.hint.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>` : '';
+    el.innerHTML =
+      `<div class="hmeta"><span class="badge${item.pass ? '' : ' fail'}">${item.mode}</span>${fmtTime(item.ts)}｜seed ${item.seed}｜創意角度：${item.angle}｜耗時 ${item.elapsed}s${item.pass ? '' : '｜⚠ 未全數達標'}</div>` +
+      `<div class="hthumbs">${thumbs}</div>` + hintHtml +
+      `<details><summary>查看完整 Prompt</summary><pre class="out" style="white-space:pre-wrap;font-family:Consolas,monospace;font-size:.85rem;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto;"></pre></details>` +
+      `<div class="row"><button class="ghost hcopy">📋 複製 Prompt</button><button class="ghost hdel">🗑️ 刪除</button></div>`;
+    el.querySelector('pre').innerHTML = hl(item.text);
+    el.querySelector('.hcopy').onclick = ev => {
+      copyText(item.text, ev.target, '📋 已複製！', '📋 複製 Prompt');
+    };
+    el.querySelector('.hdel').onclick = async () => {
+      await dbOp('readwrite', s => s.delete(item.id));
+      el.remove(); updateHistCount();
+      if (!$('histList').children.length) renderHistory();
+    };
+    box.appendChild(el);
+  });
+}
+$('clearHist').onclick = async () => {
+  if (!confirm('確定要清除全部歷史紀錄嗎？此動作無法復原。')) return;
+  await dbOp('readwrite', s => s.clear());
+  renderHistory(); updateHistCount();
+};
+function switchTab(name) {
+  const tabs = { gen: ['tabGen', 'pageGen'], hist: ['tabHist', 'pageHist'], prompt: ['tabPrompt', 'pagePrompt'] };
+  for (const k in tabs) {
+    $(tabs[k][0]).classList.toggle('sel', k === name);
+    $(tabs[k][1]).classList.toggle('hide', k !== name);
+  }
+}
+$('tabGen').onclick = () => switchTab('gen');
+$('tabHist').onclick = () => { switchTab('hist'); renderHistory(); };
+$('tabPrompt').onclick = () => { switchTab('prompt'); loadPromptEditor(); };
+updateHistCount();
+
+// ===== System Prompt 分頁：檢視 / 編輯 / 儲存 =====
+const SP_KEY = 'storydirector_system_prompt';
+const spStore = {
+  get() { try { return localStorage.getItem(SP_KEY); } catch (e) { return null; } },
+  set(v) { try { localStorage.setItem(SP_KEY, v); return true; } catch (e) { return false; } },
+  del() { try { localStorage.removeItem(SP_KEY); } catch (e) {} }
+};
+function getSystemPrompt() {
+  return spStore.get() || SYSTEM_PROMPT;
+}
+function loadPromptEditor() {
+  $('spEdit').value = getSystemPrompt();
+  $('spStatus').textContent = spStore.get() ? '目前使用：自訂版本' : '目前使用：內建預設';
+}
+$('spSave').onclick = () => {
+  const v = $('spEdit').value.trim();
+  if (!v) { $('spStatus').textContent = '內容不可為空'; return; }
+  $('spStatus').textContent = spStore.set(v)
+    ? '已儲存 ✔（之後的生成都會使用此版本）'
+    : '儲存失敗：此環境不支援本機儲存';
+};
+$('spReset').onclick = () => {
+  if (!confirm('確定要捨棄自訂版本、還原為內建預設嗎？')) return;
+  spStore.del();
+  loadPromptEditor();
+  $('spStatus').textContent = '已還原為內建預設 ✔';
+};
+$('spCopy').onclick = () => copyText($('spEdit').value, $('spCopy'), '📋 已複製！', '📋 複製');
+</script>
+</body>
+</html>

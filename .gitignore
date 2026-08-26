@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+TEST IMAGE/
+*.png
+*.jpg
+results*.json
+jobs.json
+thumbs.json
+full_outputs.txt
+ref4_out.txt
+report.html
+build_report.py
