@@ -65,6 +65,8 @@ PROMPTS = os.path.join(ROOT, "prompts")
 PINDEX = os.path.join(PROMPTS, "index.json")
 LORAS = os.path.join(ROOT, "loras")
 LINDEX = os.path.join(LORAS, "index.json")
+MOVIES = os.path.join(ROOT, "movies")
+MINDEX = os.path.join(MOVIES, "index.json")
 LESSONS_DIR = os.path.join(ROOT, "lessons")
 LESSONS_FILE = os.path.join(LESSONS_DIR, "lessons.json")
 REQUIRED_FILE = os.path.join(LESSONS_DIR, "required.json")
@@ -177,6 +179,20 @@ def find_ffmpeg():
             if hits:
                 return hits[0]
     return None
+
+
+def load_mindex():
+    try:
+        with open(MINDEX, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def save_mindex(rows):
+    os.makedirs(MOVIES, exist_ok=True)
+    with open(MINDEX, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False, indent=1)
 
 
 def movie_concat(rel_files):
@@ -1495,6 +1511,31 @@ class H(SimpleHTTPRequestHandler):
         if p == "/api/gpu":
             return self.send_json(gpu_mem())
 
+        if p == "/api/movies":
+            return self.send_json(load_mindex())
+
+        m = re.match(r"^/api/movies/([^/]+)$", p)
+        if m and ID_RE.match(m.group(1)):
+            fp = os.path.join(MOVIES, m.group(1) + ".json")
+            if not os.path.exists(fp):
+                return self.send_json({"error": "not found"}, 404)
+            with open(fp, encoding="utf-8") as f:
+                return self.send_json(json.load(f))
+
+        m = re.match(r"^/api/movies/([^/]+)/img/(\d{1,2})\.jpg$", p)
+        if m and ID_RE.match(m.group(1)):
+            fp = os.path.join(MOVIES, "%s.img%s.jpg" % (m.group(1), m.group(2)))
+            if not os.path.exists(fp):
+                return self.send_json({"error": "not found"}, 404)
+            b = open(fp, "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Cache-Control", "max-age=86400")
+            self.end_headers()
+            self.wfile.write(b)
+            return
+
         if p == "/api/workflows":
             wd = CONFIG["workflow_dir"]
             items = []
@@ -1570,6 +1611,63 @@ class H(SimpleHTTPRequestHandler):
             with LOCK:
                 save_config()
             return self.send_json(dict(info, current=name))
+
+        if p == "/api/movies":
+            # 建立/更新 FL2VA Movie 專案。images 只在建立時帶（dataURL 陣列，存成 {id}.imgN.jpg）
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            os.makedirs(MOVIES, exist_ok=True)
+            rid = str(body.get("id") or "")
+            if rid and not ID_RE.match(rid):
+                return self.send_json({"error": "bad id"}, 400)
+            if not rid:
+                rid = new_id()
+            n_img = 0
+            imgs = body.pop("images", None)
+            if isinstance(imgs, list) and imgs:
+                for k, durl in enumerate(imgs[:13]):
+                    b, _ = parse_data_image(durl)
+                    if b:
+                        n_img += 1
+                        with open(os.path.join(MOVIES, "%s.img%d.jpg" % (rid, k + 1)), "wb") as f:
+                            f.write(b)
+            segs = body.get("segments") if isinstance(body.get("segments"), list) else []
+            rec = {"id": rid, "ts": body.get("ts") or time.strftime("%Y-%m-%d %H:%M:%S"),
+                   "up_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                   "title": str(body.get("title") or "")[:80],
+                   "global_hint": str(body.get("global_hint") or "")[:2000],
+                   "status": str(body.get("status") or "editing")[:20],
+                   "final": str(body.get("final") or "")[:300],
+                   "segments": [{
+                       "hint": str(s.get("hint") or "")[:2000],
+                       "content": str(s.get("content") or ""),
+                       "zh": str(s.get("zh") or ""),
+                       "state": str(s.get("state") or "")[:10],
+                       "locked": bool(s.get("locked")),
+                       "video": str(s.get("video") or "")[:300],
+                   } for s in segs[:12]]}
+            with LOCK:
+                old = {}
+                fp = os.path.join(MOVIES, rid + ".json")
+                try:
+                    with open(fp, encoding="utf-8") as f:
+                        old = json.load(f)
+                except Exception:
+                    pass
+                if not n_img:
+                    n_img = int(old.get("n_images") or 0)
+                rec["n_images"] = n_img
+                rec["ts"] = old.get("ts") or rec["ts"]
+                with open(fp, "w", encoding="utf-8") as f:
+                    json.dump(rec, f, ensure_ascii=False, indent=1)
+                rows = [r for r in load_mindex() if r.get("id") != rid]
+                rows.insert(0, {"id": rid, "ts": rec["ts"], "up_ts": rec["up_ts"], "title": rec["title"],
+                                "n_images": n_img, "n_segs": len(rec["segments"]),
+                                "status": rec["status"], "final": rec["final"]})
+                save_mindex(rows)
+            return self.send_json({"ok": True, "id": rid})
 
         if p == "/api/movie/concat":
             try:
@@ -2054,6 +2152,19 @@ class H(SimpleHTTPRequestHandler):
             except OSError as e:
                 return self.send_json({"error": str(e)}, 500)
             return self.send_json({"ok": True})
+        m = re.match(r"^/api/movies/([^/]+)$", pth)
+        if m and ID_RE.match(m.group(1)):
+            rid = m.group(1)
+            with LOCK:
+                import glob as _g
+                for fp in _g.glob(os.path.join(MOVIES, rid + ".*")):
+                    try:
+                        os.remove(fp)
+                    except OSError:
+                        pass
+                save_mindex([r for r in load_mindex() if r.get("id") != rid])
+            return self.send_json({"ok": True})
+
         m = re.match(r"^/api/uploads/([0-9a-f]{40})$", pth)
         if m:
             h = m.group(1)

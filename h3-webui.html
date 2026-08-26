@@ -375,6 +375,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <button class="nav sub" data-view="hist" data-hmode="fl2va"><span>· FL2VA</span></button>
     <button class="nav sub" data-view="hist" data-hmode="l2va"><span>· L2VA</span></button>
     <button class="nav sub" data-view="hist" data-hmode="ref2va"><span>· REF2VA</span></button>
+    <button class="nav sub" data-view="mvhist"><span>· FL2VA Movie</span><span class="cnt" id="navMvHist"></span></button>
   </div>
 
   <button class="nav" data-view="media" data-tip="ComfyUI 媒體庫">
@@ -439,12 +440,14 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <div class="panel" id="conv" style="display:none"></div>
 </section>
 
-<!-- ============ FL2VA Movie：連續首尾幀長片 ============ -->
+<!-- ============ FL2VA Movie：三階段（劇情 → 影片 → 合併） ============ -->
 <section class="view" id="v-movie">
   <h1 class="vh">FL2VA Movie — 連續首尾幀長片</h1>
-  <p class="vs">上傳 2～12 張連續分鏡圖。逐段生成：1→2 完成後取<b>實際生成的 last-frame</b> 當下一段首幀接第 3 張…
-    如此銜接才不會跳幀。全部完成後自動串接成一部長片（存到 ComfyUI 媒體庫 video/movies/）。</p>
+  <p class="vs">① 上傳 2～12 張分鏡 → 下方出現各片段分頁，可各自加提示 → ②「片段劇情生成」先寫好全部劇情（可逐段重生成到滿意）
+    → ③「劇情影片處理」逐段出片，每段完成後等你按「可繼續」或「需調整」 → ④ 全部確認後「合併片段並顯示」。</p>
+
   <div class="panel">
+    <h3>分鏡圖</h3>
     <div class="slotgrid" id="mvGrid"></div>
     <div class="row">
       <button class="ghost mini" id="mvClear">清空格子</button>
@@ -453,13 +456,38 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div class="note-wrap" style="margin-top:10px"><label>整體劇情提示（選填，套用到每一段）</label>
       <textarea class="note" id="mvHint" rows="2" placeholder="例如：她從清晨出門到夜晚回家的一天"></textarea></div>
     <div class="row" style="margin-top:12px">
-      <button id="mvRun" disabled>🎬 開始連續生成</button>
-      <button class="ghost" id="mvStop" disabled>停止</button>
+      <button id="mvGenPrompts" disabled>✍️ 片段劇情生成</button>
+      <button id="mvGenVideos" disabled>🎬 劇情影片處理</button>
+      <button id="mvMergeBtn" disabled>🧵 合併片段並顯示</button>
+      <span class="status" id="mvStat" style="margin:0"></span>
     </div>
-    <div id="mvLog" style="margin-top:12px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.9"></div>
+  </div>
+
+  <div class="panel" id="mvCardsPanel" style="display:none">
+    <h3>輸出片段</h3>
+    <div id="mvCards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px"></div>
+  </div>
+
+  <div class="panel" id="mvSegPanel" style="display:none">
+    <h3>片段劇情 <span class="hint" id="mvSegHint"></span></h3>
+    <div id="mvTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
+    <div id="mvSegBody"></div>
+  </div>
+
+  <div class="panel" id="mvFinalPanel" style="display:none">
+    <h3>🎉 完成的長片</h3>
+    <video id="mvFinal" controls style="width:100%;max-height:70vh;border-radius:10px;background:#000"></video>
+    <p class="status" id="mvFinalPath"></p>
   </div>
 </section>
 <input type="file" id="mvFiles" multiple accept="image/*" hidden>
+
+<!-- ============ FL2VA Movie 歷史 ============ -->
+<section class="view" id="v-mvhist">
+  <h1 class="vh">FL2VA Movie 紀錄</h1>
+  <p class="vs">保存的長片專案：分鏡圖、各片段劇情與影片、完成的長片。點「開啟」載回 Movie 頁查看或繼續。</p>
+  <div id="mvhGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:13px"></div>
+</section>
 
 <!-- ============ 歷史紀錄 ============ -->
 <section class="view" id="v-hist">
@@ -1233,6 +1261,7 @@ function setView(v){
   if (v === "hist") loadHist();
   if (v === "comfy") { loadWfParams(); if (typeof loadComfyCfg === "function") loadComfyCfg(); }
   if (v === "media") loadMedia();
+  if (v === "mvhist" && typeof loadMvHist === "function") loadMvHist();
 }
 /* ---- collapsible sidebar ---- */
 const SIDEKEY = "h3.side.collapsed.v1";
@@ -2920,8 +2949,18 @@ if (onServer) fetch(MAPI).then(r=>r.json()).then(j=>{
   if (j && j.total) $("#navMedia").textContent = j.total;
 }).catch(()=>{});
 
-/* ================= FL2VA Movie：連續首尾幀長片 ================= */
-const MV = {slots: [], pick: 0, running: false, abort: false, MAX: 12};
+/* ================= FL2VA Movie：三階段（片段劇情 → 逐段影片 → 合併） ================= */
+const MV = {
+  id: null, slots: [], pick: 0, MAX: 12,
+  segs: [],           // {hint, content, zh, v, state, locked, video, vstate, attempts}
+  cur: 0, phase: "edit", busy: false,
+  waiting: -1, final: "",
+};
+function mvNewSeg(){ return {hint:"", content:"", zh:"", v:null, state:"", locked:false, video:"", vstate:"", attempts:0}; }
+function mvStat(t){ $("#mvStat").textContent = t || ""; }
+function mvImgs(){ return MV.slots.filter(Boolean); }
+
+/* ---- 分鏡格子 ---- */
 function mvRender(){
   $("#mvGrid").innerHTML = Array.from({length: MV.MAX}, (_, i) => {
     const s = MV.slots[i];
@@ -2931,18 +2970,17 @@ function mvRender(){
       <span class="slab">分鏡 ${i + 1}</span></div>`;
   }).join("");
   document.querySelectorAll("#mvGrid .slot[data-mi]").forEach(el => el.onclick = e => {
-    if (e.target.closest(".sx") || MV.running) return;
+    if (e.target.closest(".sx") || MV.busy) return;
     MV.pick = +el.dataset.mi; $("#mvFiles").click();
   });
   document.querySelectorAll("#mvGrid .sx").forEach(b => b.onclick = e => {
-    e.stopPropagation(); if (MV.running) return;
+    e.stopPropagation(); if (MV.busy) return;
     const i = +b.dataset.mx;
     if (MV.slots[i]){ try{ URL.revokeObjectURL(MV.slots[i].url); }catch(err){} }
-    MV.slots[i] = null; mvRender();
+    MV.slots[i] = null; mvSyncSegs(); mvDraw();
   });
-  const n = MV.slots.filter(Boolean).length;
-  $("#mvCount").textContent = n ? `已放 ${n} 張 → 會生成 ${Math.max(0, n - 1)} 段` : "";
-  $("#mvRun").disabled = MV.running || n < 2;
+  const n = mvImgs().length;
+  $("#mvCount").textContent = n ? `已放 ${n} 張 → ${Math.max(0, n - 1)} 個片段` : "";
 }
 $("#mvFiles").onchange = e => {
   const fs = [...e.target.files].filter(f => f.type.startsWith("image/"));
@@ -2952,15 +2990,287 @@ $("#mvFiles").onchange = e => {
     if (MV.slots[i]){ try{ URL.revokeObjectURL(MV.slots[i].url); }catch(err){} }
     MV.slots[i++] = {file: f, url: URL.createObjectURL(f)};
   }
-  e.target.value = ""; mvRender();
+  e.target.value = ""; mvSyncSegs(); mvDraw();
 };
-$("#mvClear").onclick = () => { if (MV.running) return;
+$("#mvClear").onclick = () => { if (MV.busy) return;
   MV.slots.forEach(s => { if (s){ try{ URL.revokeObjectURL(s.url); }catch(err){} } });
-  MV.slots = []; mvRender(); };
-function mvLog(t){
-  const d = document.createElement("div"); d.textContent = t;
-  $("#mvLog").appendChild(d); d.scrollIntoView({block:"nearest"});
+  MV.slots = []; MV.segs = []; MV.id = null; MV.phase = "edit"; MV.final = ""; MV.waiting = -1;
+  mvSyncSegs(); mvDraw(); };
+
+/* ---- 片段（segs）同步：N 張圖 → N-1 段，保留既有內容 ---- */
+function mvSyncSegs(){
+  const n = Math.max(0, mvImgs().length - 1);
+  while (MV.segs.length < n) MV.segs.push(mvNewSeg());
+  MV.segs.length = n;
+  if (MV.cur >= n) MV.cur = Math.max(0, n - 1);
 }
+
+/* ---- 主畫面重繪 ---- */
+function mvDraw(){
+  mvRender();
+  const n = MV.segs.length;
+  const allPrompted = n > 0 && MV.segs.every(s => s.content);
+  const allLocked   = n > 0 && MV.segs.every(s => s.locked && s.video);
+  $("#mvGenPrompts").disabled = MV.busy || n < 1;
+  $("#mvGenPrompts").textContent = MV.segs.some(s => s.content) ? "✍️ 補生成缺少的片段劇情" : "✍️ 片段劇情生成";
+  $("#mvGenVideos").disabled = MV.busy || !allPrompted || allLocked;
+  $("#mvMergeBtn").disabled = MV.busy || !allLocked;
+  $("#mvCardsPanel").style.display = n ? "" : "none";
+  $("#mvSegPanel").style.display = n ? "" : "none";
+  /* 輸出片段卡片 */
+  $("#mvCards").innerHTML = MV.segs.map((s, i) => {
+    const a = MV.slots[i], b = MV.slots[i + 1];
+    const st = s.vstate === "rendering" ? "🎬 影片生成中…"
+             : s.vstate === "waiting"   ? "⏸ 等待指示中…"
+             : s.vstate === "adjust"    ? "🔧 調整中"
+             : s.locked && s.video      ? "✅ 已確認"
+             : s.content                ? (s.state === "fail" ? "劇情有錯誤" : "劇情就緒")
+             : "待生成劇情";
+    const vlink = s.video ? `<a href="/api/media/file/${s.video.replace(/\\/g,"/").split("/").map(encodeURIComponent).join("/")}" target="_blank">▶ 看影片</a>` : "";
+    let act = "";
+    if (s.vstate === "waiting" && MV.waiting === i)
+      act = `<div class="row" style="margin-top:6px"><button class="mini" onclick="mvContinue(${i})">▶ 可繼續</button>
+             <button class="ghost mini" onclick="mvAdjust(${i})">🔧 需調整</button></div>`;
+    if (s.vstate === "adjust")
+      act = `<div class="row" style="margin-top:6px"><button class="ghost mini" onclick="mvRegamble(${i})">🎲 再賭一次（同劇情換 seed）</button>
+             <button class="ghost mini" onclick="mvRerunVideo(${i})" ${s._dirty ? "" : "disabled"} title="改劇情重生成後才可用">🎬 用新劇情重跑影片</button>
+             <button class="mini" onclick="mvContinue(${i})" ${s.video ? "" : "disabled"}>▶ 就用目前影片，繼續</button></div>`;
+    return `<div style="border:1px solid var(--line);border-radius:11px;padding:10px">
+      <div style="display:flex;gap:4px">
+        ${a ? `<img src="${a.url}" style="width:48%;aspect-ratio:3/4;object-fit:cover;border-radius:7px">` : ""}
+        ${b ? `<img src="${b.url}" style="width:48%;aspect-ratio:3/4;object-fit:cover;border-radius:7px">` : ""}
+      </div>
+      <div style="margin-top:6px;font-size:13px"><b>段 ${i + 1}</b>（${i + 1}→${i + 2}）　${st}　${vlink}</div>
+      ${act}</div>`;
+  }).join("");
+  /* 片段分頁 */
+  $("#mvTabs").innerHTML = MV.segs.map((s, i) => {
+    const dot = s.locked ? "🔒" : s.state === "ok" ? "🟢" : s.state === "warn" ? "🟡" : s.state === "fail" ? "🔴" : s.state === "gen" ? "⏳" : "⚪";
+    return `<button class="ghost mini ${i === MV.cur ? "on" : ""}" style="${i === MV.cur ? "border-color:var(--acc);color:var(--acc);" : ""}"
+      onclick="MV.cur=${i};mvDraw()">${dot} 段 ${i + 1}</button>`;
+  }).join("");
+  const s = MV.segs[MV.cur];
+  if (!s){ $("#mvSegBody").innerHTML = ""; }
+  else {
+    const ro = s.locked ? "disabled" : "";
+    $("#mvSegHint").textContent = s.locked ? "（已確認，唯讀）" : "";
+    $("#mvSegBody").innerHTML = `
+      <div class="note-wrap"><label>此片段的補充提示（選填，與整體提示一起送）</label>
+        <textarea class="note" id="mvSegHintTxt" rows="2" ${ro}
+          placeholder="例如：這一段她坐下來開始塗防曬">${esc(s.hint || "")}</textarea></div>
+      <div class="row" style="margin:8px 0">
+        <button class="ghost mini" id="mvSegRegen" ${MV.busy || s.locked ? "disabled" : ""}>♻️ 重生成此段劇情</button>
+        ${s.attempts ? `<span class="hint">${s.attempts} 次嘗試</span>` : ""}
+        ${s.v && s.v.E && s.v.E.length ? `<span class="hint" style="color:var(--acc)">錯誤 ${s.v.E.length}</span>` : ""}
+        ${s.v && s.v.W && s.v.W.length ? `<span class="hint" style="color:var(--warn)">警告 ${s.v.W.length}</span>` : ""}
+      </div>
+      ${s.content ? bilingual(s.content, s.zh, null) : '<p class="hint">尚未生成劇情</p>'}`;
+    const txt = $("#mvSegHintTxt");
+    if (txt) txt.oninput = () => { s.hint = txt.value; };
+    const rg = $("#mvSegRegen");
+    if (rg) rg.onclick = () => { if (!MV.busy && !s.locked) mvGenSeg(MV.cur, true); };
+  }
+  /* 成片 */
+  $("#mvFinalPanel").style.display = MV.final ? "" : "none";
+  if (MV.final){
+    $("#mvFinal").src = "/api/media/file/" + MV.final.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
+    $("#mvFinalPath").textContent = MV.final;
+  }
+}
+
+/* ---- 專案保存 / 載入 ---- */
+async function mvSave(withImages){
+  if (!onServer || !MV.segs.length) return;
+  const body = {id: MV.id, title: ($("#mvHint").value.trim() || "FL2VA Movie").slice(0, 60),
+    global_hint: $("#mvHint").value.trim(), status: MV.phase, final: MV.final,
+    segments: MV.segs.map(s => ({hint: s.hint, content: s.content, zh: s.zh,
+                                 state: s.state, locked: s.locked, video: s.video}))};
+  if (withImages) body.images = await Promise.all(mvImgs().map(async s => (await encode(s.file)).b64));
+  try{
+    const r = await (await fetch("/api/movies", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})).json();
+    if (r.id) MV.id = r.id;
+  }catch(e){}
+}
+async function loadMvHist(){
+  if (!onServer) return;
+  try{
+    const rows = await (await fetch("/api/movies")).json();
+    $("#navMvHist").textContent = rows.length || "";
+    $("#mvhGrid").innerHTML = rows.map(r => `
+      <div style="border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--panel)">
+        <img src="/api/movies/${r.id}/img/1.jpg" style="width:100%;aspect-ratio:16/10;object-fit:cover;background:var(--code)"
+             onerror="this.style.visibility='hidden'">
+        <div style="padding:10px 12px">
+          <div style="font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.title || "未命名")}</div>
+          <div class="hint">${esc(r.ts || "")} · ${r.n_images} 圖 ${r.n_segs} 段 · ${esc(r.status || "")}${r.final ? " · 有成片" : ""}</div>
+          <div class="row" style="margin-top:8px">
+            <button class="mini" onclick="mvLoad('${r.id}')">開啟</button>
+            ${r.final ? `<a class="ghost mini" style="padding:6px 12px;border-radius:8px;border:1px solid var(--line);text-decoration:none;color:var(--fg)"
+               href="/api/media/file/${(r.final||"").replace(/\\/g,"/").split("/").map(encodeURIComponent).join("/")}" target="_blank">▶ 成片</a>` : ""}
+            <button class="ghost mini" onclick="mvDelete('${r.id}')">刪除</button>
+          </div>
+        </div>
+      </div>`).join("") || '<span class="hint">還沒有保存的 Movie 專案</span>';
+  }catch(e){ $("#mvhGrid").innerHTML = '<span class="hint">讀取失敗</span>'; }
+}
+window.mvDelete = async id => {
+  if (!confirm("刪除這個 Movie 專案？（不會刪除已生成的影片檔）")) return;
+  await fetch("/api/movies/" + id, {method: "DELETE"}).catch(() => {});
+  loadMvHist();
+};
+window.mvLoad = async id => {
+  try{
+    const rec = await (await fetch("/api/movies/" + id)).json();
+    if (rec.error) throw new Error(rec.error);
+    MV.slots.forEach(s => { if (s){ try{ URL.revokeObjectURL(s.url); }catch(e){} } });
+    MV.slots = [];
+    for (let k = 1; k <= (rec.n_images || 0); k++){
+      const r = await fetch(`/api/movies/${id}/img/${k}.jpg`);
+      if (!r.ok) continue;
+      const f = new File([await r.blob()], `img${k}.jpg`, {type: "image/jpeg"});
+      MV.slots[k - 1] = {file: f, url: URL.createObjectURL(f)};
+    }
+    MV.id = id; MV.final = rec.final || ""; MV.phase = rec.status || "edit";
+    $("#mvHint").value = rec.global_hint || "";
+    MV.segs = (rec.segments || []).map(s => ({...mvNewSeg(), ...s,
+      vstate: (s.locked && s.video) ? "done" : "", v: null}));
+    mvSyncSegs(); MV.cur = 0; MV.waiting = -1;
+    setView("movie"); mvDraw();
+    mvStat("已載入專案（可繼續操作或查看）");
+  }catch(e){ alert("載入失敗：" + e.message); }
+};
+
+/* ---- 第①階段：片段劇情生成 ---- */
+async function mvGenSeg(i, force){
+  const s = MV.segs[i];
+  if (!s || s.locked || (s.content && !force)) return;
+  const A = MV.slots[i], B = MV.slots[i + 1];
+  if (!A || !B) return;
+  s.state = "gen"; MV.cur = i; mvDraw();
+  $("#mode").value = "fl2va";                  // validate()/repair() 走 FL2VA 規則
+  const eA = s._encA || await encode(A.file);
+  const eB = s._encB || await encode(B.file);
+  s._encA = eA; s._encB = eB;
+  await gpuPrepare("llama", t => mvStat(`段 ${i + 1}：${t}`));
+  mvStat(`段 ${i + 1}：生成劇情中…`);
+  const note = [s.hint, $("#mvHint").value.trim()].filter(Boolean).join("；");
+  const best = await genWithRetry([eA.b64, eB.b64], userNote({mode: "fl2va", note, w: eA.w, h: eA.h}),
+                                  20, 1, t => mvStat(`段 ${i + 1}：${t}`));
+  s.content = best.content; s.v = best.v; s.attempts = best.attempts;
+  s.state = best.v.E.length ? "fail" : (best.v.W.length ? "warn" : "ok");
+  s._dirty = !!s.video;                        // 已有影片時改了劇情 → 可「用新劇情重跑影片」
+  if ($("#tr").value === "1"){
+    mvStat(`段 ${i + 1}：翻譯中…`);
+    try{
+      const t = await chat([{role: "system", content: TR_SYS}, {role: "user", content: s.content}],
+                           {temp: 0.3, topp: 0.9, max: 1800});
+      s.zh = (t.choices[0].message.content || "").trim();
+    }catch(e){ s.zh = "（翻譯失敗：" + e.message + "）"; }
+  }
+  mvDraw(); mvSave(false);
+}
+$("#mvGenPrompts").onclick = async () => {
+  if (MV.busy) return;
+  mvSyncSegs();
+  if (!MV.segs.length) return;
+  MV.busy = true; MV.phase = "prompts"; mvDraw();
+  try{
+    await mvSave(true);                        // 第一次保存含圖片
+    for (let i = 0; i < MV.segs.length; i++){
+      if (!MV.segs[i].content && !MV.segs[i].locked) await mvGenSeg(i, false);
+    }
+    mvStat("片段劇情全部就緒 — 逐段檢查，不滿意可改提示後「重生成此段劇情」；都滿意就按「劇情影片處理」");
+  }catch(e){ mvStat("✘ " + e.message); }
+  MV.busy = false; mvDraw(); mvSave(false);
+};
+
+/* ---- 第②階段：逐段影片（完成一段 → 等待指示） ---- */
+async function mvSubmitVideo(i){
+  const s = MV.segs[i];
+  s.vstate = "rendering"; MV.busy = true; mvDraw();
+  try{
+    const inFile = s._inFile || MV.slots[i].file;
+    const encIn = await encode(inFile);
+    const encB = s._encB || await encode(MV.slots[i + 1].file);
+    await gpuPrepare("comfy", t => mvStat(`段 ${i + 1}：${t}`));
+    mvStat(`段 ${i + 1}：送出影片生成…`);
+    const payload = {image: encIn.orig || encIn.b64, more: [encB.b64], mode: "fl2va",
+                     content: s.content, dur: "20 seconds", wf: wfOverrides(),
+                     ...comfyFields(s.content, "fl2va")};
+    const r = await (await fetch(CAPI + "/run", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)})).json();
+    if (r.error) throw new Error(r.error);
+    mvStat(`段 ${i + 1}：影片生成中（${String(r.prompt_id).slice(0, 8)}…）`);
+    const mp4 = await mvPollDone(r.prompt_id);
+    s.video = mp4; s.vstate = "waiting"; s._dirty = false; MV.waiting = i;
+    mvStat(`段 ${i + 1} 影片完成 — 請按「可繼續」或「需調整」`);
+    document.title = "⏸ 段 " + (i + 1) + " 等待指示 — H3 Storyboard";
+  }catch(e){
+    s.vstate = "adjust"; MV.waiting = -1;
+    mvStat(`段 ${i + 1} ✘ ${e.message}`);
+  }
+  MV.busy = false; mvDraw(); mvSave(false);
+}
+async function mvVideoStep(i){
+  const s = MV.segs[i];
+  let inFile = MV.slots[i].file;               // 第 1 段用原圖；其後接上一段實際 last-frame
+  if (i > 0 && MV.segs[i - 1].video){
+    const png = MV.segs[i - 1].video.replace(/\.mp4$/i, "-last-frame.png");
+    try{ inFile = await mvFetchFile(png, `seg${i}-in.png`); }
+    catch(e){ mvStat(`段 ${i + 1}：⚠ 讀不到上一段 last-frame，改用原分鏡圖銜接`); }
+  }
+  s._inFile = inFile;
+  await mvSubmitVideo(i);
+}
+$("#mvGenVideos").onclick = () => {
+  if (MV.busy) return;
+  MV.phase = "videos";
+  const i = MV.segs.findIndex(s => !(s.locked && s.video));
+  if (i >= 0) mvVideoStep(i);
+};
+window.mvContinue = i => {
+  const s = MV.segs[i];
+  if (!s || !s.video) return;
+  s.locked = true; s.vstate = "done"; MV.waiting = -1;
+  document.title = "H3 Prompt 批次產生器";
+  mvSave(false);
+  const next = MV.segs.findIndex((x, k) => k > i && !(x.locked && x.video));
+  if (next >= 0) mvVideoStep(next);
+  else { mvStat("全部片段已確認 — 可以按「合併片段並顯示」"); mvDraw(); }
+};
+window.mvAdjust = i => {
+  const s = MV.segs[i];
+  s.vstate = "adjust"; s.locked = false; MV.waiting = -1; MV.cur = i;
+  document.title = "H3 Prompt 批次產生器";
+  mvStat(`段 ${i + 1} 調整中：可「再賭一次」（同劇情換 seed）、或改提示「重生成此段劇情」後「用新劇情重跑影片」`);
+  mvDraw();
+};
+window.mvRegamble = i => { if (!MV.busy) mvSubmitVideo(i); };
+window.mvRerunVideo = i => { if (!MV.busy && MV.segs[i]._dirty) mvSubmitVideo(i); };
+
+/* ---- 第③階段：合併 ---- */
+$("#mvMergeBtn").onclick = async () => {
+  if (MV.busy) return;
+  const files = MV.segs.map(s => s.video);
+  if (files.some(v => !v)) return;
+  MV.busy = true; mvStat("ffmpeg 串接中…"); mvDraw();
+  try{
+    if (files.length === 1){
+      MV.final = files[0].replace(/\\/g, "/"); MV.phase = "merged";
+      mvStat("只有一段，直接以該段作為成片");
+    } else {
+    const c = await (await fetch("/api/movie/concat", {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({files})})).json();
+    if (c.error) throw new Error(c.error);
+    MV.final = c.out; MV.phase = "merged";
+    }
+    mvStat("🎉 完成！成片已顯示於下方，也在 ComfyUI 媒體庫 video/movies/");
+    loadMedia();
+  }catch(e){ mvStat("✘ " + e.message); }
+  MV.busy = false; mvDraw(); mvSave(false);
+};
+
 async function mvFetchFile(relPath, name){
   const url = "/api/media/file/" + relPath.replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
   const r = await fetch(url);
@@ -2971,7 +3281,6 @@ async function mvPollDone(pid){
   const t0 = Date.now();
   while (Date.now() - t0 < 30 * 60 * 1000){
     await new Promise(r => setTimeout(r, 12000));
-    if (MV.abort) throw new Error("已停止");
     let s; try{ s = await (await fetch(CAPI + "/status/" + pid)).json(); }catch(e){ continue; }
     if (s.state === "error") throw new Error("ComfyUI 生成失敗：" + (s.error || ""));
     if (s.state === "done"){
@@ -2982,66 +3291,7 @@ async function mvPollDone(pid){
   }
   throw new Error("等待影片逾時（30 分鐘）");
 }
-async function movieRun(){
-  const fs = MV.slots.filter(Boolean).map(s => s.file);
-  if (fs.length < 2) return;
-  MV.running = true; MV.abort = false;
-  $("#mvRun").disabled = true; $("#mvStop").disabled = false;
-  $("#mvLog").innerHTML = "";
-  mvLog(`開始：${fs.length} 張分鏡 → ${fs.length - 1} 段（每段取實際 last-frame 銜接下一段）`);
-  const segs = [];
-  try{
-    let firstFile = fs[0];
-    for (let i = 1; i < fs.length; i++){
-      if (MV.abort) throw new Error("已停止");
-      $("#mode").value = "fl2va";           // validate()/repair() 走 FL2VA 規則（防側欄誤觸）
-      mvLog(`── 段 ${i}/${fs.length - 1}：生成劇情 prompt…`);
-      const it = {mode: "fl2va", files: [firstFile, fs[i]], file: firstFile,
-                  name: `Movie 段${i}`, state: "pending", previews: [],
-                  note: $("#mvHint").value.trim()};
-      items.push(it);
-      await runOne(it);
-      mvLog(`　prompt ${it.state === "ok" ? "通過" : it.state}（${it.elapsed}s、${it.attempts} 次嘗試）`);
-      await gpuPrepare("comfy", t => mvLog("　" + t));
-      const payload = {image: it.orig || it.full, more: it.more || [], mode: "fl2va",
-                       content: it.content, dur: "20 seconds", wf: wfOverrides(),
-                       aspect: arPayload(it), ...comfyFields(it.content, "fl2va")};
-      const r = await (await fetch(CAPI + "/run", {method: "POST",
-        headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)})).json();
-      if (r.error) throw new Error("送出失敗：" + r.error);
-      mvLog(`　影片生成中（${String(r.prompt_id).slice(0, 8)}…）`);
-      const mp4 = await mvPollDone(r.prompt_id);
-      segs.push(mp4);
-      mvLog(`　✔ 段 ${i} 完成：${mp4}`);
-      if (i < fs.length - 1){
-        const png = mp4.replace(/\.mp4$/i, "-last-frame.png");
-        try{
-          firstFile = await mvFetchFile(png, `seg${i}-last.png`);
-          mvLog("　已取 last-frame 作為下一段首幀");
-        }catch(e){
-          firstFile = fs[i];
-          mvLog(`　⚠ 讀不到 last-frame（${e.message}），改用原分鏡 ${i + 1} 銜接`);
-        }
-      }
-    }
-    if (segs.length >= 2){
-      mvLog("全部片段完成，ffmpeg 串接中…");
-      const c = await (await fetch("/api/movie/concat", {method: "POST",
-        headers: {"Content-Type": "application/json"}, body: JSON.stringify({files: segs})})).json();
-      if (c.error) throw new Error("串接失敗：" + c.error);
-      mvLog(`🎉 完成！長片：${c.out}（在 ComfyUI 媒體庫可播放/下載）`);
-    } else if (segs.length === 1){
-      mvLog(`完成單段：${segs[0]}`);
-    }
-    loadMedia();
-  }catch(e){ mvLog("✘ " + e.message); }
-  MV.running = false;
-  $("#mvRun").disabled = false; $("#mvStop").disabled = true;
-  mvRender();
-}
-$("#mvRun").onclick = movieRun;
-$("#mvStop").onclick = () => { MV.abort = true; abort = true; mvLog("停止中…（目前這段結束後停止）"); };
-mvRender();
+mvDraw();
 
 /* ================= 匯出 ================= */
 function dl(name,text,mime){
