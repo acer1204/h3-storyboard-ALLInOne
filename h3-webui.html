@@ -67,7 +67,8 @@ body{background:var(--bg);color:var(--fg);
 .slot .sno{position:absolute;top:6px;left:8px;background:var(--btn);color:var(--btnfg);border-radius:12px;
   padding:0 9px;font-size:11px;font-weight:700;z-index:2;opacity:.92}
 .slot .sx{position:absolute;top:5px;right:5px;width:24px;height:24px;border:0;border-radius:50%;cursor:pointer;
-  background:rgba(0,0,0,.55);color:#fff;font-size:13px;line-height:1;z-index:2;display:grid;place-items:center}
+  background:rgba(0,0,0,.55);color:#fff;z-index:2;display:grid;place-items:center;padding:0;line-height:0}
+.slot .sx svg{display:block}
 .slot .sx:hover{background:var(--acc)}
 .slot .plus{font-size:26px;line-height:1;margin-bottom:4px}
 .slot .slab{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:11px;color:var(--faint);z-index:2}
@@ -1430,7 +1431,7 @@ function renderSlots(){
     const s = SLOTS[i];
     return `<div class="slot ${s ? "has" : ""}" data-i="${i}" title="${s ? "點擊從此格重新選圖" : "點擊選圖（可多選，從此格依序填入）"}">
       <span class="sno">${i + 1}</span>
-      ${s ? `<img src="${s.url}"><button class="sx" data-x="${i}" title="移除這張">✕</button>` : `<span class="plus">＋</span>`}
+      ${s ? `<img src="${s.url}"><button class="sx" data-x="${i}" title="移除這張"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>` : `<span class="plus">＋</span>`}
       <span class="slab">${slotLabel(i)}${s ? "" : ""}</span>
     </div>`;
   }).join("");
