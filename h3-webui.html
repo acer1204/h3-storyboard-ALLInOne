@@ -55,6 +55,21 @@ body{background:var(--bg);color:var(--fg);
   stroke-linecap:round;stroke-linejoin:round}
 .nav .cnt{margin-left:auto;font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
 .nav.sub{padding:5px 11px 5px 30px;font-size:13px;margin-bottom:1px}
+.slotgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:10px;margin:14px 0 10px}
+.slot{position:relative;border:2px dashed var(--line);border-radius:11px;aspect-ratio:3/4;cursor:pointer;
+  display:grid;place-items:center;color:var(--faint);font-size:13px;background:var(--panel);overflow:hidden;
+  transition:border-color .12s}
+.slot:hover{border-color:var(--acc)}
+.slot.has{border-style:solid}
+.slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.slot .sno{position:absolute;top:6px;left:8px;background:var(--btn);color:var(--btnfg);border-radius:12px;
+  padding:0 9px;font-size:11px;font-weight:700;z-index:2;opacity:.92}
+.slot .sx{position:absolute;top:5px;right:5px;width:24px;height:24px;border:0;border-radius:50%;cursor:pointer;
+  background:rgba(0,0,0,.55);color:#fff;font-size:13px;line-height:1;z-index:2;display:grid;place-items:center}
+.slot .sx:hover{background:var(--acc)}
+.slot .plus{font-size:26px;line-height:1;margin-bottom:4px}
+.slot .slab{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:11px;color:var(--faint);z-index:2}
+.slot.has .slab{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.8)}
 .nav.sub.on{font-weight:600}
 .app.collapsed #histsub{display:none}
 .nav.busy .cnt{color:var(--acc)}
@@ -379,6 +394,16 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
   <div id="drop"><b id="dropB">把圖片拖進來，或點此選檔</b><span id="dropS">依檔名排序，一次跑一張</span></div>
   <input type="file" id="files" multiple accept="image/*" hidden>
+
+  <div id="slotzone" class="hide">
+    <div class="slotgrid" id="slotgrid"></div>
+    <div class="row">
+      <button class="mini" id="slotAdd">✚ 加入生成清單</button>
+      <button class="ghost mini" id="slotClear">清空格子</button>
+      <span class="status" id="slotStat" style="margin:0"></span>
+    </div>
+  </div>
+  <input type="file" id="slotfiles" multiple accept="image/*" hidden>
 
   <div class="row">
     <button id="run" disabled>開始</button>
@@ -717,12 +742,12 @@ const MODES = {i2va:"I2VA", fl2va:"FL2VA", l2va:"L2VA", ref2va:"REF2VA"};
 const MODE_INFO = {
   i2va:  {title:"I2VA — 圖生影音", sub:"圖片＝影片第一幀。拖入多張圖片可批次逐一生成，每張完成即自動存進歷史紀錄。",
           drop:"把圖片拖進來，或點此選檔", dropS:"每張圖片＝一筆生成，依檔名排序逐一跑", min:1, max:1, batch:true},
-  fl2va: {title:"FL2VA — 首尾幀生影音", sub:"兩張圖＝首幀＋尾幀，模型編寫連貫過渡劇情。先丟起始幀、再丟結束幀（湊滿兩張成一筆）。",
-          drop:"依序拖入 起始幀、結束幀", dropS:"每 2 張圖組成一筆生成", min:2, max:2, batch:false},
+  fl2va: {title:"FL2VA — 首尾幀生影音", sub:"兩張圖＝首幀＋尾幀，模型編寫連貫過渡劇情。點格子選圖或直接拖入，滿兩格按「加入生成清單」。",
+          drop:"拖入圖片會自動填入下方格子", dropS:"起始幀、結束幀各一格；點格子也可選圖", min:2, max:2, batch:false},
   l2va:  {title:"L2VA — 末幀生影音", sub:"圖片＝影片最後一幀，劇情鋪陳並精準收束在這張圖。拖入多張可批次生成。",
           drop:"把圖片拖進來，或點此選檔", dropS:"每張圖片＝一筆生成", min:1, max:1, batch:true},
   ref2va:{title:"REF2VA — 參考圖生影音", sub:"參考圖＝角色/物件外觀依據（非影格），1～9 張組成一筆。輸出六欄位參考格式。",
-          drop:"拖入 1～9 張參考圖（同一筆）", dropS:"全部圖片進同一筆生成", min:1, max:9, batch:false},
+          drop:"拖入圖片會自動填入下方格子", dropS:"點第 N 格選多張圖＝從第 N 格開始依序填入；✕ 移除、再點一次換圖", min:1, max:9, batch:false},
 };
 function curMode(){ const m = $("#mode").value; return MODES[m] ? m : "i2va"; }
 function PSEL(){ return "h3.prompt.all.v1"; }
@@ -747,6 +772,7 @@ window.setMode = m => {
   document.querySelectorAll('.nav[data-mode]').forEach(b =>
     b.classList.toggle("on", b.dataset.mode === m && $("#v-run").classList.contains("on")));
   saveSettings();
+  if (typeof clearSlots === "function"){ clearSlots(); renderSlots(); }
   if (typeof render === "function") render();
 };
 function upTok(){
@@ -1359,24 +1385,97 @@ function add(fl){
       items.push({mode, files:[f], file:f, name:f.name, state:"pending", preview:u, previews:[u]});
     }
   } else {
-    // FL2VA（2 張一筆）/ REF2VA（1~9 張一筆）：塞進最後一筆未滿的同模式待處理項
-    let last = items.length ? items[items.length-1] : null;
+    // FL2VA / REF2VA：拖進來的圖從第一個空格開始填入格子
+    let i = SLOTS.findIndex(s => !s);
+    if (i < 0) i = 0;
     for (const f of files){
-      if (!(last && last.state === "pending" && last.mode === mode && last.files.length < inf.max)){
-        last = {mode, files:[], file:null, name:"", state:"pending", preview:null, previews:[]};
-        items.push(last);
-      }
-      const u = URL.createObjectURL(f);
-      last.files.push(f); last.previews.push(u);
-      if (!last.file){ last.file = f; last.preview = u; }
-      last.name = last.files.map(x => x.name).join(" ＋ ");
+      if (i >= slotCount()) break;
+      setSlot(i++, f);
     }
+    renderSlots();
+    return;
   }
   items.forEach(arFromPreview);
   render(); $("#run").disabled = !items.length;
   $("#prog").textContent = `${items.length} 筆待處理`;
   $("#navRun").textContent = items.length || "";
 }
+
+/* ===== 格子式上傳（FL2VA 2 格 / REF2VA 9 格） =====
+   點某一格選多張圖 → 從那一格開始依序填入；每格右上角 ✕ 可單獨移除；點已有圖的格子可從該格重新替換 */
+let SLOTS = [], slotPick = 0;
+function slotCount(){ return MODE_INFO[curMode()].max; }
+function slotLabel(i){ return curMode() === "fl2va" ? (i === 0 ? "起始幀" : "結束幀") : "圖 " + (i + 1); }
+function setSlot(i, f){
+  if (SLOTS[i] && SLOTS[i].url){ try{ URL.revokeObjectURL(SLOTS[i].url); }catch(e){} }
+  SLOTS[i] = f ? {file: f, url: URL.createObjectURL(f)} : null;
+}
+function clearSlots(){
+  SLOTS.forEach(s => { if (s && s.url){ try{ URL.revokeObjectURL(s.url); }catch(e){} } });
+  SLOTS = [];
+}
+function renderSlots(){
+  const zone = $("#slotzone");
+  const inf = MODE_INFO[curMode()];
+  zone.classList.toggle("hide", inf.batch);
+  if (inf.batch) return;
+  const n = slotCount();
+  $("#slotgrid").innerHTML = Array.from({length: n}, (_, i) => {
+    const s = SLOTS[i];
+    return `<div class="slot ${s ? "has" : ""}" data-i="${i}" title="${s ? "點擊從此格重新選圖" : "點擊選圖（可多選，從此格依序填入）"}">
+      <span class="sno">${i + 1}</span>
+      ${s ? `<img src="${s.url}"><button class="sx" data-x="${i}" title="移除這張">✕</button>` : `<span class="plus">＋</span>`}
+      <span class="slab">${slotLabel(i)}${s ? "" : ""}</span>
+    </div>`;
+  }).join("");
+  document.querySelectorAll("#slotgrid .slot").forEach(el => el.onclick = e => {
+    if (e.target.closest(".sx")) return;
+    slotPick = +el.dataset.i;
+    $("#slotfiles").click();
+  });
+  document.querySelectorAll("#slotgrid .sx").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    setSlot(+b.dataset.x, null);
+    renderSlots();
+  });
+  const filled = SLOTS.filter(Boolean).length;
+  const need = MODE_INFO[curMode()].min;
+  $("#slotAdd").disabled = filled < need;
+  $("#slotStat").textContent = filled
+    ? `已放 ${filled} 張` + (filled < need ? `（此模式至少需要 ${need} 張）` : "")
+    : "";
+}
+$("#slotfiles").onchange = e => {
+  const fs = [...e.target.files].filter(f => f.type.startsWith("image/"));
+  let i = slotPick;
+  for (const f of fs){
+    if (i >= slotCount()) break;
+    setSlot(i++, f);
+  }
+  e.target.value = "";
+  renderSlots();
+};
+function composeSlots(){
+  const picked = SLOTS.map((s, i) => s ? {s, i} : null).filter(Boolean);
+  const inf = MODE_INFO[curMode()];
+  if (picked.length < inf.min){ $("#slotStat").textContent = `此模式至少需要 ${inf.min} 張圖`; return false; }
+  const it = {mode: curMode(), files: picked.map(x => x.s.file), file: picked[0].s.file,
+              name: picked.map(x => x.s.file.name).join(" ＋ "), state: "pending",
+              preview: null, previews: []};
+  // objectURL 交棒給 item，格子清空但不 revoke
+  it.previews = picked.map(x => x.s.url);
+  it.preview = it.previews[0];
+  items.push(it);
+  SLOTS = [];
+  renderSlots();
+  items.forEach(arFromPreview);
+  render(); $("#run").disabled = !items.length;
+  $("#prog").textContent = `${items.length} 筆待處理`;
+  $("#navRun").textContent = items.length || "";
+  return true;
+}
+$("#slotAdd").onclick = () => composeSlots();
+$("#slotClear").onclick = () => { clearSlots(); renderSlots(); };
 
 /* Two copies of every image:
      b64  = 1024px JPEG working copy  -> the vision LLM (reads it fine) and thumbnails/history display
@@ -1666,7 +1765,13 @@ async function runQueue(list, label){
   $("#navRun").textContent = items.length || "";
   convergence(); updateFilterBar();
 }
-$("#run").onclick = () => runQueue(items.filter(i=>i.state==="pending"||i.state==="error"), "處理中");
+$("#run").onclick = () => {
+  // 格子模式：格子裡有圖但還沒按「加入清單」→ 自動組成一筆再跑
+  if (!MODE_INFO[curMode()].batch && SLOTS.some(Boolean)){
+    if (!composeSlots()) return;
+  }
+  runQueue(items.filter(i=>i.state==="pending"||i.state==="error"), "處理中");
+};
 $("#frerun").onclick = () => runQueue(visibleItems().filter(i => i.state !== "running"), "重跑");
 $("#stop").onclick=()=>{abort=true;$("#prog").textContent="停止中…"};
 $("#clear").onclick=()=>{items.forEach(i=>i.preview&&URL.revokeObjectURL(i.preview));
