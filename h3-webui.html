@@ -55,7 +55,9 @@ body{background:var(--bg);color:var(--fg);
   stroke-linecap:round;stroke-linejoin:round}
 .nav .cnt{margin-left:auto;font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
 .nav.sub{padding:5px 11px 5px 30px;font-size:13px;margin-bottom:1px}
-.slotgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:10px;margin:14px 0 10px}
+.slotgrid{display:grid;grid-template-columns:repeat(auto-fill,168px);gap:12px;margin:4px 0 12px}
+#slotzone{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px 18px;margin-bottom:16px}
+#slotzone .row{margin-top:4px}
 .slot{position:relative;border:2px dashed var(--line);border-radius:11px;aspect-ratio:3/4;cursor:pointer;
   display:grid;place-items:center;color:var(--faint);font-size:13px;background:var(--panel);overflow:hidden;
   transition:border-color .12s}
@@ -112,6 +114,9 @@ button:disabled{opacity:.35;cursor:not-allowed}
   color:var(--mut);cursor:pointer;transition:.15s;background:var(--panel);margin-bottom:16px}
 #drop:hover,#drop.hot{border-color:var(--acc);color:var(--fg);background:var(--hover)}
 #drop b{display:block;font-size:15.5px;margin-bottom:5px;color:var(--fg)}
+#drop.slim{padding:14px 20px;margin-bottom:12px}
+#drop.slim b{display:inline;font-size:13.5px;margin:0 10px 0 0}
+#drop.slim span{font-size:12px}
 
 .fbar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:16px 0 2px;
   padding:11px 13px;background:var(--panel);border:1px solid var(--line);border-radius:11px}
@@ -392,6 +397,18 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <h1 class="vh" id="runTitle">I2VA — 圖生影音</h1>
   <p class="vs" id="runSub">圖片＝影片第一幀。拖入多張圖片可批次逐一生成，每張完成即自動存進歷史紀錄。</p>
 
+  <div class="row" style="margin:0 0 14px">
+    <button id="run" disabled>開始</button>
+    <button class="ghost" id="stop" disabled>停止</button>
+    <button class="ghost" id="runsel" disabled>生成勾選的</button>
+    <button class="ghost" id="comfysel" disabled>🎬 勾選的送 ComfyUI</button>
+    <button class="ghost mini" id="selall" disabled>勾選全部</button>
+    <button class="ghost" id="expj" disabled>匯出 JSON</button>
+    <button class="ghost" id="expt" disabled>匯出 TXT</button>
+    <button class="ghost" id="clear">清空清單</button>
+  </div>
+  <p class="status" id="prog" style="margin:0 0 10px"></p>
+
   <div id="drop"><b id="dropB">把圖片拖進來，或點此選檔</b><span id="dropS">依檔名排序，一次跑一張</span></div>
   <input type="file" id="files" multiple accept="image/*" hidden>
 
@@ -404,18 +421,6 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     </div>
   </div>
   <input type="file" id="slotfiles" multiple accept="image/*" hidden>
-
-  <div class="row">
-    <button id="run" disabled>開始</button>
-    <button class="ghost" id="stop" disabled>停止</button>
-    <button class="ghost" id="runsel" disabled>生成勾選的</button>
-    <button class="ghost" id="comfysel" disabled>🎬 勾選的送 ComfyUI</button>
-    <button class="ghost mini" id="selall" disabled>勾選全部</button>
-    <button class="ghost" id="expj" disabled>匯出 JSON</button>
-    <button class="ghost" id="expt" disabled>匯出 TXT</button>
-    <button class="ghost" id="clear">清空清單</button>
-  </div>
-  <p class="status" id="prog"></p>
 
   <div class="fbar" id="fbar" style="display:none">
     <span class="flab">顯示</span>
@@ -768,6 +773,7 @@ window.setMode = m => {
   $("#runSub").textContent = inf.sub;
   $("#dropB").textContent = inf.drop;
   $("#dropS").textContent = inf.dropS;
+  $("#drop").classList.toggle("slim", !inf.batch);
   $("#spmodetag").textContent = MODES[m];
   document.querySelectorAll('.nav[data-mode]').forEach(b =>
     b.classList.toggle("on", b.dataset.mode === m && $("#v-run").classList.contains("on")));
