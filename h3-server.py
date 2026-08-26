@@ -725,20 +725,17 @@ def comfy_template_from_json(body):
     if isinstance(body.get("graph"), dict):
         g, extra = body["graph"], (body.get("extra_data") if isinstance(body.get("extra_data"), dict) else {})
     elif isinstance(body.get("nodes"), list):
-        # UI 格式（Save 存的 nodes/links）：不能執行，但它正是影片內嵌 workflow 用的 metadata。
-        # 把它掛到現有模板上，影片就會重新內嵌工作流 — 不必先跑一次。
-        if not os.path.exists(COMFY_TEMPLATE):
-            raise ValueError("這是 UI 格式檔（可當內嵌 metadata），但目前還沒有模板可掛。"
-                             "請先上傳 Export (API) 檔、或按「用最近一次成功生成更新模板」，再上傳這個檔。")
-        with open(COMFY_TEMPLATE, encoding="utf-8") as f:
-            tpl = json.load(f)
-        g0 = tpl.get("graph") if isinstance(tpl.get("graph"), dict) else tpl
-        extra0 = tpl.get("extra_data") if isinstance(tpl.get("extra_data"), dict) else {}
-        extra0.setdefault("extra_pnginfo", {})["workflow"] = body
-        with open(COMFY_TEMPLATE, "w", encoding="utf-8") as f:
-            json.dump({"graph": g0, "extra_data": extra0}, f, ensure_ascii=False, indent=1)
-        return {"nodes": len(g0), "mode": "?", "has_ui_meta": True, "ui_meta_attached": True,
-                "backup": os.path.exists(COMFY_TEMPLATE + ".bak")}
+        # UI 格式（Save 存的 nodes/links）：伺服器端直接轉成可執行的 API 圖 ——
+        # 不需要先在 ComfyUI 跑過一次。原 UI 檔同時掛為影片內嵌 metadata。
+        try:
+            oi = comfy_api("/object_info", timeout=30)
+        except Exception as e:
+            raise ValueError("轉換 UI 工作流需要連上 ComfyUI 讀節點定義（/object_info）：%s" % e)
+        import ui2api
+        g, warns = ui2api.ui_to_api(body, oi)
+        for w in warns:
+            sys.stderr.write("  ui2api: %s\n" % w)
+        extra = {"extra_pnginfo": {"workflow": body}}
     elif body and all(isinstance(v, dict) and "class_type" in v for v in body.values()):
         g, extra = body, {}
     else:
@@ -757,8 +754,8 @@ def comfy_template_from_json(body):
         tl = json.loads(ins.get("timeline_data") or "{}")
     except Exception:
         raise ValueError("timeline_data 不是合法 JSON")
-    if not any(it.get("type") == "image" and it.get("enabled", True) for it in tl.get("items", [])):
-        raise ValueError("timeline 裡沒有啟用的圖片項目 — 模板必須是一個帶參考圖的 I2VA 工作流")
+    # timeline 允許沒有圖片：送出時會依模式（I2VA/FL2VA/L2VA/REF2VA）重建圖片清單，
+    # 所以存檔當下是 T2VA、items 為空的工作流也是合法模板。
     carried = False
     if not ((extra.get("extra_pnginfo") or {}).get("workflow") or {}).get("nodes"):
         # Export (API) 檔沒有 UI metadata（影片內嵌 workflow 靠它）。如果現有模板有、
@@ -898,9 +895,16 @@ def apply_wf_params(g, wf, aspect):
                     ins["aspect_preset_when_not_image"] = aspect["preset"]
 
 
-def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspect=None, image_blob=None):
-    """載模板，只換圖與三欄位（＋影片秒數），其餘照舊；種子隨機化避免重複送出被去重。
-    extra_data（UI 工作流）同步替換相同欄位——save_metadata 嵌進影片的是它。"""
+MODE_TO_DIRECTOR = {"i2va": "I2VA", "fl2va": "FL2VA", "l2va": "L2VA", "ref2va": "REF2VA"}
+
+
+def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspect=None, image_blob=None,
+                mode=None, extra_names=None, full_prompt=None):
+    """載模板，換圖與欄位（＋影片秒數），其餘照舊；種子隨機化避免重複送出被去重。
+    extra_data（UI 工作流）同步替換相同欄位——save_metadata 嵌進影片的是它。
+    mode/extra_names/full_prompt：四模式支援 —— 設 Director 的 mode、重建 timeline 的圖片清單
+    （FL2VA 兩張 slot 0/1、REF2VA 最多 9 張依序、L2VA 單張由 mode 決定當末幀），
+    並把網頁生成的完整 prompt 塞進 external_prompt（Director 以它為最終 prompt，繞過欄位重組）。"""
     import random
     with open(COMFY_TEMPLATE, encoding="utf-8") as f:
         tpl = json.load(f)
@@ -923,17 +927,39 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
         return bs
 
     ins = director["inputs"]
+    dmode = MODE_TO_DIRECTOR.get(str(mode or "").lower())
+    if dmode:
+        ins["mode"] = dmode
+    if full_prompt and str(full_prompt).strip():
+        # Director：external_prompt 為字串時直接作為最終 prompt（見節點原始碼 resolved 邏輯）
+        ins["external_prompt"] = str(full_prompt)
     old_bs_str = ins.get("builder_state") or "{}"
     old_tl_str = ins.get("timeline_data") or "{}"
     bs = patch_bs(json.loads(old_bs_str))
+    if dmode:
+        bs["mode"] = dmode
     ins["builder_state"] = json.dumps(bs, ensure_ascii=False)
     tl = json.loads(old_tl_str)
-    done = False
-    for it in tl.get("items", []):
-        if it.get("type") == "image" and it.get("enabled", True) and not done:
-            it["value"] = image_name
-            it["thumbnail"] = None
-            done = True
+    names = [image_name] + [n for n in (extra_names or []) if n]
+    if dmode:
+        # 重建圖片清單：非圖片項目（音訊參考等）保留原樣
+        keep = [it for it in tl.get("items", []) if it.get("type") != "image"]
+        img_items = []
+        for k, nm in enumerate(names):
+            item = {"id": "h3web-img-%d" % (k + 1), "type": "image", "value": nm,
+                    "order": k, "enabled": True, "thumbnail": None}
+            if dmode == "FL2VA":
+                item["slot"] = k          # 0 = 首幀, 1 = 尾幀
+            img_items.append(item)
+        tl["items"] = img_items + keep
+        done = bool(img_items)
+    else:
+        done = False
+        for it in tl.get("items", []):
+            if it.get("type") == "image" and it.get("enabled", True) and not done:
+                it["value"] = image_name
+                it["thumbnail"] = None
+                done = True
     if isinstance(tl.get("builder_state"), dict):
         tl["builder_state"] = patch_bs(tl["builder_state"])
     ins["timeline_data"] = json.dumps(tl, ensure_ascii=False)
@@ -1677,6 +1703,9 @@ class H(SimpleHTTPRequestHandler):
                     return self.send_json({"error": "ComfyUI 連不上: %s" % e}, 502)
             # 圖片來源：歷史紀錄 id（優先原圖 .orig.*，沒有才用 1024 工作副本）或 dataURL
             blob, ext = None, "jpg"
+            run_mode = str(body.get("mode") or "").lower()
+            full_prompt = str(body.get("content") or "")
+            extra_blobs = []
             rid = str(body.get("rec_id") or "")
             if rid and ID_RE.match(rid):
                 op, oext = orig_path(HIST, rid)
@@ -1686,10 +1715,28 @@ class H(SimpleHTTPRequestHandler):
                     fp = os.path.join(HIST, rid + ".full.jpg")
                     if os.path.exists(fp):
                         blob = open(fp, "rb").read()
+                # 從紀錄補齊：模式、完整 prompt、附加圖（FL2VA 尾幀 / REF2VA 參考圖）
+                try:
+                    with open(os.path.join(HIST, rid + ".json"), encoding="utf-8") as f:
+                        rec0 = json.load(f)
+                    if not run_mode:
+                        run_mode = str(rec0.get("mode") or "").lower()
+                    if not full_prompt:
+                        full_prompt = str(rec0.get("content") or "")
+                    for n in range(1, int(rec0.get("nmore") or 0) + 1):
+                        fp2 = os.path.join(HIST, "%s.x%d.jpg" % (rid, n))
+                        if os.path.exists(fp2):
+                            extra_blobs.append(open(fp2, "rb").read())
+                except Exception:
+                    pass
             if blob is None:
                 blob, ext2 = parse_data_image(body.get("image"))
                 if blob is not None:
                     ext = ext2
+            for durl in (body.get("more") or [])[:8]:
+                mb, _ = parse_data_image(durl)
+                if mb:
+                    extra_blobs.append(mb)
             if blob is None:
                 return self.send_json({"error": "沒有可用的圖片（rec_id 找不到原圖，也沒帶 image）"}, 400)
             # 影片秒數："15 seconds" / "15" / 15 -> 15
@@ -1700,9 +1747,15 @@ class H(SimpleHTTPRequestHandler):
             name = "h3webui_%s.%s" % (new_id(), ext)
             try:
                 up = comfy_upload(name, blob)
+                extra_names = []
+                for k2, mb in enumerate(extra_blobs):
+                    nm2 = "h3webui_%s_x%d.jpg" % (new_id(), k2 + 1)
+                    up2 = comfy_upload(nm2, mb)
+                    extra_names.append(up2.get("name", nm2))
                 graph, extra = comfy_build(str(body.get("imd", "")), str(body.get("soundscape", "")),
                                            str(body.get("music", "")), up.get("name", name), dur,
-                                           body.get("wf"), body.get("aspect"), blob)
+                                           body.get("wf"), body.get("aspect"), blob,
+                                           mode=run_mode, extra_names=extra_names, full_prompt=full_prompt)
                 payload = {"prompt": graph, "client_id": "h3-webui"}
                 if extra:
                     payload["extra_data"] = extra

@@ -349,19 +349,19 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
   <button class="nav on" data-view="run" data-mode="i2va" data-tip="I2VA 圖生影音">
     <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-8 8"/></svg>
-    <span>I2VA</span><span class="cnt" id="navRun"></span></button>
+    <span>I2VA</span><span class="cnt" id="navRun"></span></button><!-- navRun kept for compat; per-mode counts use .cnt below -->
 
   <button class="nav" data-view="run" data-mode="fl2va" data-tip="FL2VA 首尾幀生影音">
     <svg viewBox="0 0 24 24"><rect x="2" y="6" width="8" height="12" rx="1"/><rect x="14" y="6" width="8" height="12" rx="1"/><path d="m10 12 4 0m-1.5-2 2 2-2 2"/></svg>
-    <span>FL2VA</span></button>
+    <span>FL2VA</span><span class="cnt"></span></button>
 
   <button class="nav" data-view="run" data-mode="l2va" data-tip="L2VA 末幀生影音">
     <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 20V4m10 8H9m5-3 3 3-3 3"/></svg>
-    <span>L2VA</span></button>
+    <span>L2VA</span><span class="cnt"></span></button>
 
   <button class="nav" data-view="run" data-mode="ref2va" data-tip="REF2VA 參考圖生影音">
     <svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>
-    <span>REF2VA</span></button>
+    <span>REF2VA</span><span class="cnt"></span></button>
 
   <button class="nav" data-view="hist" data-tip="歷史紀錄">
     <svg viewBox="0 0 24 24"><path d="M3 3v6h6"/><path d="M3.5 13a9 9 0 1 0 2-5.5L3 9"/><path d="M12 8v5l3 2"/></svg>
@@ -779,7 +779,12 @@ window.setMode = m => {
   document.querySelectorAll('.nav[data-mode]').forEach(b =>
     b.classList.toggle("on", b.dataset.mode === m && $("#v-run").classList.contains("on")));
   saveSettings();
-  if (typeof clearSlots === "function"){ clearSlots(); renderSlots(); }
+  if (typeof renderSlots === "function") renderSlots();   // 各模式格子獨立保存，切換不清空
+  if (typeof modeItems === "function"){
+    $("#run").disabled = !modeItems().length;
+    $("#prog").textContent = modeItems().length ? `${modeItems().length} 筆待處理` : "";
+    updateNavCounts();
+  }
   if (typeof render === "function") render();
 };
 function upTok(){
@@ -1392,9 +1397,10 @@ function add(fl){
       items.push({mode, files:[f], file:f, name:f.name, state:"pending", preview:u, previews:[u]});
     }
   } else {
-    // FL2VA / REF2VA：拖進來的圖從第一個空格開始填入格子
-    let i = SLOTS.findIndex(s => !s);
-    if (i < 0) i = 0;
+    // FL2VA / REF2VA：拖進來的圖從第一個空格開始填入格子（各模式的格子互相獨立）
+    const S = slotsArr();
+    let i = S.findIndex(s => !s);
+    if (i < 0) i = S.length < slotCount() ? S.length : 0;
     for (const f of files){
       if (i >= slotCount()) break;
       setSlot(i++, f);
@@ -1403,23 +1409,37 @@ function add(fl){
     return;
   }
   items.forEach(arFromPreview);
-  render(); $("#run").disabled = !items.length;
-  $("#prog").textContent = `${items.length} 筆待處理`;
-  $("#navRun").textContent = items.length || "";
+  render(); $("#run").disabled = !modeItems().length;
+  $("#prog").textContent = `${modeItems().length} 筆待處理`;
+  updateNavCounts();
+}
+
+/* ===== 每個模式自己的清單視角與側欄計數 ===== */
+function modeItems(){ const m = curMode(); return items.filter(i => (i.mode || "i2va") === m); }
+function updateNavCounts(){
+  for (const m of Object.keys(MODES)){
+    const el = document.querySelector(`.nav[data-mode="${m}"] .cnt`);
+    if (el) el.textContent = items.filter(i => (i.mode || "i2va") === m).length || "";
+  }
 }
 
 /* ===== 格子式上傳（FL2VA 2 格 / REF2VA 9 格） =====
+   每個模式各自一份格子（SLOTS_BY），切換模式不會互相影響也不會清掉已放的圖。
    點某一格選多張圖 → 從那一格開始依序填入；每格右上角 ✕ 可單獨移除；點已有圖的格子可從該格重新替換 */
-let SLOTS = [], slotPick = 0;
+const SLOTS_BY = {fl2va: [], ref2va: []};
+let slotPick = 0;
+function slotsArr(){ return SLOTS_BY[curMode()] || (SLOTS_BY[curMode()] = []); }
 function slotCount(){ return MODE_INFO[curMode()].max; }
 function slotLabel(i){ return curMode() === "fl2va" ? (i === 0 ? "起始幀" : "結束幀") : "圖 " + (i + 1); }
 function setSlot(i, f){
-  if (SLOTS[i] && SLOTS[i].url){ try{ URL.revokeObjectURL(SLOTS[i].url); }catch(e){} }
-  SLOTS[i] = f ? {file: f, url: URL.createObjectURL(f)} : null;
+  const S = slotsArr();
+  if (S[i] && S[i].url){ try{ URL.revokeObjectURL(S[i].url); }catch(e){} }
+  S[i] = f ? {file: f, url: URL.createObjectURL(f)} : null;
 }
 function clearSlots(){
-  SLOTS.forEach(s => { if (s && s.url){ try{ URL.revokeObjectURL(s.url); }catch(e){} } });
-  SLOTS = [];
+  const S = slotsArr();
+  S.forEach(s => { if (s && s.url){ try{ URL.revokeObjectURL(s.url); }catch(e){} } });
+  SLOTS_BY[curMode()] = [];
 }
 function renderSlots(){
   const zone = $("#slotzone");
@@ -1427,8 +1447,9 @@ function renderSlots(){
   zone.classList.toggle("hide", inf.batch);
   if (inf.batch) return;
   const n = slotCount();
+  const S = slotsArr();
   $("#slotgrid").innerHTML = Array.from({length: n}, (_, i) => {
-    const s = SLOTS[i];
+    const s = S[i];
     return `<div class="slot ${s ? "has" : ""}" data-i="${i}" title="${s ? "點擊從此格重新選圖" : "點擊選圖（可多選，從此格依序填入）"}">
       <span class="sno">${i + 1}</span>
       ${s ? `<img src="${s.url}"><button class="sx" data-x="${i}" title="移除這張"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>` : `<span class="plus">＋</span>`}
@@ -1445,7 +1466,7 @@ function renderSlots(){
     setSlot(+b.dataset.x, null);
     renderSlots();
   });
-  const filled = SLOTS.filter(Boolean).length;
+  const filled = S.filter(Boolean).length;
   const need = MODE_INFO[curMode()].min;
   $("#slotAdd").disabled = filled < need;
   $("#slotStat").textContent = filled
@@ -1463,7 +1484,7 @@ $("#slotfiles").onchange = e => {
   renderSlots();
 };
 function composeSlots(){
-  const picked = SLOTS.map((s, i) => s ? {s, i} : null).filter(Boolean);
+  const picked = slotsArr().map((s, i) => s ? {s, i} : null).filter(Boolean);
   const inf = MODE_INFO[curMode()];
   if (picked.length < inf.min){ $("#slotStat").textContent = `此模式至少需要 ${inf.min} 張圖`; return false; }
   const it = {mode: curMode(), files: picked.map(x => x.s.file), file: picked[0].s.file,
@@ -1473,12 +1494,12 @@ function composeSlots(){
   it.previews = picked.map(x => x.s.url);
   it.preview = it.previews[0];
   items.push(it);
-  SLOTS = [];
+  SLOTS_BY[curMode()] = [];
   renderSlots();
   items.forEach(arFromPreview);
-  render(); $("#run").disabled = !items.length;
-  $("#prog").textContent = `${items.length} 筆待處理`;
-  $("#navRun").textContent = items.length || "";
+  render(); $("#run").disabled = !modeItems().length;
+  $("#prog").textContent = `${modeItems().length} 筆待處理`;
+  updateNavCounts();
   return true;
 }
 $("#slotAdd").onclick = () => composeSlots();
@@ -1713,16 +1734,17 @@ const STATES=[["ok","通過","f-ok"],["warn","警告","f-warn"],["fail","錯誤"
 let FILTER = new Set(STATES.map(s=>s[0]));
 
 function updateFilterBar(){
-  if (!items.length){ $("#fbar").style.display="none"; return; }
+  const list = modeItems();
+  if (!list.length){ $("#fbar").style.display="none"; return; }
   $("#fbar").style.display="flex";
-  const cnt={}; items.forEach(i=>cnt[i.state]=(cnt[i.state]||0)+1);
+  const cnt={}; list.forEach(i=>cnt[i.state]=(cnt[i.state]||0)+1);
   $("#fchips").innerHTML = STATES.filter(([k])=>cnt[k]).map(([k,label,cls])=>
     `<button class="fchip ${cls} ${FILTER.has(k)?"on":""}" onclick="toggleFilter('${k}')">
       ${label}<span class="n">${cnt[k]}</span></button>`).join("");
   applyFilter();
 }
 const visibleItems = () =>
-  items.filter(i => i.state === "running" || i.keep || FILTER.has(i.state));
+  modeItems().filter(i => i.state === "running" || i.keep || FILTER.has(i.state));
 function applyFilter(){
   document.querySelectorAll("#out .card").forEach(c=>{
     const on = c.dataset.st === "running" || c.dataset.keep === "1" || FILTER.has(c.dataset.st);
@@ -1740,7 +1762,7 @@ window.toggleFilter = k => {
   clearKeep();
   FILTER.has(k) ? FILTER.delete(k) : FILTER.add(k);
   // 篩到一張都不剩沒有意義，直接回到全選
-  const present = new Set(items.map(i => i.state));
+  const present = new Set(modeItems().map(i => i.state));
   if (![...present].some(st => FILTER.has(st))) FILTER = new Set(STATES.map(s => s[0]));
   updateFilterBar();
 };
@@ -1763,32 +1785,35 @@ async function runQueue(list, label){
     if (abort) break;
     it.state="running"; it.keep=true; it.zh=null; render();
     $("#prog").textContent = `${label} ${++n}/${list.length} — ${it.name}`;
-    $("#navRun").textContent = `${n}/${list.length}`;
     try{ await runOne(it); }
     catch(e){ it.state="error"; it.err=e.message; render(); }
   }
   setRunning(false);
-  $("#prog").textContent = abort ? `已停止（完成 ${n} 張）` : `${label}完成，共 ${n} 張`;
-  $("#navRun").textContent = items.length || "";
+  $("#prog").textContent = abort ? `已停止（完成 ${n} 筆）` : `${label}完成，共 ${n} 筆`;
+  updateNavCounts();
   convergence(); updateFilterBar();
 }
 $("#run").onclick = () => {
   // 格子模式：格子裡有圖但還沒按「加入清單」→ 自動組成一筆再跑
-  if (!MODE_INFO[curMode()].batch && SLOTS.some(Boolean)){
+  if (!MODE_INFO[curMode()].batch && slotsArr().some(Boolean)){
     if (!composeSlots()) return;
   }
-  runQueue(items.filter(i=>i.state==="pending"||i.state==="error"), "處理中");
+  runQueue(modeItems().filter(i=>i.state==="pending"||i.state==="error"), "處理中");
 };
 $("#frerun").onclick = () => runQueue(visibleItems().filter(i => i.state !== "running"), "重跑");
 $("#stop").onclick=()=>{abort=true;$("#prog").textContent="停止中…"};
-$("#clear").onclick=()=>{items.forEach(i=>i.preview&&URL.revokeObjectURL(i.preview));
-  items=[];render();$("#conv").style.display="none";
-  $("#prog").textContent="";$("#run").disabled=true;$("#navRun").textContent="";
-  $("#fbar").style.display="none"};
+$("#clear").onclick=()=>{
+  // 只清空目前模式的清單，其他模式的項目不動
+  const m = curMode();
+  items.forEach(i => { if ((i.mode||"i2va")===m && i.preview) URL.revokeObjectURL(i.preview); });
+  items = items.filter(i => (i.mode||"i2va") !== m);
+  render();$("#conv").style.display="none";
+  $("#prog").textContent="";$("#run").disabled=!modeItems().length;updateNavCounts();
+  if (!modeItems().length) $("#fbar").style.display="none";};
 
 /* ================= 收斂統計 ================= */
 function convergence(){
-  const done = items.filter(i=>i.v);
+  const done = modeItems().filter(i=>i.v);
   if (done.length < 3){ $("#conv").style.display="none"; return; }
   const cnt={}; done.forEach(i=>i.v.moves.forEach(m=>cnt[m]=(cnt[m]||0)+1));
   const tot=Object.values(cnt).reduce((a,b)=>a+b,0);
@@ -1841,6 +1866,7 @@ function render(){
   const keep = (ae && ae.dataset && ae.dataset.note !== undefined)
     ? {k: ae.dataset.note, a: ae.selectionStart, b: ae.selectionEnd} : null;
   $("#out").innerHTML = items.map((it,k)=>{
+    if ((it.mode || "i2va") !== curMode()) return "";   // 每個模式頁只顯示自己的項目
     const b={pending:["b-run","待處理"],running:["b-run","產生中…"],ok:["b-ok","通過"],
              warn:["b-warn","警告"],fail:["b-fail","錯誤"],error:["b-fail","失敗"]}[it.state];
     let inner="";
@@ -1908,21 +1934,22 @@ function render(){
   updateFilterBar();
 }
 function updateSelBtns(){
-  const sel = items.filter(i => i.sel);
+  const list = modeItems();
+  const sel = list.filter(i => i.sel);
   $("#runsel").disabled = !sel.length || running;
   $("#comfysel").disabled = !sel.some(i => i.content) || !onServer;
-  $("#selall").disabled = !items.length;
-  $("#selall").textContent = (items.length && items.every(i => i.sel)) ? "取消勾選" : "勾選全部";
+  $("#selall").disabled = !list.length;
+  $("#selall").textContent = (list.length && list.every(i => i.sel)) ? "取消勾選" : "勾選全部";
   $("#runsel").textContent = sel.length ? `生成勾選的（${sel.length}）` : "生成勾選的";
   const nc = sel.filter(i => i.content).length;
   $("#comfysel").textContent = nc ? `🎬 勾選的送 ComfyUI（${nc}）` : "🎬 勾選的送 ComfyUI";
 }
 window.toggleSel = (k, v) => { if (items[k]) items[k].sel = v; updateSelBtns(); };
-$("#selall").onclick = () => { const all = items.length && items.every(i => i.sel);
-  items.forEach(i => i.sel = !all); render(); };
-$("#runsel").onclick = () => runQueue(items.filter(i => i.sel && i.state !== "running"), "生成勾選");
+$("#selall").onclick = () => { const list = modeItems(); const all = list.length && list.every(i => i.sel);
+  list.forEach(i => i.sel = !all); render(); };
+$("#runsel").onclick = () => runQueue(modeItems().filter(i => i.sel && i.state !== "running"), "生成勾選");
 $("#comfysel").onclick = async () => {
-  const list = items.map((it, k) => ({it, k})).filter(x => x.it.sel && x.it.content);
+  const list = items.map((it, k) => ({it, k})).filter(x => x.it.sel && x.it.content && (x.it.mode || "i2va") === curMode());
   if (!list.length) return;
   $("#comfysel").disabled = true;
   let n = 0;
@@ -1942,10 +1969,10 @@ window.removeItem = k => {
   if (it.preview) URL.revokeObjectURL(it.preview);
   items.splice(k, 1);
   render();
-  $("#run").disabled = !items.filter(i => i.state === "pending" || i.state === "error").length && !items.length;
-  $("#navRun").textContent = items.length || "";
-  $("#prog").textContent = items.length ? `${items.length} 張` : "";
-  if (!items.length){ $("#conv").style.display = "none"; $("#fbar").style.display = "none"; }
+  $("#run").disabled = !modeItems().length;
+  updateNavCounts();
+  $("#prog").textContent = modeItems().length ? `${modeItems().length} 筆` : "";
+  if (!modeItems().length){ $("#conv").style.display = "none"; $("#fbar").style.display = "none"; }
 };
 window.setNote = (k, v) => { if (items[k]) items[k].note = v; };
 window.agrow = t => { t.style.height = "auto"; t.style.height = (t.scrollHeight + 2) + "px"; };
@@ -2165,16 +2192,19 @@ $("#himport") && ($("#himport").onclick = async () => {
       const url = rec.orig_ext ? `/api/orig/${id}.${rec.orig_ext}` : `/api/full/${id}.jpg`;
       const blob = await (await fetch(url)).blob();
       const f = new File([blob], rec.image || (id + ".jpg"), {type: blob.type || "image/jpeg"});
-      items.push({file: f, name: f.name, state: "pending", preview: URL.createObjectURL(f),
+      const f2 = f, u2 = URL.createObjectURL(f);
+      items.push({mode: "i2va", files: [f2], file: f2, name: f.name, state: "pending",
+                  preview: u2, previews: [u2],
                   note: rec.note || "", shots: rec.shots || undefined});
       n++;
     }catch(e){}
   }
   items.forEach(arFromPreview);
+  setMode("i2va");            // 匯入的單張圖回到 I2VA 清單
   render();
-  $("#run").disabled = !items.length;
-  $("#prog").textContent = `${items.length} 張待處理`;
-  $("#navRun").textContent = items.length || "";
+  $("#run").disabled = !modeItems().length;
+  $("#prog").textContent = `${modeItems().length} 筆待處理`;
+  updateNavCounts();
   hSel.clear(); renderHist();
   setView("run");
 });
@@ -2542,7 +2572,9 @@ window.comfyFromRec = (id, btnEl) => {
 window.comfyFromItem = (k, btnEl) => {
   const it = items[k]; if (!it || !it.content) return;
   const stat = document.querySelector(`[data-cstat="${k}"]`);
-  comfySend({image: it.orig || it.full, dur: "20 seconds", wf: wfOverrides(), aspect: arPayload(it), ...comfyFields(it.content, it.mode)}, stat, btnEl);
+  comfySend({image: it.orig || it.full, dur: "20 seconds", wf: wfOverrides(), aspect: arPayload(it),
+             mode: it.mode || curMode(), content: it.content, more: it.more || [],
+             ...comfyFields(it.content, it.mode)}, stat, btnEl);
 };
 
 $("#ctplfilebtn").onclick = () => $("#ctplfile").click();
@@ -2859,9 +2891,9 @@ function dl(name,text,mime){
   a.download=name; a.click();
 }
 $("#expj").onclick=()=>dl("h3-results.json",JSON.stringify(
-  items.filter(i=>i.content).map(i=>({image:i.name,elapsed_s:+i.elapsed,usage:i.usage,
+  modeItems().filter(i=>i.content).map(i=>({image:i.name,mode:i.mode,elapsed_s:+i.elapsed,usage:i.usage,
     note:i.note||"",content:i.content,zh:i.zh,errors:i.v.E,warnings:i.v.W})),null,1),"application/json");
-$("#expt").onclick=()=>dl("h3-results.txt",items.filter(i=>i.content)
+$("#expt").onclick=()=>dl("h3-results.txt",modeItems().filter(i=>i.content)
   .map(i=>`########## ${i.name}\n${i.content}\n`+(i.zh?`\n--- 中文 ---\n${i.zh}\n`:"")).join("\n"),"text/plain");
 
 setView(store.get(VKEY) || "run");
