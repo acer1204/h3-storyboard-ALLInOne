@@ -1,0 +1,2756 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>H3 Prompt 批次產生器</title>
+<style>
+:root{
+  --bg:#fbfaf8; --panel:#fff; --fg:#1c1a17; --mut:#6f6862; --faint:#9b948c;
+  --line:#e5e0d8; --line2:#efebe4; --acc:#b5502a; --ok:#2f6f5e; --warn:#8a6d1f;
+  --code:#f5f2ec; --btn:#1c1a17; --btnfg:#fbfaf8; --side:#f4f1ea; --hover:#ece7de;
+  --shadow:0 1px 2px rgba(28,26,23,.04),0 4px 12px rgba(28,26,23,.05);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#16150f; --panel:#1e1c16; --fg:#eae5dc; --mut:#9b948a; --faint:#6f6a60;
+  --line:#312e27; --line2:#272419; --acc:#e08a5f; --ok:#6fbfa4; --warn:#d4b25a;
+  --code:#23211a; --btn:#eae5dc; --btnfg:#16150f; --side:#1a1813; --hover:#2a271f;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.25);
+}}
+:root[data-theme=dark]{
+  --bg:#16150f; --panel:#1e1c16; --fg:#eae5dc; --mut:#9b948a; --faint:#6f6a60;
+  --line:#312e27; --line2:#272419; --acc:#e08a5f; --ok:#6fbfa4; --warn:#d4b25a;
+  --code:#23211a; --btn:#eae5dc; --btnfg:#16150f; --side:#1a1813; --hover:#2a271f;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.25);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);
+  font:15px/1.7 "Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  -webkit-text-size-adjust:100%}
+
+/* ---------- shell ---------- */
+.app{display:grid;grid-template-columns:236px 1fr;min-height:100vh}
+.app.collapsed{grid-template-columns:60px 1fr}
+.side{background:var(--side);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh;padding:14px 10px 22px;overflow:hidden}
+.sidetop{display:flex;align-items:center;gap:8px;margin-bottom:12px;min-height:34px}
+.hbg{width:36px;height:34px;flex:none;border:1px solid var(--line);background:var(--panel);border-radius:9px;
+  cursor:pointer;display:grid;place-items:center;color:var(--mut);padding:0}
+.hbg:hover{color:var(--fg);border-color:var(--acc)}
+.hbg svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+.app.collapsed .brand,.app.collapsed .nav span:not(.cnt),.app.collapsed .sidefoot{display:none}
+.app.collapsed .nav{justify-content:center;padding:10px 0;position:relative}
+.app.collapsed .nav .cnt{position:absolute;top:2px;right:4px;margin:0;font-size:9.5px}
+.app.collapsed .nav[data-tip]:hover::after{content:attr(data-tip);position:absolute;left:calc(100% + 10px);top:50%;
+  transform:translateY(-50%);background:var(--panel);border:1px solid var(--line);color:var(--fg);font-size:12px;
+  padding:5px 9px;border-radius:7px;white-space:nowrap;box-shadow:var(--shadow);z-index:50;pointer-events:none}
+.app.collapsed .sidetop{justify-content:center}
+.brand{padding:0 10px 20px;font-weight:700;font-size:16px;letter-spacing:-.01em;line-height:1.35}
+.brand small{display:block;font-weight:400;font-size:12px;color:var(--faint);letter-spacing:.02em;margin-top:2px}
+.nav{display:flex;align-items:center;gap:11px;width:100%;padding:10px 11px;margin-bottom:3px;
+  background:none;border:0;border-radius:9px;color:var(--mut);font:inherit;font-size:14.5px;
+  font-weight:500;cursor:pointer;text-align:left;transition:background .12s,color .12s}
+.nav:hover{background:var(--hover);color:var(--fg)}
+.nav.on{background:var(--panel);color:var(--fg);font-weight:600;box-shadow:var(--shadow)}
+.nav svg{width:17px;height:17px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round}
+.nav .cnt{margin-left:auto;font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.nav.sub{padding:5px 11px 5px 30px;font-size:13px;margin-bottom:1px}
+.nav.sub.on{font-weight:600}
+.app.collapsed #histsub{display:none}
+.nav.busy .cnt{color:var(--acc)}
+.sidefoot{margin-top:auto;padding:14px 11px 0;border-top:1px solid var(--line);font-size:12px;color:var(--faint)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--faint);margin-right:7px;
+  vertical-align:1px}
+.dot.up{background:var(--ok)}.dot.down{background:var(--acc)}
+
+.main{min-width:0;padding:40px 40px 80px}
+.view{display:none}
+.view.on{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.vh{margin:0 0 4px;font-size:23px;letter-spacing:-.02em}
+.vs{margin:0 0 26px;color:var(--mut);font-size:14px}
+
+/* ---------- bits ---------- */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:20px;margin-bottom:16px}
+.panel h3{margin:0 0 3px;font-size:15px}
+.panel .ph{margin:0 0 16px;color:var(--mut);font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px}
+label{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);
+  margin-bottom:6px;font-weight:600}
+input,select,textarea{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);
+  border-radius:8px;padding:9px 11px;font:inherit;font-size:14px}
+input:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(--acc) 45%,transparent);
+  outline-offset:-1px;border-color:transparent}
+textarea{min-height:340px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.65;resize:vertical}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button{background:var(--btn);color:var(--btnfg);border:0;border-radius:8px;padding:9px 17px;
+  font:inherit;font-weight:600;font-size:14px;cursor:pointer;transition:opacity .12s}
+button:hover{opacity:.85}
+button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
+button.ghost:hover{background:var(--hover);opacity:1}
+button.mini{padding:6px 12px;font-size:12.5px}
+button:disabled{opacity:.35;cursor:not-allowed}
+.status{font-size:13px;color:var(--mut);margin:10px 0 0;font-variant-numeric:tabular-nums;min-height:1.2em}
+.hint{font-size:12.5px;color:var(--faint);margin:6px 0 0}
+
+#drop{border:2px dashed var(--line);border-radius:13px;padding:46px 20px;text-align:center;
+  color:var(--mut);cursor:pointer;transition:.15s;background:var(--panel);margin-bottom:16px}
+#drop:hover,#drop.hot{border-color:var(--acc);color:var(--fg);background:var(--hover)}
+#drop b{display:block;font-size:15.5px;margin-bottom:5px;color:var(--fg)}
+
+.fbar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:16px 0 2px;
+  padding:11px 13px;background:var(--panel);border:1px solid var(--line);border-radius:11px}
+.flab{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:600}
+#fchips{display:flex;gap:7px;flex-wrap:wrap}
+.fchip{font-size:12.5px;padding:4px 11px;border-radius:999px;border:1px solid var(--line);
+  background:transparent;color:var(--faint);cursor:pointer;font-weight:500;
+  font-variant-numeric:tabular-nums;transition:.12s}
+.fchip:hover{border-color:var(--acc)}
+.fchip.on{color:var(--fg);border-color:currentColor;font-weight:600}
+.fchip.on.f-ok{color:var(--ok)}.fchip.on.f-warn{color:var(--warn)}
+.fchip.on.f-fail{color:var(--acc)}.fchip.on.f-error{color:var(--acc)}
+.fchip.on.f-cuts{color:var(--fg)}.fchip.on.f-onetake{color:var(--acc)}
+.hcell .mtag{position:absolute;right:20px;top:6px;font-size:10px;padding:1px 6px;border-radius:4px;
+  background:color-mix(in srgb,var(--bg) 78%,transparent);border:1px solid var(--line);color:var(--faint);backdrop-filter:blur(3px)}
+.hcell .mtag.ot{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 50%,var(--line))}
+.ctx{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.ctx span{font-size:11.5px;padding:2px 9px;border-radius:6px;border:1px solid var(--line);color:var(--faint);background:var(--code)}
+.ctx span b{color:var(--fg);font-weight:600;margin-left:4px}
+.ctx span.ot b{color:var(--acc)}
+.fchip .n{opacity:.65;margin-left:5px}
+.fsep{flex:1}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{background:transparent;color:var(--mut);border:0;border-radius:0;padding:8px 15px;
+  font-size:13.5px;font-weight:500;border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button:hover{background:var(--hover);opacity:1;color:var(--fg)}
+.seg button.on{background:var(--btn);color:var(--btnfg);font-weight:600}
+.seg.sm button{padding:5px 10px;font-size:12px}
+.note-wrap{margin-top:10px}
+.note-wrap label{margin-bottom:5px}
+.card .note{resize:none;overflow:hidden;min-height:4.2em}
+.arwrap{display:flex;flex-direction:column;gap:6px}
+.arrow{display:flex;gap:6px;align-items:stretch}
+.arrow select{flex:1;min-width:0;max-width:none}
+.arrow input[type=number]{flex:1;min-width:0;width:auto;text-align:center}
+.arrow .arsep{flex:none;align-self:center;color:var(--faint)}
+.arswap{flex:none;display:flex;align-items:center;gap:5px;font-size:12.5px;padding:0 11px;
+  cursor:pointer;border:1px solid var(--line);border-radius:8px;background:var(--bg);
+  color:var(--mut);white-space:nowrap}
+.arswap:hover{border-color:var(--acc);color:var(--acc)}
+.arswap .ph-ic{display:inline-block;font-size:14px;transition:transform .15s}
+.arswap.land .ph-ic{transform:rotate(90deg)}
+textarea.note{min-height:74px;font-family:inherit;font-size:13px;line-height:1.6;resize:vertical;
+  padding:8px 10px}
+.card.hide{display:none}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px;margin:14px 0;
+  display:grid;grid-template-columns:210px 1fr;gap:22px}
+.card>.thumb img{width:100%;border-radius:9px;display:block}
+.card>.thumb .ph{aspect-ratio:3/4;border-radius:9px;background:var(--code);display:grid;place-items:center;
+  color:var(--faint);font-size:12px;margin:0}
+.hd{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:9px}
+.xdel{margin-left:auto;flex:none;width:26px;height:26px;line-height:1;border:1px solid var(--line);
+  border-radius:7px;background:none;color:var(--faint);cursor:pointer;font-size:13px}
+.xdel:hover{border-color:var(--acc);color:var(--acc)}
+.xdel:disabled{opacity:.35;cursor:default}
+.name{font-family:ui-monospace,Consolas,monospace;font-size:13px;color:var(--mut);word-break:break-all}
+.badge{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap}
+.b-ok{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.b-warn{background:color-mix(in srgb,var(--warn) 20%,transparent);color:var(--warn)}
+.b-fail{background:color-mix(in srgb,var(--acc) 16%,transparent);color:var(--acc)}
+.b-run{background:color-mix(in srgb,var(--mut) 18%,transparent);color:var(--mut)}
+.meta{color:var(--faint);font-size:12px;font-variant-numeric:tabular-nums;
+  display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.chip{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--mut);
+  font-family:ui-monospace,Consolas,monospace}
+.chip.dlg{color:var(--acc);border-color:color-mix(in srgb,var(--acc) 45%,var(--line))}
+ul.issues{margin:0 0 14px;padding-left:19px;font-size:13.2px}
+ul.issues li{margin-bottom:3px}
+ul.issues li.e{color:var(--acc)}ul.issues li.w{color:var(--warn)}ul.issues li.i{color:var(--faint)}ul.issues li.i::before{content:"ⓘ "}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+.col.zh{border-left:1px solid var(--line2);padding-left:22px}
+.lab{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);
+  margin:0 0 4px;font-weight:600}
+.col p{margin:0 0 13px;font-size:14px}
+.shot{color:var(--acc);font-weight:700}
+.cam{background:color-mix(in srgb,var(--ok) 12%,transparent);border-radius:4px;padding:1px 3px}
+pre{background:var(--code);border-radius:9px;padding:13px;overflow-x:auto;font-size:12px;
+  white-space:pre-wrap;word-break:break-word;line-height:1.6;margin:0}
+details{margin-top:10px}
+summary{cursor:pointer;color:var(--mut);font-size:12.5px;margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+td,th{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line2)}
+th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:uppercase;font-weight:600}
+.bar{height:5px;border-radius:3px;background:var(--acc);min-width:2px}
+
+.splayout{display:grid;grid-template-columns:236px 1fr;gap:20px}
+.splist{min-width:0}
+.pitem{display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border:1px solid var(--line);
+  border-radius:9px;margin-bottom:7px;cursor:pointer;background:var(--bg);transition:.12s;width:100%;
+  text-align:left;font:inherit;color:var(--fg)}
+.pitem:hover{border-color:var(--acc)}
+.pitem.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 7%,var(--bg))}
+.pitem .rd{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--faint);flex:none;margin-top:4px}
+.pitem.on .rd{border-color:var(--acc);background:radial-gradient(var(--acc) 45%,transparent 47%)}
+.pitem .nm{display:block;font-size:13.5px;font-weight:600;line-height:1.4;word-break:break-word}
+.pitem .sub{display:block;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+.modeseg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.modeseg button{background:none;border:0;color:var(--faint);padding:7px 14px;font-size:13px;cursor:pointer}
+.modeseg button.on{background:color-mix(in srgb,var(--acc) 14%,var(--bg));color:var(--acc);font-weight:600}
+.modetag{font-size:10px;border:1px solid var(--line);border-radius:4px;padding:0 5px;margin-left:6px;color:var(--faint)}
+.pitem .lock{font-size:10px;color:var(--faint);border:1px solid var(--line);border-radius:4px;
+  padding:0 4px;margin-left:5px;vertical-align:1px;font-weight:400}
+@media(max-width:860px){.splayout{grid-template-columns:1fr}}
+.hgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:13px}
+.hcell{border:1px solid var(--line);border-radius:10px;overflow:hidden;cursor:pointer;background:var(--panel);
+  transition:.13s;position:relative;text-align:left}
+.hcell:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:var(--shadow)}
+.hcell img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:var(--code)}
+.hcell .cap{padding:5px 8px;font-size:10.5px;color:var(--mut);line-height:1.4;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
+.hcell .cap.t{color:var(--faint);padding-top:0;padding-bottom:7px}
+.hcell .sdot{position:absolute;top:7px;right:7px;width:9px;height:9px;border-radius:50%;
+  box-shadow:0 0 0 2px var(--panel)}
+.s-ok{background:var(--ok)}.s-warn{background:var(--warn)}.s-fail{background:var(--acc)}
+.vcount{position:absolute;top:6px;left:6px;font-size:10px;font-weight:700;padding:1px 7px;
+  border-radius:999px;background:rgba(20,18,14,.62);color:#fff;backdrop-filter:blur(3px)}
+.vbar{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:15px;padding-bottom:13px;
+  border-bottom:1px solid var(--line2)}
+.mtop{display:grid;grid-template-columns:250px 1fr;gap:16px;margin-bottom:16px;align-items:start}
+.mtop .mimg{width:100%;border-radius:10px;display:block;border:1px solid var(--line)}
+@media(max-width:760px){.mtop{grid-template-columns:1fr}
+  .mtop .mimg{max-width:260px;margin:0 auto}}
+.vtab{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;padding:5px 11px;
+  border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--mut);
+  cursor:pointer;font-variant-numeric:tabular-nums;font-weight:500}
+.vtab:hover{border-color:var(--acc)}
+.vtab.on{color:var(--fg);border-color:var(--acc);font-weight:600;
+  background:color-mix(in srgb,var(--acc) 8%,transparent)}
+.vst{font-size:11px;font-weight:700}
+.t-ok{color:var(--ok)}.t-warn{color:var(--warn)}.t-fail{color:var(--acc)}
+
+.mdgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:13px}
+/* ---- 上傳媒體庫 ---- */
+.upgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:13px}
+.upcell{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--bg);transition:border-color .12s,transform .12s,box-shadow .12s}
+.upcell:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:var(--shadow)}
+.upcell.sel{border-color:var(--acc);box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 45%,transparent)}
+.selck{width:16px;height:16px;accent-color:var(--acc);cursor:pointer;flex:none;margin-right:2px}
+.rbtn.on{border-color:var(--acc);color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent)}
+.fbchip{font-size:11.5px;padding:3px 9px;border:1px solid var(--line);border-radius:99px;cursor:pointer;
+  background:none;color:var(--mut)}
+.fbchip.on{border-color:var(--acc);color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent)}
+.hcell .rmark{position:absolute;left:7px;top:32px;font-size:13px;text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.hcell .hck{position:absolute;top:7px;left:7px;width:20px;height:20px;border-radius:6px;
+  border:1.5px solid rgba(255,255,255,.75);background:rgba(20,18,14,.45);color:#fff;font-size:13px;
+  line-height:17px;text-align:center;cursor:pointer;z-index:2}
+.hcell.hsel{border-color:var(--acc);box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 45%,transparent)}
+.hcell.hsel .hck{background:var(--acc);border-color:var(--acc)}
+.hablist{font-size:12.5px;line-height:1.9;color:var(--mut)}
+.hablist b{color:var(--fg);font-weight:500;font-family:ui-monospace,Consolas,monospace}
+.lesrow{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px dashed var(--line);font-size:12.5px}
+.lesrow:last-child{border-bottom:none}
+.lesrow input[type=checkbox]{width:15px;height:15px;accent-color:var(--acc);margin-top:2px;flex:none}
+.lesrow .lmode{flex:none;font-size:10px;padding:1px 6px;border:1px solid var(--line);border-radius:4px;color:var(--mut);margin-top:1px}
+.lesrow .ltxt{flex:1;min-width:0}
+.lesrow .ltxt .en{color:var(--faint);font-size:11.5px;font-family:ui-monospace,Consolas,monospace;word-break:break-word}
+.lesrow.off .ltxt{opacity:.45}
+.reqbox{border:1px solid var(--line);border-radius:10px;padding:10px 12px 12px;margin-bottom:14px;background:var(--code)}
+.reqbox label{display:block;font-size:11.5px;color:var(--mut);margin-bottom:4px}
+.lesprop{border:1px solid color-mix(in srgb,var(--acc) 40%,var(--line));border-radius:10px;padding:10px 12px;margin-top:10px}
+.upcell .upprev{display:block;width:100%;aspect-ratio:3/4;object-fit:cover;background:var(--code);cursor:pointer}
+.upcell .upck{position:absolute;top:7px;left:7px;width:20px;height:20px;border-radius:6px;border:1.5px solid rgba(255,255,255,.75);
+  background:rgba(20,18,14,.55);backdrop-filter:blur(3px);display:grid;place-items:center;cursor:pointer;color:#fff;font-size:13px;line-height:1}
+.upcell.sel .upck{background:var(--acc);border-color:var(--acc)}
+.upcell .uprefs{position:absolute;top:7px;right:7px;font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;
+  background:rgba(20,18,14,.62);color:#fff;backdrop-filter:blur(3px)}
+.upcell .upcap{padding:7px 9px 0;font-size:11px;font-family:ui-monospace,Consolas,monospace;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.upcell .upcap.t{padding-top:2px;color:var(--faint);font-size:10px}
+.upcell .uprow{display:flex;gap:6px;padding:8px 9px 9px}
+.upcell .uprow button{flex:1;font-size:11px;padding:4px 0;border-radius:7px;border:1px solid var(--line);background:none;color:var(--mut);cursor:pointer}
+.upcell .uprow button:hover{border-color:var(--acc);color:var(--acc)}
+.upcell .uprow button.dl:hover{border-color:#ff8f7a;color:#ff8f7a}
+.upbar{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.upbar .selinfo{font-size:12.5px;color:var(--faint);margin-left:auto}
+.mdcell{border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--bg);
+  transition:.13s;display:flex;flex-direction:column}
+.mdcell:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:var(--shadow)}
+.mdprev{position:relative;cursor:pointer;background:#000;border:0;padding:0;display:block;width:100%}
+.mdprev video,.mdprev img{width:100%;aspect-ratio:16/10;object-fit:contain;display:block;background:#000;min-height:1px}
+.mdprev img:not([src]){content:""}
+.mdprev .play{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.mdprev .play span{width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.55);
+  display:grid;place-items:center;color:#fff;font-size:17px;padding-left:4px;backdrop-filter:blur(2px)}
+.mdcap{padding:8px 10px 0;font-size:11.5px;font-family:ui-monospace,Consolas,monospace;color:var(--fg);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mdcap.t{padding-top:2px;color:var(--faint);font-size:10.5px}
+.mdrow{display:flex;gap:7px;padding:9px 10px 10px}
+.mdrow a,.mdrow button{flex:1;text-align:center;font-size:11.5px;padding:5px 0;border-radius:7px;
+  border:1px solid var(--line);background:transparent;color:var(--mut);cursor:pointer;
+  text-decoration:none;font-weight:600;font-family:inherit}
+.mdrow a:hover{border-color:var(--ok);color:var(--ok)}
+.mdrow button:hover{border-color:var(--acc);color:var(--acc)}
+#mlbBody video,#mlbBody img{max-width:100%;max-height:72vh;border-radius:9px}
+@media(max-width:640px){.mdgrid,.hgrid,.upgrid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}}
+.modal{position:fixed;inset:0;background:rgba(20,18,14,.6);display:none;z-index:60;overflow-y:auto;padding:40px 20px}
+.modal.on{display:block}
+.sheet{max-width:980px;margin:0 auto;background:var(--panel);border:1px solid var(--line);
+  border-radius:14px;padding:24px;box-shadow:var(--shadow)}
+
+@media(max-width:1000px){.cols{grid-template-columns:1fr}
+  .col.zh{border-left:0;border-top:1px solid var(--line2);padding-left:0;padding-top:16px}}
+@media(max-width:860px){
+  .app{grid-template-columns:1fr}
+  .side{position:fixed;bottom:0;left:0;right:0;top:auto;height:auto;width:100%;
+    flex-direction:row;padding:6px 8px;border-right:0;border-top:1px solid var(--line);
+    z-index:50;backdrop-filter:blur(8px)}
+  .brand,.sidefoot{display:none}
+  .nav{flex-direction:column;gap:4px;margin:0;padding:7px 4px;font-size:11px;text-align:center;
+    justify-content:center;border-radius:10px}
+  .nav svg{width:19px;height:19px}
+  .nav .cnt{margin-left:0;position:absolute;top:3px;right:calc(50% - 26px);font-size:10px}
+  .main{padding:26px 18px 92px}
+  .vh{font-size:20px}
+  .card{grid-template-columns:1fr;gap:14px}
+  .card>.thumb{max-width:180px}
+  .modal{padding:12px}.sheet{padding:18px}
+}
+</style>
+
+<div class="app">
+<nav class="side">
+  <div class="sidetop">
+    <button class="hbg" id="hbg" title="收合 / 展開選單" aria-label="收合選單">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+    <div class="brand" style="padding:0">H3 Storyboard<small>MiniMax H3 劇情提示詞產生器</small></div>
+  </div>
+
+  <button class="nav on" data-view="run" data-mode="i2va" data-tip="I2VA 圖生影音">
+    <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-8 8"/></svg>
+    <span>I2VA</span><span class="cnt" id="navRun"></span></button>
+
+  <button class="nav" data-view="run" data-mode="fl2va" data-tip="FL2VA 首尾幀生影音">
+    <svg viewBox="0 0 24 24"><rect x="2" y="6" width="8" height="12" rx="1"/><rect x="14" y="6" width="8" height="12" rx="1"/><path d="m10 12 4 0m-1.5-2 2 2-2 2"/></svg>
+    <span>FL2VA</span></button>
+
+  <button class="nav" data-view="run" data-mode="l2va" data-tip="L2VA 末幀生影音">
+    <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 20V4m10 8H9m5-3 3 3-3 3"/></svg>
+    <span>L2VA</span></button>
+
+  <button class="nav" data-view="run" data-mode="ref2va" data-tip="REF2VA 參考圖生影音">
+    <svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>
+    <span>REF2VA</span></button>
+
+  <button class="nav" data-view="hist" data-tip="歷史紀錄">
+    <svg viewBox="0 0 24 24"><path d="M3 3v6h6"/><path d="M3.5 13a9 9 0 1 0 2-5.5L3 9"/><path d="M12 8v5l3 2"/></svg>
+    <span>歷史紀錄</span><span class="cnt" id="navHist"></span></button>
+  <div id="histsub">
+    <button class="nav sub" data-view="hist" data-hmode="i2va"><span>· I2VA</span></button>
+    <button class="nav sub" data-view="hist" data-hmode="fl2va"><span>· FL2VA</span></button>
+    <button class="nav sub" data-view="hist" data-hmode="l2va"><span>· L2VA</span></button>
+    <button class="nav sub" data-view="hist" data-hmode="ref2va"><span>· REF2VA</span></button>
+  </div>
+
+  <button class="nav" data-view="media" data-tip="ComfyUI 媒體庫">
+    <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20M6 4v4M10 4v4M14 4v4M18 4v4"/><path d="m10 12 5 3-5 3z"/></svg>
+    <span>ComfyUI 媒體庫</span><span class="cnt" id="navMedia"></span></button>
+
+  <button class="nav" data-view="comfy" data-tip="ComfyUI 設定">
+    <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+    <span>ComfyUI 設定</span></button>
+
+  <button class="nav" data-view="set" data-tip="系統設定">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
+    <span>系統設定</span></button>
+
+  <div class="sidefoot">
+    <div id="sfServer"><span class="dot"></span>尚未檢查</div>
+    <div id="sfHist" style="margin-top:4px"></div>
+  </div>
+</nav>
+
+<main class="main">
+
+<!-- ============ 生成（I2VA / FL2VA / L2VA / REF2VA 共用） ============ -->
+<section class="view on" id="v-run">
+  <h1 class="vh" id="runTitle">I2VA — 圖生影音</h1>
+  <p class="vs" id="runSub">圖片＝影片第一幀。拖入多張圖片可批次逐一生成，每張完成即自動存進歷史紀錄。</p>
+
+  <div id="drop"><b id="dropB">把圖片拖進來，或點此選檔</b><span id="dropS">依檔名排序，一次跑一張</span></div>
+  <input type="file" id="files" multiple accept="image/*" hidden>
+
+  <div class="row">
+    <button id="run" disabled>開始</button>
+    <button class="ghost" id="stop" disabled>停止</button>
+    <button class="ghost" id="runsel" disabled>生成勾選的</button>
+    <button class="ghost" id="comfysel" disabled>🎬 勾選的送 ComfyUI</button>
+    <button class="ghost mini" id="selall" disabled>勾選全部</button>
+    <button class="ghost" id="expj" disabled>匯出 JSON</button>
+    <button class="ghost" id="expt" disabled>匯出 TXT</button>
+    <button class="ghost" id="clear">清空清單</button>
+  </div>
+  <p class="status" id="prog"></p>
+
+  <div class="fbar" id="fbar" style="display:none">
+    <span class="flab">顯示</span>
+    <span id="fchips"></span>
+    <span class="fsep"></span>
+    <button class="ghost mini" id="fall">全選</button>
+    <button class="mini" id="frerun" disabled>重跑顯示中的</button>
+  </div>
+
+  <div id="out"></div>
+  <div class="panel" id="conv" style="display:none"></div>
+</section>
+
+<!-- ============ 歷史紀錄 ============ -->
+<section class="view" id="v-hist">
+  <h1 class="vh">歷史紀錄</h1>
+  <p class="vs">存在伺服器的 history 資料夾，區網上任何裝置看到的都是同一份。點縮圖看當時的完整結果。</p>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:12px">
+      <input type="text" id="hfilter" placeholder="以檔名篩選" style="max-width:240px">
+      <button class="ghost mini" id="hrefresh">重新整理</button>
+      <button class="ghost mini" id="hselnone">取消選取</button>
+      <button class="mini" id="himport" disabled>匯入到上傳並處理</button>
+      <button class="ghost mini" id="hclear">全部清除</button>
+      <span class="status" id="hcount" style="margin:0"></span>
+    </div>
+    <div class="fbar" id="hfbar" style="display:none;margin-top:0">
+      <span class="flab">顯示</span>
+      <span id="hfchips"></span>
+      <span class="fsep"></span>
+      <button class="ghost mini" id="hfall">全選</button>
+      <button class="mini" id="hregen" disabled>重新生成顯示中的</button>
+      <button class="ghost mini" id="hstop" style="display:none">停止</button>
+    </div>
+    <p class="status" id="hprog"></p>
+    <div id="hgrid" class="hgrid"></div>
+  </div>
+</section>
+
+<!-- ============ 媒體庫 ============ -->
+<section class="view" id="v-uploads">
+  <h1 class="vh">上傳媒體庫</h1>
+  <p class="vs">你上傳過的每一張原圖（同一張圖只留一份）。點圖看原圖；勾選後可一鍵匯入「上傳並處理」；刪除會<b>連同用過這張圖的歷史紀錄一起刪</b>。</p>
+  <div class="panel">
+    <div class="upbar">
+      <input type="text" id="upfilter" placeholder="以檔名篩選" style="max-width:240px">
+      <button class="ghost mini" id="uprefresh">重新整理</button>
+      <button class="ghost mini" id="upselall">全選顯示中的</button>
+      <button class="ghost mini" id="upselnone">取消選取</button>
+      <button class="mini" id="upimport" disabled>匯入到上傳並處理</button>
+      <button class="ghost mini" id="updelsel" disabled>刪除選取的</button>
+      <span class="selinfo" id="upcount"></span>
+    </div>
+    <div id="upgrid" class="upgrid"></div>
+  </div>
+</section>
+
+<section class="view" id="v-media">
+  <h1 class="vh">ComfyUI 媒體庫</h1>
+  <p class="vs" id="mediaSub">ComfyUI 的輸出資料夾。點卡片放大預覽，可下載或刪除。</p>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:12px">
+      <input type="text" id="mdfilter" placeholder="以檔名篩選" style="max-width:240px">
+      <span id="mdkinds" style="display:flex;gap:7px;flex-wrap:wrap"></span>
+      <button class="ghost mini" id="mdrefresh">重新整理</button>
+      <span class="status" id="mdcount" style="margin:0"></span>
+    </div>
+    <div id="mdgrid" class="mdgrid"></div>
+  </div>
+</section>
+
+<!-- ============ 系統設定 ============ -->
+<section class="view" id="v-comfy">
+  <h2>ComfyUI 設定</h2>
+  <p class="vs">連線位址、工作流選擇與送出時要覆寫的參數。沒填的欄位一律照模板原值。</p>
+
+  <div class="panel">
+    <h3>連線與資源</h3>
+    <div class="grid">
+      <div style="grid-column:1/-1"><label>ComfyUI 位址</label><input type="text" id="comfyUrl" placeholder="http://127.0.0.1:8188"></div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="ghost mini" id="comfySaveUrl">保存位址</button>
+      <button class="mini" id="comfyFreeBtn">🧹 強制 Free ComfyUI（卸載模型釋放 VRAM）</button>
+      <span class="status" id="comfyFreeStat" style="margin:0"></span>
+    </div>
+    <p class="hint" style="margin-top:8px">GPU 目前用量：<span id="gpuNow">—</span>
+      <button class="ghost mini" id="gpuRefresh" style="margin-left:8px">刷新</button></p>
+  </div>
+
+  <div class="panel">
+    <h3>📁 工作流</h3>
+    <p class="ph">從工作流資料夾選一個 .json 直接載入為模板（Export (API) 或 Save 格式都可）。</p>
+    <div class="grid">
+      <div style="grid-column:1/-1"><label>工作流資料夾</label><input type="text" id="wfDir"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <select id="wfSelect" style="min-width:280px"><option value="">（載入中…）</option></select>
+      <button class="ghost mini" id="wfUse">使用此工作流</button>
+      <button class="ghost mini" id="wfRescan">重新掃描</button>
+      <span class="status" id="wfSelStat" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>ComfyUI 整合</h3>
+    <p class="ph">「送 ComfyUI 生成」用的工作流模板 = ComfyUI 最近一次成功的生成。
+      模板兩種來源：在 ComfyUI 成功跑一次後按「用最近一次成功生成更新模板」，或直接上傳 workflow JSON——<b>Export (API)</b> 檔＝可執行的節點圖；<b>Save</b> 存的 UI 格式檔＝掛為內嵌 metadata（影片內嵌工作流靠它）。兩種都吃，先匯 API 再匯 UI 最完整。之後每次送出只替換圖片（全解析度原圖）、三個欄位與影片秒數。</p>
+    <div class="row">
+      <button class="ghost mini" id="ctpl">用最近一次成功生成更新模板</button>
+      <button class="ghost mini" id="ctplfilebtn">從 workflow.json 匯入模板</button>
+      <input type="file" id="ctplfile" accept=".json,application/json" style="display:none">
+      <span class="status" id="ctplstat" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>⚙️ 工作流預設參數</h3>
+    <p class="ph">送 ComfyUI 生成時覆寫模板裡的對應節點。留空＝用模板原值（括號內顯示模板目前的值）。</p>
+    <div class="grid">
+      <div><label>FPS</label><input type="number" id="wfps" min="1" max="120" step="1" placeholder="模板值"></div>
+      <div><label>解析度</label><select id="wres"><option value="">（照模板）</option></select></div>
+      <div><label>步數 steps</label><input type="number" id="wsteps" min="1" max="100" step="1" placeholder="模板值"></div>
+      <div><label>shift_video</label><input type="number" id="wsv" min="0.01" max="100" step="0.5" placeholder="模板值"></div>
+      <div><label>shift_audio</label><input type="number" id="wsa" min="0.01" max="100" step="0.5" placeholder="模板值"></div>
+    </div>
+    <p class="status" id="wfstat" style="margin-top:8px"></p>
+  </div>
+</section>
+
+<section class="view" id="v-set">
+  <h1 class="vh">系統設定</h1>
+  <p class="vs">改完即時保存，重新整理不會消失。</p>
+
+  <div class="panel">
+    <h3>連線與生成</h3>
+    <p class="ph">temperature / top_p 等取樣參數請在 llama-server 後台（.env / 啟動參數）設定，前端只需要位址。</p>
+    <select id="mode" style="display:none">
+      <option value="i2va">i2va</option><option value="fl2va">fl2va</option>
+      <option value="l2va">l2va</option><option value="ref2va">ref2va</option></select>
+    <div class="grid">
+      <div style="grid-column:1/-1"><label>llama-server 位址</label><input type="text" id="server"></div>
+      <div><label>中文翻譯</label><select id="tr">
+        <option value="1" selected>開啟</option><option value="0">關閉</option></select></div>
+      <div><label>自動重試次數</label><input type="text" id="retry" value="3"></div>
+      <div><label>重試目標</label><select id="retrylvl">
+        <option value="ok">完全通過（無警告）</option>
+        <option value="noerr" selected>無錯誤即可</option></select></div>
+    </div>
+    <p class="hint" style="margin-top:10px">生成結果不符合重試目標時自動重新生成，直到符合或用完次數，
+      並保留其中最好的一次。設 0 關閉。</p>
+    <div class="row" style="margin-top:16px">
+      <button class="ghost mini" id="ping">測試連線</button>
+      <button class="ghost mini" id="sreset">重設全部設定</button>
+    </div>
+    <p class="status" id="conn"></p>
+    <p class="status" id="saved" style="margin-top:2px"></p>
+  </div>
+
+  <div class="panel">
+    <h3>📚 經驗庫（整理經驗）</h3>
+    <p class="ph">你在歷史紀錄上的 👍👎／標籤／備註會累積在這裡。按「整理經驗」讓模型<b>一次歸納全部待整理的反饋</b>，
+      提出通用規則；你審核後入庫，之後每次生成都會注入（依模式）。建議累積約 5 筆再整理，規則會準得多。</p>
+
+    <div class="reqbox">
+      <div class="row" style="margin:0 0 8px;align-items:center">
+        <span class="lmode" style="margin:0">必要</span>
+        <b style="font-size:13px">結構門檻（永遠套用，不可刪除；留空＝不限）</b>
+      </div>
+      <div class="grid">
+        <div><label>劇情文字數量（最少）</label><input type="number" id="reqWords" min="0" max="9999" placeholder="不限" onchange="reqSave()"></div>
+        <div><label>對白語言鎖定</label><select id="reqLangLock" onchange="reqSave()">
+          <option value="any">不鎖定</option><option value="japanese">日文</option>
+          <option value="english">英文</option><option value="chinese">中文</option><option value="korean">韓文</option>
+        </select></div>
+        <div><label>每句台詞字數（最少）</label><input type="number" id="reqLineMin" min="0" max="999" placeholder="不限" onchange="reqSave()"></div>
+        <div><label>每句台詞字數（最多）</label><input type="number" id="reqLineMax" min="0" max="999" placeholder="不限" onchange="reqSave()"></div>
+      </div>
+      <p class="status" id="reqstat" style="margin-top:6px"></p>
+    </div>
+
+    <div class="row">
+      <button class="mini" id="lesdistill" disabled>整理經驗</button>
+      <span class="status" id="lespend" style="margin:0">載入中…</span>
+    </div>
+    <div id="lesprops"></div>
+    <div id="leslist" style="margin-top:10px"></div>
+    <div class="row" style="margin-top:10px;gap:7px">
+      <select id="lesaddmode" style="max-width:110px"><option value="all">通用</option>
+        <option value="i2va">I2VA</option><option value="fl2va">FL2VA</option>
+        <option value="l2va">L2VA</option><option value="ref2va">REF2VA</option></select>
+      <input type="text" id="lesaddtxt" placeholder="手動新增規則（中文即可，會自動翻成英文注入）" style="flex:1;min-width:200px">
+      <button class="ghost mini" id="lesadd">新增</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>System prompt <span class="modetag" id="spmodetag"></span></h3>
+    <p class="ph">四種模式（I2VA / FL2VA / L2VA / REF2VA）<b>共用同一份</b> system prompt——內建版本已涵蓋四種模式的格式規則。
+      左邊勾選哪一組，產生時就用哪一組。編輯內容會自動保存到伺服器。</p>
+    <div class="splayout">
+      <div class="splist">
+        <div id="plist"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="ghost mini" id="pnew">新增一組</button>
+          <button class="ghost mini" id="pdup">複製目前這組</button>
+        </div>
+        <label style="margin-top:14px">從檔案匯入</label>
+        <input type="file" id="spfile" accept=".txt">
+      </div>
+      <div class="spedit">
+        <div class="row" style="margin-bottom:10px;gap:8px">
+          <input type="text" id="pname" placeholder="這組的名稱" style="max-width:280px">
+          <span class="hint" id="sptok"></span>
+          <span style="margin-left:auto"></span>
+          <button class="ghost mini" id="pdel">刪除這組</button>
+        </div>
+        <textarea id="sp" spellcheck="false"></textarea>
+        <p class="status" id="pstat"></p>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+</main>
+</div>
+
+<div id="updlg" class="modal"><div class="sheet" style="max-width:520px">
+  <h3 style="margin:0 0 6px" id="updlgTitle">刪除上傳圖片</h3>
+  <p class="status" id="updlgMeta" style="margin:0 0 14px"></p>
+  <div id="updlgBody" style="font-size:14px;line-height:1.7;margin-bottom:16px"></div>
+  <div class="row" style="gap:8px;flex-wrap:wrap">
+    <button class="mini" id="updlgUnlink">只從庫移除（保留歷史）</button>
+    <button class="ghost mini" id="updlgCascade" style="border-color:#ff8f7a;color:#ff8f7a">連同歷史一起刪</button>
+    <span style="margin-left:auto"></span>
+    <button class="ghost mini" id="updlgCancel">取消</button>
+  </div>
+  <p class="hint" style="margin-top:12px">「只從庫移除」不會動到任何歷史紀錄——每筆紀錄都保有自己的原圖，之後照樣能點開、重跑；
+    如果日後再上傳同一張圖，這些紀錄會自動重新掛回來。</p>
+</div></div>
+
+<div id="mlb" class="modal"><div class="sheet" style="max-width:1080px">
+  <div class="row" style="justify-content:space-between;align-items:flex-start;gap:14px">
+    <div style="min-width:0"><h3 id="mlbName" style="margin:0;word-break:break-all"></h3>
+      <p class="status" id="mlbMeta" style="margin:4px 0 0"></p></div>
+    <div class="row" style="gap:7px;flex-wrap:nowrap">
+      <a class="ghost mini" id="mlbDl" style="text-decoration:none;padding:6px 12px;border:1px solid var(--line);border-radius:8px;color:var(--fg);font-size:12.5px;font-weight:600">下載</a>
+      <button class="ghost mini" id="mlbDel">刪除</button>
+      <button class="ghost mini" id="mlbClose">關閉</button>
+    </div>
+  </div>
+  <div id="mlbBody" style="margin-top:16px;text-align:center"></div>
+</div></div>
+
+<div id="modal" class="modal"><div class="sheet">
+  <div class="row" style="justify-content:space-between;align-items:flex-start;gap:14px">
+    <div style="min-width:0"><h3 id="mtitle" style="margin:0;word-break:break-all"></h3>
+      <p class="status" id="mmeta" style="margin:4px 0 0"></p></div>
+    <div class="row" style="gap:7px;flex-wrap:nowrap">
+      <button class="ghost mini" id="mcopy">複製</button>
+      <button class="ghost mini" id="mdel">刪除</button>
+      <button class="ghost mini" id="mclose">關閉</button>
+    </div>
+  </div>
+  <div id="mbody" style="margin-top:18px"></div>
+</div></div>
+
+<script>
+/* builtin system prompts live in sidecar .txt files (loaded in loadPrompts) */
+const $ = s => document.querySelector(s);
+const esc = t => (t||"").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const onServer = location.protocol.startsWith("http");
+
+/* ================= 設定持久化 ================= */
+const SKEY="h3.settings.v1", SPKEY="h3.sp.v1", VKEY="h3.view.v1";
+const FIELDS={server:"#server",tr:"#tr",
+              retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
+              wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa"};
+const store={
+  get(k){try{return localStorage.getItem(k)}catch(e){return null}},
+  set(k,v){try{localStorage.setItem(k,v);return true}catch(e){return false}},
+  del(k){try{localStorage.removeItem(k)}catch(e){}}
+};
+/* llama-server address: URL ?server= > saved setting > server-side config.json > local default */
+let DEFAULT_SERVER = "http://127.0.0.1:8080";
+(() => {
+  $("#server").value = DEFAULT_SERVER;
+  const q = new URLSearchParams(location.search);
+  for (const [k,el] of Object.entries(FIELDS)) if (q.has(k)) $(el).value = q.get(k);
+  let saved={}; try{ saved = JSON.parse(store.get(SKEY)||"{}") }catch(e){}
+  for (const [k,el] of Object.entries(FIELDS))
+    if (saved[k] != null && saved[k] !== "") $(el).value = saved[k];
+  // pull the deployment default from the server; only apply if the user has not set one themselves
+  if (location.protocol.startsWith("http") && !q.has("server") && !(saved.server)){
+    fetch("/api/config").then(r => r.json()).then(c => {
+      if (c && c.llama_url){ DEFAULT_SERVER = c.llama_url; if (!$("#server").value || $("#server").value === "http://127.0.0.1:8080") { $("#server").value = c.llama_url; saveSettings(); } }
+    }).catch(() => {});
+  }
+})();
+function saveSettings(){
+  const o={}; for (const [k,el] of Object.entries(FIELDS)) o[k]=$(el).value;
+  const ok = store.set(SKEY, JSON.stringify(o));
+  $("#saved").textContent = ok ? "設定已保存" :
+    "無法保存設定 — 瀏覽器封鎖了 localStorage，或處於無痕模式";
+  clearTimeout(saveSettings.t);
+  saveSettings.t = setTimeout(()=>{ if(ok) $("#saved").textContent=""; }, 2200);
+}
+for (const el of Object.values(FIELDS)){
+  $(el).addEventListener("change", saveSettings);
+  $(el).addEventListener("input", saveSettings);
+}
+$("#sreset").onclick = () => {
+  if (!confirm("重設所有設定與自訂 system prompt？")) return;
+  store.del(SKEY); store.del(SPKEY); store.del(VKEY); store.del("h3.prompt.all.v1");
+  location.href = location.pathname;
+};
+
+/* ================= system prompt 庫（四模式共用一份） ================= */
+const PAPI = "/api/prompts";
+const MODES = {i2va:"I2VA", fl2va:"FL2VA", l2va:"L2VA", ref2va:"REF2VA"};
+const MODE_INFO = {
+  i2va:  {title:"I2VA — 圖生影音", sub:"圖片＝影片第一幀。拖入多張圖片可批次逐一生成，每張完成即自動存進歷史紀錄。",
+          drop:"把圖片拖進來，或點此選檔", dropS:"每張圖片＝一筆生成，依檔名排序逐一跑", min:1, max:1, batch:true},
+  fl2va: {title:"FL2VA — 首尾幀生影音", sub:"兩張圖＝首幀＋尾幀，模型編寫連貫過渡劇情。先丟起始幀、再丟結束幀（湊滿兩張成一筆）。",
+          drop:"依序拖入 起始幀、結束幀", dropS:"每 2 張圖組成一筆生成", min:2, max:2, batch:false},
+  l2va:  {title:"L2VA — 末幀生影音", sub:"圖片＝影片最後一幀，劇情鋪陳並精準收束在這張圖。拖入多張可批次生成。",
+          drop:"把圖片拖進來，或點此選檔", dropS:"每張圖片＝一筆生成", min:1, max:1, batch:true},
+  ref2va:{title:"REF2VA — 參考圖生影音", sub:"參考圖＝角色/物件外觀依據（非影格），1～9 張組成一筆。輸出六欄位參考格式。",
+          drop:"拖入 1～9 張參考圖（同一筆）", dropS:"全部圖片進同一筆生成", min:1, max:9, batch:false},
+};
+function curMode(){ const m = $("#mode").value; return MODES[m] ? m : "i2va"; }
+function PSEL(){ return "h3.prompt.all.v1"; }
+const BUILTIN = {id:"builtin", name:"內建 StoryDirector-VA（I2VA/FL2VA/L2VA/REF2VA 通用）", text:null, builtin:true, mode:"all", file:"SYSTEM_PROMPT_STORYDIRECTOR_web.txt"};
+let prompts = [BUILTIN], active = BUILTIN.id, dirty = null;
+
+function builtinFor(){ return BUILTIN; }
+function visiblePrompts(){ return prompts; }
+function activeText(){
+  const p = prompts.find(x => x.id === active) || BUILTIN;
+  return p.text != null ? p.text : (BUILTIN.text || "");
+}
+window.setMode = m => {
+  if (!MODES[m]) return;
+  $("#mode").value = m;
+  const inf = MODE_INFO[m];
+  $("#runTitle").textContent = inf.title;
+  $("#runSub").textContent = inf.sub;
+  $("#dropB").textContent = inf.drop;
+  $("#dropS").textContent = inf.dropS;
+  $("#spmodetag").textContent = MODES[m];
+  document.querySelectorAll('.nav[data-mode]').forEach(b =>
+    b.classList.toggle("on", b.dataset.mode === m && $("#v-run").classList.contains("on")));
+  saveSettings();
+  if (typeof render === "function") render();
+};
+function upTok(){
+  $("#sptok").textContent = "約 " + Math.round($("#sp").value.length / 3.6) + " tokens";
+}
+function renderPrompts(){
+  const vis = visiblePrompts();
+  if (!vis.some(p => p.id === active)) active = builtinFor(curMode()).id;
+  $("#plist").innerHTML = vis.map(p => {
+    const n = Math.round((p.text != null ? p.text.length : (p.len || 0)) / 3.6);
+    return '<button class="pitem ' + (p.id === active ? "on" : "") + '" onclick="pickPrompt(\'' + p.id + '\')">'
+      + '<span class="rd"></span><span style="min-width:0">'
+      + '<span class="nm">' + esc(p.name) + (p.builtin ? '<span class="lock">內建</span>' : "") + '</span>'
+      + '<span class="sub">' + n + ' tokens' + (p.ts ? " · " + esc(p.ts.slice(5,16)) : "") + '</span>'
+      + '</span></button>';
+  }).join("");
+  const p = prompts.find(x => x.id === active) || builtinFor(curMode());
+  $("#pname").value = p.name;
+  $("#pname").disabled = !!p.builtin;
+  $("#pdel").disabled = !!p.builtin;
+  $("#sp").value = p.text != null ? p.text : "";
+  $("#sp").readOnly = !!p.builtin;
+  upTok();
+  $("#pstat").textContent = p.builtin ? "內建版本唯讀。要改就按「複製目前這組」，改副本。" : "";
+}
+window.pickPrompt = async id => {
+  const p = prompts.find(x => x.id === id);
+  if (!p) return;
+  if (p.text == null && onServer){
+    try { p.text = (await (await fetch(PAPI + "/" + id)).json()).text; }
+    catch(e){ p.text = ""; }
+  }
+  active = id; store.set(PSEL(), id); renderPrompts();
+};
+async function loadPrompts(){
+  prompts = [BUILTIN];
+  // the builtin lives in a sidecar file so the HTML stays readable
+  for (const b of [BUILTIN]) if (b.text == null){
+    try { b.text = await (await fetch(b.file, {cache:"no-store"})).text(); }
+    catch(e){ b.text = ""; }
+  }
+  if (onServer){
+    try {
+      const rows = await (await fetch(PAPI)).json();
+      for (const r of rows) prompts.push({id:r.id, name:r.name, ts:r.ts, len:r.len, text:null, mode:r.mode || "all"});
+    } catch(e){}
+  }
+  const want = store.get(PSEL());
+  active = visiblePrompts().some(p => p.id === want) ? want : builtinFor(curMode()).id;
+  const p = prompts.find(x => x.id === active);
+  if (p && p.text == null && onServer){
+    try { p.text = (await (await fetch(PAPI + "/" + active)).json()).text; }
+    catch(e){ p.text = ""; }
+  }
+  renderPrompts();
+}
+async function savePrompt(){
+  const p = prompts.find(x => x.id === active);
+  if (!p || p.builtin) return;
+  p.text = $("#sp").value;
+  p.name = $("#pname").value.trim() || "未命名";
+  if (!onServer){ $("#pstat").textContent = "以 file:// 開啟時無法保存到伺服器"; return; }
+  try {
+    const r = await (await fetch(PAPI, {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({id:p.id, name:p.name, text:p.text, mode:p.mode || "all"})})).json();
+    p.ts = r.ts;
+    $("#pstat").textContent = "已保存";
+    clearTimeout(savePrompt.t);
+    savePrompt.t = setTimeout(() => $("#pstat").textContent = "", 1800);
+    renderPrompts();
+  } catch(e){ $("#pstat").textContent = "保存失敗：" + e.message; }
+}
+const debouncedSave = () => { clearTimeout(dirty); dirty = setTimeout(savePrompt, 700); };
+$("#sp").addEventListener("input", () => { upTok(); debouncedSave(); });
+$("#pname").addEventListener("input", debouncedSave);
+
+async function createPrompt(name, text){
+  if (!onServer){ alert("以 file:// 開啟時無法新增，請用 start_app.bat 啟動服務"); return; }
+  const mode = "all";
+  const r = await (await fetch(PAPI, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({name, text, mode})})).json();
+  prompts.push({id:r.id, name, text, ts:r.ts, mode});
+  active = r.id; store.set(PSEL(), r.id); renderPrompts();
+}
+$("#pnew").onclick = () => createPrompt("新的 prompt " + visiblePrompts().length, activeText());
+$("#pdup").onclick = () => {
+  const p = prompts.find(x => x.id === active) || builtinFor(curMode());
+  createPrompt(p.name.replace(/（副本）$/, "") + "（副本）", $("#sp").value);
+};
+$("#pdel").onclick = async () => {
+  const p = prompts.find(x => x.id === active);
+  if (!p || p.builtin) return;
+  if (!confirm("刪除「" + p.name + "」？")) return;
+  await fetch(PAPI + "/" + p.id, {method:"DELETE"});
+  prompts = prompts.filter(x => x.id !== p.id);
+  active = builtinFor(curMode()).id; store.set(PSEL(), active); renderPrompts();
+};
+$("#spfile").onchange = e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => createPrompt(f.name.replace(/\.txt$/i, ""), r.result);
+  r.readAsText(f, "utf-8");
+  e.target.value = "";
+};
+
+/* LoRA feature removed — inert stubs keep old call sites safe */
+const loraSystemSuffix = () => "";
+const loraApply = c => ({content: c, report: null, lora: null});
+const loraBadges = () => "";
+const loraCfg = () => null;
+const loraActive = () => null;
+let LORA_NOTE = "";
+const loraNoteHits = () => [];
+const loraForced = () => [];
+const loadLoras = () => {};
+/* snapshot of everything that shaped a generation, stored on the history record so it can be re-run as-is */
+function genContext(){
+  const p = prompts.find(x => x.id === active) || builtinFor(curMode());
+  const lp = loraActive();
+  const cfg = loraCfg();
+  return {
+    mode: curMode(),
+    prompt_id: p.id, prompt_name: p.name,
+    lora: cfg ? {preset_id: lp.id, preset_name: lp.name, main: cfg.mainText,
+                 subs: cfg.subs.map(x => ({key:x.key, gloss:x.gloss, alias:x.alias||""})), forced: loraForced(),
+                 note_hits: loraNoteHits()} : null,
+  };
+}
+/* run fn() with the UI temporarily switched to a saved context (mode / prompt / lora), then restore */
+async function withContext(ctx, fn){
+  const saved = {mode: curMode(), active};
+  // temp mode switch: set the hidden <select> only - do NOT go through setMode(), which persists to
+  // localStorage and re-renders the run tab. curMode()/shotLine()/validate() all read the <select>.
+  const tmpMode = m => { $("#mode").value = m; };
+  const restore = () => { tmpMode(saved.mode); active = saved.active; renderPrompts(); };
+  try{
+    if (ctx.mode && MODES[ctx.mode] && ctx.mode !== curMode()) tmpMode(ctx.mode);
+    if (ctx.prompt_id && prompts.some(x => x.id === ctx.prompt_id)){
+      active = ctx.prompt_id;
+      const pp = prompts.find(x => x.id === active);
+      if (pp && pp.text == null && onServer){ try{ pp.text = (await (await fetch(PAPI + "/" + active)).json()).text; }catch(e){ pp.text = ""; } }
+    }
+    /* LoRA restore removed — records re-run without LoRA */
+    renderPrompts();
+    return await fn();
+  } finally {
+    restore();
+  }
+}
+function ctxLabel(ctx){
+  if (!ctx) return "";
+  const m = MODES[ctx.mode] || ctx.mode || "?";
+  const parts = [`<span class="${ctx.mode==="onetake"?"ot":""}">模式<b>${m}</b></span>`];
+  const legacy = ctx.lora === undefined && !ctx.prompt_name;   // record predates the mode/prompt/LoRA tracking
+  if (ctx.prompt_name) parts.push(`<span>Prompt<b>${esc(ctx.prompt_name)}</b></span>`);
+  else if (legacy) parts.push(`<span>Prompt<b>（舊紀錄，未記錄）</b></span>`);
+  parts.push(legacy ? `<span>LoRA<b>（舊紀錄，重跑不套用）</b></span>` : ctx.lora && ctx.lora.main !== undefined
+    ? `<span>LoRA<b>${esc(ctx.lora.preset_name || "")}</b>${ctx.lora.main?` · ${esc(ctx.lora.main)}`:""}${(ctx.lora.forced||[]).length?` · 必出現 ${esc(ctx.lora.forced.join(","))}`:""}${(ctx.lora.note_hits||[]).length?` · 劇情觸發 ${esc(ctx.lora.note_hits.map(x=>x.alias+"→"+x.key).join(", "))}`:""}</span>`
+    : `<span>LoRA<b>未套用</b></span>`);
+  return `<div class="ctx">${parts.join("")}</div>`;
+}
+/* Habits (慣性偵測) feature removed — inert stubs keep boot/record call sites safe */
+const HABITS = {cuts: null, onetake: null};
+const refreshHabits = () => {};
+
+/* ---------------- 經驗庫（第 2 層）：反饋 -> 規則 -> 注入 ---------------- */
+let LESSONS = [], LES_PENDING = 0;
+let REQUIRED = {min_words:0, lang_lock:"any", line_min:0, line_max:0};
+async function refreshRequired(){
+  if (!onServer) return;
+  try{
+    const j = await (await fetch("/api/lessons/required")).json();
+    REQUIRED = {min_words:j.min_words||0, lang_lock:j.lang_lock||"any",
+                line_min:j.line_min||0, line_max:j.line_max||0};
+  }catch(e){ return; }
+  const w = $("#reqWords"); if (!w) return;   // required box not in DOM yet on this view
+  w.value = REQUIRED.min_words || "";
+  $("#reqLangLock").value = REQUIRED.lang_lock;
+  $("#reqLineMin").value = REQUIRED.line_min || "";
+  $("#reqLineMax").value = REQUIRED.line_max || "";
+}
+window.reqSave = async () => {
+  REQUIRED = {min_words: parseInt($("#reqWords").value) || 0,
+              lang_lock: $("#reqLangLock").value,
+              line_min: parseInt($("#reqLineMin").value) || 0,
+              line_max: parseInt($("#reqLineMax").value) || 0};
+  const st = $("#reqstat"); if (st) st.textContent = "儲存中…";
+  try{
+    await fetch("/api/lessons/required", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(REQUIRED)});
+    if (st) st.textContent = "已儲存 ✓";
+  }catch(e){ if (st) st.textContent = "儲存失敗：" + e.message; }
+};
+async function refreshLessons(){
+  if (!onServer) return;
+  try{
+    LESSONS = await (await fetch("/api/lessons")).json();
+    const pd = await (await fetch("/api/lessons/pending")).json();
+    LES_PENDING = pd.count || 0;
+    renderLessons();
+  }catch(e){}
+}
+function lessonSuffix(){
+  const m = curMode();
+  const act = LESSONS.filter(l => l.enabled && (l.mode === m || l.mode === "all" || l.mode === "both")).slice(0, 15);
+  if (!act.length) return "";
+  return "\n\n# LESSONS — rules distilled from this user's feedback on previous results\n"
+    + "Each rule below exists because a past clip failed for that reason. These rules OVERRIDE any\n"
+    + "conflicting guidance, pattern, or worked example elsewhere in this brief — when they clash,\n"
+    + "the rule below wins:\n"
+    + act.map(l => "- " + l.en).join("\n");
+}
+function requiredSuffix(){
+  if (typeof REQUIRED !== "object" || !REQUIRED) return "";
+  const parts = [];
+  if (REQUIRED.min_words > 0)
+    parts.push(`- The integrated_multimodal_description field must be at least ${REQUIRED.min_words} words long.`);
+  if (REQUIRED.lang_lock && REQUIRED.lang_lock !== "any"){
+    const LNAME = {japanese:"Japanese", english:"English", chinese:"Chinese", korean:"Korean"};
+    const nm = LNAME[REQUIRED.lang_lock] || REQUIRED.lang_lock;
+    parts.push(`- If the scene includes any spoken dialogue, ALL of it must be in ${nm}: tag every <d> block`
+      + ` [${nm}] and write natural, fluent ${nm}` + (nm === "Japanese" ? " (must contain real kana, never plain Chinese characters)" : "") + ".");
+  }
+  if (REQUIRED.line_min > 0)
+    parts.push(`- Each spoken dialogue line must be at least ${REQUIRED.line_min} words long (for Japanese/Chinese/Korean, count characters instead) — give it real content, not a one-word line.`);
+  if (REQUIRED.line_max > 0)
+    parts.push(`- Each spoken dialogue line must be at most ${REQUIRED.line_max} words long (for Japanese/Chinese/Korean, count characters instead) — keep it natural to say in one breath.`);
+  if (!parts.length) return "";
+  return "\n\n# REQUIRED — hard structural thresholds, checked automatically; a miss fails validation and forces a retry:\n"
+    + parts.join("\n");
+}
+const LMODE = {all:"通用", both:"通用", i2va:"I2VA", fl2va:"FL2VA", l2va:"L2VA", ref2va:"REF2VA", cuts:"舊-硬切", onetake:"舊-一鏡"};
+/* 措辭相似度（英文取字、含中文取雙字滑窗；overlap coefficient），用來揪「換句話說的重複規則」 */
+function lesSim(a, b){
+  const grams = t => {
+    t = (t || "").toLowerCase();
+    if (/[\u4e00-\u9fff]/.test(t)){
+      const c = t.replace(/[^\u4e00-\u9fffa-z0-9]/g, ""), g = new Set();
+      for (let i = 0; i < c.length - 1; i++) g.add(c.slice(i, i + 2));
+      return g;
+    }
+    return new Set(t.replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(w => w.length > 2));
+  };
+  const A = grams(a), B = grams(b);
+  if (!A.size || !B.size) return 0;
+  let n = 0; for (const x of A) if (B.has(x)) n++;
+  return n / Math.min(A.size, B.size);
+}
+function lesDupOf(pr, extra){
+  let best = null, bs = 0;
+  for (const l of [...LESSONS, ...(extra || [])]){
+    const sim = Math.max(lesSim(pr.en, l.en), lesSim(pr.zh, l.zh));
+    if (sim > bs){ bs = sim; best = l; }
+  }
+  return bs >= 0.6 ? best : null;
+}
+function renderLessons(){
+  const pend = $("#lespend"); if (!pend) return;
+  pend.textContent = LES_PENDING
+    ? `待整理反饋 ${LES_PENDING} 筆${LES_PENDING < 5 ? "（建議累積約 5 筆）" : ""}`
+    : "沒有待整理的反饋 — 到歷史紀錄評幾筆再回來";
+  $("#lesdistill").disabled = !LES_PENDING;
+  $("#leslist").innerHTML = LESSONS.length ? LESSONS.map(l => `
+    <div class="lesrow ${l.enabled ? "" : "off"}">
+      <input type="checkbox" ${l.enabled ? "checked" : ""} onchange="lesToggle('${l.id}', this.checked)" title="停用後不再注入">
+      <span class="lmode">${LMODE[l.mode] || l.mode}</span>
+      <div class="ltxt"><div>${esc(l.zh)}${l.ban ? ` <span class="lmode" title="輸出出現這些片語會被判違規並強制重試">檢查詞: ${esc(l.ban)}</span>` : ""}</div><div class="en">${esc(l.en)}</div></div>
+      <button class="ghost mini" onclick="lesBan('${l.id}')" title="設定檢查詞：輸出出現這些英文片語＝違規，強制重試修正">檢查詞</button>
+      <button class="ghost mini" onclick="lesDel('${l.id}')">刪除</button>
+    </div>`).join("") : '<span class="hint">經驗庫是空的</span>';
+  const n = LESSONS.filter(l => l.enabled).length;
+  if (n > 15) $("#leslist").insertAdjacentHTML("afterbegin",
+    `<p class="hint" style="color:var(--warn)">啟用中 ${n} 條，只有前 15 條會注入 — 建議停用過時的</p>`);
+}
+window.lesToggle = async (id, on) => {
+  const l = LESSONS.find(x => x.id === id); if (!l) return;
+  l.enabled = on;
+  await fetch("/api/lessons", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({...l, enabled: on})}).catch(()=>{});
+  renderLessons();
+};
+window.lesBan = async id => {
+  const l = LESSONS.find(x => x.id === id); if (!l) return;
+  const v = prompt("檢查詞：逗號分隔的英文片語。生成輸出出現任何一個＝判違規、強制重試修正。清空＝取消檢查（規則仍會注入，只是不強制）。", l.ban || "");
+  if (v === null) return;
+  await fetch("/api/lessons", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({...l, ban: v.trim()})}).catch(()=>{});
+  refreshLessons();
+};
+window.lesDel = async id => {
+  if (!confirm("刪除這條經驗規則？")) return;
+  await fetch("/api/lessons/" + id, {method:"DELETE"}).catch(()=>{});
+  refreshLessons();
+};
+const REFLECT_SYS = `你是影片 prompt 生成系統的「經驗整理員」。使用者對過去生成的影片給了反饋（評分/標籤/備註），你要把它們歸納成少量、通用、可執行的規則；規則之後會注入生成器的英文 system prompt。
+要求：
+- 只歸納「重複出現的模式」或明確可通用化的問題；只針對單一圖片的一次性反饋直接忽略
+- 備註內容優先於評分符號：評分只是整體印象，備註寫什麼就歸納什麼。down 的備註歸納成「避免 X」；up 的備註若是稱讚 → 歸納成「保持 X」，**若指出缺點或期望改善（「好，但○○不夠」）→ 照樣歸納成改善規則**，兩者可同時產生；沒有備註的 up 只當對照參考
+- 規則管內容（劇情合理性、動作、情緒、與圖片的關聯），不管格式（格式另有驗證器）
+- 規則不得與官方格式規範衝突。特別注意：non_diegetic_music 只能用樂器/速度/節奏/力度描述、禁止情緒形容詞——任何配樂相關規則必須用這些維度表達（例如「激烈動作配快節奏強力度」），絕不能要求「配樂情緒」
+- 不要與現有規則重複或近似
+- mode：問題只出現在某一模式就標該模式（"i2va"＝圖生影音、"fl2va"＝首尾幀、"l2va"＝末幀、"ref2va"＝參考圖），否則 "all"
+- 每條規則：en（英文一句、命令式、具體可執行）、zh（中文一句給使用者看）、mode
+- 若規則可以用具體片語機械檢查（例如某個動作/運鏡短語出現即違規），加上 ban：一至三個英文片語、逗號分隔；片語必須「出現即必然違規」才提供，否則省略
+- recurring_across_images 是跨圖片的高頻統計，只作旁證：與使用者反饋互相印證時才可納入規則，不可只憑頻率立規則
+- 最多 3 條；反饋不足以歸納就輸出 []
+只輸出 JSON 陣列，不要任何其他文字。`;
+$("#lesdistill") && ($("#lesdistill").onclick = async () => {
+  $("#lespend").textContent = "整理中…（呼叫模型歸納）";
+  $("#lesdistill").disabled = true;
+  try{
+    const pd = await (await fetch("/api/lessons/pending")).json();
+    if (!pd.items.length){ $("#lespend").textContent = "沒有待整理的反饋"; return; }
+    const habStat = m => { const h = HABITS[m]; return h ? {phrases: (h.phrases||[]).map(x=>x.p), camera: (h.camera||[]).map(x=>x.p)} : null; };
+    const payload = {existing_rules: LESSONS.map(l => ({en: l.en, mode: l.mode})),
+                     recurring_across_images: {cuts: habStat("cuts"), onetake: habStat("onetake")},
+                     feedback: pd.items.map(x => ({mode: x.mode, rating: x.rating, tags: x.fb_tags,
+                       note: x.fb_note, story_note: x.story_note, output_excerpt: x.imd_excerpt.slice(0, 400)}))};
+    const j = await chat([{role:"system", content: REFLECT_SYS},
+                          {role:"user", content: JSON.stringify(payload)}], {temp:0.3, max:1400});
+    let txt = (j.choices[0].message.content || "").replace(/```json|```/g, "").trim();
+    const a = txt.indexOf("["), b = txt.lastIndexOf("]");
+    const props = JSON.parse(txt.slice(a, b + 1));
+    if (!Array.isArray(props) || !props.length){
+      $("#lespend").textContent = "模型認為這批反饋還歸納不出通用規則 — 繼續累積或直接手動新增";
+      lesMarkIds = pd.items.map(x => x.id);
+      $("#lesprops").innerHTML = `<p class="hint">要把這 ${pd.items.length} 筆反饋標成已整理嗎？
+        <button class="ghost mini" onclick="lesAccept([])">標記已整理</button>
+        <button class="ghost mini" onclick="$('#lesprops').innerHTML=''">保留</button></p>`;
+      return;
+    }
+    lesMarkIds = pd.items.map(x => x.id);
+    const dups = props.map((pr, i) => lesDupOf(pr, props.slice(0, i)));   // 對照庫內規則＋同批前面的提案
+    $("#lesprops").innerHTML = `<div class="lesprop">
+      <p class="ph" style="margin-top:0">模型從 ${pd.items.length} 筆反饋歸納出 ${props.length} 條，勾選要入庫的（文字可改）：</p>
+      ${props.map((pr, i) => `
+        ${dups[i] ? `<p class="hint" style="margin:6px 0 0;color:var(--warn)">↓ 疑似與現有規則重複：「${esc(dups[i].zh || dups[i].en || "")}」— 已預設不勾</p>` : ""}
+        <div class="row" style="gap:7px;margin-top:6px;align-items:center">
+          <input type="checkbox" class="lespick" data-i="${i}" ${dups[i] ? "" : "checked"} style="width:15px;height:15px;accent-color:var(--acc)">
+          <select class="lespmode" data-i="${i}" style="max-width:100px">
+            ${["all","i2va","fl2va","l2va","ref2va"].map(mo => `<option value="${mo}" ${(pr.mode===mo||(pr.mode==="both"&&mo==="all"))?"selected":""}>${LMODE[mo]}</option>`).join("")}
+          </select>
+          <div style="flex:1;min-width:220px">
+            <input type="text" class="lespzh" data-i="${i}" value="${esc(pr.zh || "")}" style="width:100%">
+            <input type="text" class="lespen" data-i="${i}" value="${esc(pr.en || "")}" style="width:100%;margin-top:3px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px">
+            <input type="text" class="lespban" data-i="${i}" value="${esc(pr.ban || "")}" placeholder="檢查詞（選填，逗號分隔；輸出出現這些英文片語＝違規，會強制重試修正）" style="width:100%;margin-top:3px;font-size:11.5px">
+          </div>
+        </div>`).join("")}
+      <div class="row" style="margin-top:10px">
+        <button class="mini" onclick="lesAcceptPicked()">加入勾選的規則</button>
+        <button class="ghost mini" onclick="$('#lesprops').innerHTML='';refreshLessons()">全部放棄（反饋保留）</button>
+      </div></div>`;
+    $("#lespend").textContent = "";
+  }catch(e){
+    $("#lespend").textContent = "整理失敗：" + e.message;
+  }finally{
+    $("#lesdistill").disabled = false;
+  }
+});
+let lesMarkIds = [];
+window.lesAcceptPicked = () => {
+  const out = [];
+  document.querySelectorAll("#lesprops .lespick").forEach(ck => {
+    if (!ck.checked) return;
+    const i = ck.dataset.i;
+    out.push({en: document.querySelector(`.lespen[data-i="${i}"]`).value.trim(),
+              zh: document.querySelector(`.lespzh[data-i="${i}"]`).value.trim(),
+              ban: (document.querySelector(`.lespban[data-i="${i}"]`) || {value:""}).value.trim(),
+              mode: document.querySelector(`.lespmode[data-i="${i}"]`).value});
+  });
+  lesAccept(out);
+};
+window.lesAccept = async rules => {
+  let added = 0, dup = 0;
+  for (const r of rules.filter(x => x.en || x.zh)){
+    const j = await fetch("/api/lessons", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({...r, enabled:true, origin:"auto", src: lesMarkIds})})
+      .then(x => x.json()).catch(() => null);
+    if (j && j.dup) dup++; else if (j) added++;
+  }
+  if (lesMarkIds.length)
+    await fetch("/api/lessons/mark", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ids: lesMarkIds})}).catch(()=>{});
+  lesMarkIds = [];
+  $("#lesprops").innerHTML = "";
+  await refreshLessons();
+  $("#lespend").textContent += (rules.length
+    ? `　已加入 ${added} 條 ✓${dup ? `（${dup} 條與現有規則相同，已跳過）` : ""}`
+    : "　已標記 ✓");
+};
+$("#lesadd") && ($("#lesadd").onclick = async () => {
+  const zh = $("#lesaddtxt").value.trim(); if (!zh) return;
+  $("#lesadd").disabled = true;
+  let en = zh;
+  try{
+    const j = await chat([{role:"system", content:"把使用者的影片生成規則翻成一句英文命令句，只輸出那一句英文。"},
+                          {role:"user", content: zh}], {temp:0.2, max:200});
+    const t = (j.choices[0].message.content || "").trim();
+    if (t && t.length < 300) en = t;
+  }catch(e){}
+  const j = await fetch("/api/lessons", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({en, zh, mode: $("#lesaddmode").value, enabled:true, origin:"manual"})})
+    .then(x => x.json()).catch(() => null);
+  $("#lesaddtxt").value = ""; $("#lesadd").disabled = false;
+  if (j && j.dup && $("#lespend")) $("#lespend").textContent = "與現有規則相同，未重複加入：「" + (j.zh || "") + "」";
+  refreshLessons();
+});
+
+/* ================= 分頁切換 ================= */
+function setView(v){
+  document.querySelectorAll(".nav").forEach(b => {
+    if (b.dataset.mode)       b.classList.toggle("on", v === "run" && b.dataset.mode === curMode());
+    else if (b.dataset.hmode) b.classList.toggle("on", v === "hist" && typeof HMFILTER !== "undefined" && HMFILTER.size === 1 && HMFILTER.has(b.dataset.hmode));
+    else                      b.classList.toggle("on", b.dataset.view === v);
+  });
+  document.querySelectorAll(".view").forEach(s => s.classList.toggle("on", s.id === "v-" + v));
+  store.set(VKEY, v);
+  window.scrollTo(0, 0);
+  if (v === "hist") loadHist();
+  if (v === "comfy") { loadWfParams(); if (typeof loadComfyCfg === "function") loadComfyCfg(); }
+  if (v === "media") loadMedia();
+}
+/* ---- collapsible sidebar ---- */
+const SIDEKEY = "h3.side.collapsed.v1";
+function setSide(collapsed){
+  document.querySelector(".app").classList.toggle("collapsed", !!collapsed);
+  store.set(SIDEKEY, collapsed ? "1" : "0");
+  $("#hbg").title = collapsed ? "展開選單" : "收合選單";
+}
+$("#hbg").onclick = () => setSide(!document.querySelector(".app").classList.contains("collapsed"));
+setSide(store.get(SIDEKEY) === "1");
+document.querySelectorAll(".nav").forEach(b => b.onclick = () => {
+  if (b.dataset.mode){ setMode(b.dataset.mode); setView("run"); return; }
+  if (b.dataset.hmode){
+    if (typeof HMFILTER !== "undefined"){ HMFILTER.clear(); HMFILTER.add(b.dataset.hmode); }
+    setView("hist");
+    if (typeof renderHist === "function") renderHist();
+    return;
+  }
+  if (b.dataset.view === "hist" && typeof HMFILTER !== "undefined"){ HMFILTER = new Set(HMODES.map(x=>x[0])); }
+  setView(b.dataset.view);
+  if (b.dataset.view === "hist" && typeof renderHist === "function") renderHist();
+});
+// 還原上次分頁的呼叫移到 script 末尾——loadMedia/loadHist 等函式都宣告完才能安全執行
+
+/* ================= 常數與驗證 ================= */
+/* ================================================================================================
+   validate() v3 — aligned to the official MiniMax H3 "Video Prompt Writing Guide" (base_en).
+   Contract (unchanged): returns {E, W, I, moves, pairs}
+     E = error   -> retry            (official-format violations + the 3 destructive I2V patterns)
+     W = warning -> retry if target is "完全通過"   (softer official points + I2V quality)
+     I = info    -> display only
+   ================================================================================================ */
+const MOTIONS = ["zoom in","zoom out","push in","pull out","pan left","pan right","truck left","truck right",
+  "tilt up","tilt down","pedestal up","pedestal down","arc shot","tracking shot","static shot",
+  "shake slightly","shake strongly","pov","roll clockwise","roll counterclockwise"];   // official table 4.3
+const BANNED = [];   // v6 word-ban list retired: the official examples use words it banned ("cinematic")
+
+function camFamily(t){
+  t = t.toLowerCase();
+  if (/\bstatic\b|holds? (?:nearly |almost )?still|remains? still|stays? (?:nearly )?still|locked off/.test(t)) return "static";
+  if (/\bzoom/.test(t)) return "zoom";
+  if (/\bpush(?:es|ing)? in|\bdollies in|\bmoves? (?:in|closer)/.test(t)) return "push";
+  if (/\bpulls? out|\bpull(?:s|ing)? back|\bdollies out|\bmoves? (?:out|back|away)/.test(t)) return "pull";
+  if (/\bpan(?:s|ning)?\b/.test(t)) return "pan";
+  if (/\btruck/.test(t)) return "truck";
+  if (/\btilt/.test(t)) return "tilt";
+  if (/\bpedestal|\bcranes? (?:up|down)|\brises?\b|\blowers?\b/.test(t)) return "pedestal";
+  if (/\barc/.test(t)) return "arc";
+  if (/\btrack/.test(t)) return "tracking";
+  if (/\bshak/.test(t)) return "shake";
+  if (/\bpov\b|point of view/.test(t)) return "pov";
+  if (/\broll/.test(t)) return "roll";
+  return null;    // drift / glide / ease / nudge are NOT in the official table -> caller warns
+}
+
+function validate(c, target, wantShots){
+  const E=[], W=[], I=[];
+  const mode = (typeof curMode === "function") ? curMode() : "i2va";
+  const isRef = mode === "ref2va";
+
+  /* ---------- 0. transport hygiene ---------- */
+  if (c.includes("<think>")) E.push("<think> 洩漏進 content");
+  if (/^\s*```/m.test(c)) E.push("輸出含程式碼框");
+
+  let body = "";   // the main narrative section
+  if (isRef){
+    /* ---------- REF2VA 六欄位格式 ---------- */
+    const labs = ["subject_definitions:","summary:","retention_analysis:","detailed_description:","overall_soundscape:","non_diegetic_music:"];
+    for (const l of labs) if (!c.includes(l)) E.push("缺欄位 " + l);
+    const m = c.match(/detailed_description:\s*([\s\S]*?)\s*overall_soundscape:/);
+    body = m ? m[1] : "";
+    const words = body.split(/\s+/).filter(Boolean).length;
+    if (words < 300) E.push("detailed_description 只有 " + words + " 詞（需 >=300）");
+    if (!(c.match(/<Subject \d+>/g) || []).length) E.push("缺 <Subject N> 主體定義");
+    if (!(c.match(/<Picture \d+>/g) || []).length) E.push("缺 <Picture N> 對應");
+    if (!/summary:\s*\[/.test(c)) W.push("summary 缺任務標籤（[reference generation] …）");
+    if (!/fully_preserved|attribute_transfer|weak_reference/.test(c)) W.push("retention_analysis 缺保留等級標註");
+    if (!/\[Shot 1\]/.test(body)) E.push("detailed_description 需以 [Shot 1] 開場");
+    const shots = (body.match(/\[Shot \d+\]/g) || []).length;
+    if (shots > 3) W.push("鏡頭數 " + shots + " 超過 3");
+  } else {
+    /* ---------- I2VA / FL2VA / L2VA 三欄位、一鏡到底 ---------- */
+    const labs = ["integrated_multimodal_description","overall_soundscape","non_diegetic_music"];
+    for (const l of labs) if (!c.includes(l)) E.push("缺欄位 " + l);
+    const m = c.match(/integrated_multimodal_description:?\s*([\s\S]*?)\s*overall_soundscape/);
+    body = m ? m[1] : "";
+    const words = body.split(/\s+/).filter(Boolean).length;
+    if (words < 300) E.push("主段落只有 " + words + " 詞（需 >=300）");
+    if (!/\[Shot 1\]/.test(body)) E.push("需以 [Shot 1] 開場");
+    if (/\[Shot [2-9]\]/.test(c)) E.push("出現 [Shot 2]+ — 此模式必須一鏡到底");
+    if (/\bcuts? to\b/i.test(body)) E.push("出現 \"cuts to\" — 禁止硬切");
+    if (/At \d\d:\d\d/.test(body)) W.push("出現時間戳 — 一鏡到底不需要");
+  }
+
+  /* ---------- 對白：所有模式都要 >=2 句日文 <d> ＋ lip-sync ---------- */
+  const dlg = (c.match(/<d>\[Japanese\][^<]*[\u3040-\u30ff\u4e00-\u9fff][^<]*<\/d>/g) || []);
+  const dAll = (c.match(/<d>[\s\S]*?<\/d>/g) || []);
+  if (dlg.length < 2) E.push("日文對話只有 " + dlg.length + " 句（需 >=2，格式 (S1) says: <d>[Japanese] …</d>）");
+  if (dAll.length > dlg.length) W.push("有 <d> 對白缺 [Japanese] 標記或內容非日文");
+  const lip = (c.match(/lips move in natural sync with the spoken words/g) || []).length;
+  if (lip < dAll.length) E.push("lip-sync 句 " + lip + " 次 < 對白 " + dAll.length + " 句（每句對白後都要接）");
+
+  /* ---------- 物理連續性（防影片破圖） ---------- */
+  if (/\bsuddenly\b/i.test(body)) W.push("用了 \"suddenly\" 描述動作（易產生瞬移破圖）");
+  if (/hidden (?:string|button|mechanism|wire)|invisible (?:string|button|mechanism|wire|force)/i.test(body))
+    E.push("出現隱形機關類描述（會導致影片破圖）");
+
+  /* ---------- 運鏡 chips ---------- */
+  const moves = [];
+  const low = body.toLowerCase();
+  for (const mv of MOTIONS) if (low.includes(mv) && !moves.includes(mv)) moves.push(mv);
+  for (const s of low.split(/[.!?]/)){
+    if (/camera|shot|frame/.test(s)){ const f = camFamily(s); if (f && !moves.includes(f)) moves.push(f); }
+  }
+  const pairs = [];
+
+  /* ---------- 9b. 經驗庫禁用詞 ---------- */
+  try{
+    for (const l of (LESSONS || [])){
+      if (!l.enabled || !l.ban) continue;
+      if (l.mode !== "all" && l.mode !== "both" && l.mode !== mode) continue;
+      for (const b of l.ban.split(/[,，;；]/).map(x => x.trim()).filter(Boolean))
+        if (c.toLowerCase().includes(b.toLowerCase())) E.push("經驗庫禁用詞出現：「" + b + "」");
+    }
+  }catch(e){}
+
+  /* ---------- 9c. REQUIRED 結構門檻 ---------- */
+  try{
+    if (typeof REQUIRED === "object" && REQUIRED){
+      const words = body.split(/\s+/).filter(Boolean).length;
+      if (REQUIRED.min_words > 0 && words < REQUIRED.min_words) E.push("主段落 " + words + " 詞 < 門檻 " + REQUIRED.min_words);
+      if (REQUIRED.lang_lock === "japanese")
+        for (const d of dAll) if (!/[\u3040-\u30ff]/.test(d)) E.push("對白缺假名（要求日文）：「" + d.replace(/<[^>]+>/g,"").slice(0,20) + "」");
+      const cjk = t => /[\u3040-\u30ff\u4e00-\u9fff]/.test(t);
+      for (const d of dAll){
+        const t = d.replace(/<\/?d>|\[[A-Za-z]+\]/g, "").trim();
+        const n = cjk(t) ? t.replace(/\s/g,"").length : t.split(/\s+/).filter(Boolean).length;
+        if (REQUIRED.line_min > 0 && n < REQUIRED.line_min) E.push("台詞太短（" + n + " < " + REQUIRED.line_min + "）：「" + t.slice(0,20) + "」");
+        if (REQUIRED.line_max > 0 && n > REQUIRED.line_max) W.push("台詞太長（" + n + " > " + REQUIRED.line_max + "）");
+      }
+    }
+  }catch(e){}
+
+  return {E, W, I, moves, pairs};
+}
+
+
+/* ================= 連線 ================= */
+function setDot(state, text){
+  $("#sfServer").innerHTML = `<span class="dot ${state}"></span>${text}`;
+}
+$("#ping").onclick = async () => {
+  $("#conn").textContent = "連線中…"; setDot("", "檢查中…");
+  try{
+    const j = await (await fetch($("#server").value.replace(/\/$/,"") + "/props")).json();
+    $("#conn").innerHTML = `<span style="color:var(--ok)">連線正常</span> · ${j.model_ftype||"?"}`
+      + ` · vision ${j.modalities?.vision?"on":"off"} · ctx ${j.default_generation_settings?.n_ctx||"?"}`;
+    setDot("up", "llama-server 正常");
+  }catch(e){
+    $("#conn").innerHTML = `<span style="color:var(--acc)">連不上</span> — ${e.message}`;
+    setDot("down", "llama-server 連不上");
+  }
+};
+
+/* ================= 檔案 ================= */
+let items=[], abort=false;
+const drop=$("#drop");
+drop.onclick=()=>$("#files").click();
+drop.ondragover=e=>{e.preventDefault();drop.classList.add("hot")};
+drop.ondragleave=()=>drop.classList.remove("hot");
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove("hot");add(e.dataTransfer.files)};
+$("#files").onchange=e=>add(e.target.files);
+
+function arFromPreview(it){
+  if (!it.preview || it.ar) return;
+  const im = new Image();
+  im.onload = () => { if (!it.ar){ it.ar = {...nearestAR(im.naturalWidth, im.naturalHeight)}; render(); } };
+  im.src = it.preview;
+}
+function add(fl){
+  const files=[...fl].filter(f=>f.type.startsWith("image/"));
+  files.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  const mode = curMode(), inf = MODE_INFO[mode];
+  if (inf.batch){
+    // I2VA / L2VA：每張圖一筆
+    for (const f of files){
+      const u = URL.createObjectURL(f);
+      items.push({mode, files:[f], file:f, name:f.name, state:"pending", preview:u, previews:[u]});
+    }
+  } else {
+    // FL2VA（2 張一筆）/ REF2VA（1~9 張一筆）：塞進最後一筆未滿的同模式待處理項
+    let last = items.length ? items[items.length-1] : null;
+    for (const f of files){
+      if (!(last && last.state === "pending" && last.mode === mode && last.files.length < inf.max)){
+        last = {mode, files:[], file:null, name:"", state:"pending", preview:null, previews:[]};
+        items.push(last);
+      }
+      const u = URL.createObjectURL(f);
+      last.files.push(f); last.previews.push(u);
+      if (!last.file){ last.file = f; last.preview = u; }
+      last.name = last.files.map(x => x.name).join(" ＋ ");
+    }
+  }
+  items.forEach(arFromPreview);
+  render(); $("#run").disabled = !items.length;
+  $("#prog").textContent = `${items.length} 筆待處理`;
+  $("#navRun").textContent = items.length || "";
+}
+
+/* Two copies of every image:
+     b64  = 1024px JPEG working copy  -> the vision LLM (reads it fine) and thumbnails/history display
+     orig = full-resolution copy      -> ComfyUI / the video model, where input resolution decides
+                                         how clean the H3 output is (a 1024px source is what caused
+                                         the soft "crayon" look at 540p). Original bytes are kept
+                                         as-is for jpg/png <= 8 MB; bigger or other formats are
+                                         re-encoded to JPEG q0.95 at long edge <= 3072. null when
+                                         the source is already <= 1024px (same as b64). */
+const ORIG_KEEP_BYTES = 8 * 1024 * 1024, ORIG_MAX_EDGE = 3072;
+function encode(file){
+  return new Promise((res,rej)=>{
+    const img=new Image(), url=URL.createObjectURL(file);
+    img.onload=async()=>{
+      const s=Math.min(1,1024/Math.max(img.width,img.height));
+      const c=document.createElement("canvas");
+      c.width=Math.round(img.width*s); c.height=Math.round(img.height*s);
+      c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+      const full=c.toDataURL("image/jpeg",0.9);
+      const s2=Math.min(1,300/Math.max(c.width,c.height));
+      const t=document.createElement("canvas");
+      t.width=Math.round(c.width*s2); t.height=Math.round(c.height*s2);
+      t.getContext("2d").drawImage(c,0,0,t.width,t.height);
+      let orig=null;
+      if (Math.max(img.width,img.height) > 1024){
+        if (/^image\/(jpeg|png)$/.test(file.type) && file.size <= ORIG_KEEP_BYTES){
+          orig = await new Promise(r2 => { const fr=new FileReader(); fr.onload=()=>r2(fr.result); fr.onerror=()=>r2(null); fr.readAsDataURL(file); });
+        }
+        if (!orig){
+          const s3=Math.min(1,ORIG_MAX_EDGE/Math.max(img.width,img.height));
+          const o=document.createElement("canvas");
+          o.width=Math.round(img.width*s3); o.height=Math.round(img.height*s3);
+          o.getContext("2d").drawImage(img,0,0,o.width,o.height);
+          orig=o.toDataURL("image/jpeg",0.95);
+        }
+      }
+      URL.revokeObjectURL(url);
+      res({b64:full, thumb:t.toDataURL("image/jpeg",0.62), w:img.width, h:img.height, orig});
+    };
+    img.onerror=rej; img.src=url;
+  });
+}
+
+/* 模型偶爾不吐 EOS 會把欄位再寫一遍，這裡切掉（欄位標頭有無冒號都吃） */
+function trim(c){
+  const m0 = c.match(/non_diegetic_music:?/);
+  if (!m0) return c.trim();
+  const i = m0.index + m0[0].length;
+  const head = c.slice(0, i);
+  let tail = c.slice(i);
+  const m = tail.match(/\n\s*\n(?=\s*(?:integrated_multimodal_description|subject_definitions))/);
+  if (m) tail = tail.slice(0, m.index);
+  return (head + tail).trim();
+}
+
+async function chat(messages, opts={}){
+  const r = await fetch($("#server").value.replace(/\/$/,"") + "/v1/chat/completions", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({model:"qwen3.8-27b", messages, stream:false,
+      temperature: opts.temp ?? 1.0,
+      top_p: opts.topp ?? 0.95, top_k:20,
+      seed: opts.seed ?? Math.floor(Math.random()*2147483647),
+      max_tokens: opts.max ?? 1600,
+      chat_template_kwargs:{enable_thinking:false}})});
+  if (!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,200));
+  return r.json();
+}
+
+/* ===== GPU 協調：llama-server 與 ComfyUI 共用同一張卡 =====
+   target=llama：ComfyUI 沒在生成就先 free 它，等 VRAM 降到門檻以下再呼叫 llama
+   target=comfy：等 llama 閒置自動卸載（伺服器端 .env 設 10 秒）後才送 ComfyUI */
+async function gpuPrepare(target, onStep){
+  if (!onServer) return;
+  for (let i = 0; i < 60; i++){          // 最多等 ~3 分鐘
+    let j;
+    try {
+      j = await (await fetch("/api/gpu/prepare", {method:"POST",
+        headers:{"Content-Type":"application/json"}, body: JSON.stringify({target})})).json();
+    } catch(e){ return; }                 // 協調端點不可用 → 直接放行，不擋生成
+    if (j.ready || j.error || j.state === "no_gpu_info") return;
+    const used = j.gpu && j.gpu.used_mb != null ? (j.gpu.used_mb/1024).toFixed(1) + "GB" : "?";
+    if (onStep) onStep(
+      j.state === "comfy_busy"           ? `GPU 協調：等待 ComfyUI 生成完成…（VRAM ${used}）` :
+      j.state === "waiting_llama_unload" ? `GPU 協調：等待 llama 閒置卸載…（VRAM ${used}）` :
+                                           `GPU 協調：釋放 VRAM 中…（${used}）`);
+    await new Promise(r => setTimeout(r, 3000));
+  }
+}
+
+function frameLine(w, h){
+  if (!w || !h) return "";
+  const r = w / h;
+  const std = [["9:16",9/16],["2:3",2/3],["3:4",3/4],["4:5",4/5],["1:1",1],
+               ["5:4",5/4],["4:3",4/3],["3:2",3/2],["16:9",16/9]];
+  let best = std[0];
+  for (const x of std) if (Math.abs(x[1]-r) < Math.abs(best[1]-r)) best = x;
+  const ori = r < 0.95 ? "portrait" : (r > 1.05 ? "landscape" : "square");
+  return `Reference image: ${w}×${h} px, ${ori}, aspect ratio ${best[0]}.`;
+}
+/* 隨機創意角度：同圖每次生成劇情都不同的來源之一 */
+const ANGLES = ["a playful surprise twist","a tiny everyday adventure","a heartwarming quiet moment",
+  "a comedic small mishap","an unexpected discovery","a mischievous prank","a moment of triumph",
+  "a magical little coincidence","a secret finally shared","a sudden change of weather that changes the mood"];
+function wantShotsFor(n){ return 1; }
+function userNote(it){
+  const mode = (it.mode || curMode()).toUpperCase();
+  const angle = ANGLES[Math.floor(Math.random() * ANGLES.length)];
+  it.angle = angle;
+  let t = `Task mode: ${mode}. Creative angle for this run: ${angle}. `
+        + `Analyze the image(s) and write the story prompt in the strict format for this mode.`;
+  const fl = frameLine(it.w, it.h);
+  if (fl) t += "\n" + fl;
+  const n = (it.note || "").trim();
+  if (n) t += `\nStory hint (build the plot around this): "${n}"`;
+  return t;
+}
+const TR_SYS = "你是專業的影視腳本翻譯。把使用者給的 MiniMax H3 影片 prompt 逐句翻成繁體中文（台灣用語）。"
+  + "保留 [Shot N] 標記與 MM:SS.mmm 時間戳的位置，[Shot N] 譯為 [鏡頭 N]。"
+  + "攝影機句子一律譯為「攝影機以〈小/中/大〉幅度、〈慢速/中速/快速〉〈運鏡〉。」的形式。"
+  + "對白標籤 (S1) <d>[語言] …</d> 原樣保留，只翻譯裡面的台詞。只輸出譯文，不要加任何說明。";
+
+function retryCfg(){
+  return { max: Math.max(0, parseInt($("#retry").value) || 0),
+           lvl: $("#retrylvl").value || "noerr" };
+}
+function isClean(v, lvl){
+  return lvl === "noerr" ? !v.E.length : (!v.E.length && !v.W.length);
+}
+/* deterministic normalization: enforce H3 dialogue syntax and REF2VA header colons.
+   Nothing here changes meaning; validate() still runs after. */
+function repair(c){
+  c = c.replace(/<d>\s*(?!\[Japanese\])/g, "<d>[Japanese] ")
+       .replace(/\b(?:The|Her|His|She|He) \((S\d)\) says:/g, "($1) says:");
+  if (curMode() === "ref2va")
+    c = c.replace(/^(subject_definitions|summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music)\s*$/gm, "$1:");
+  else
+    c = c.replace(/^(integrated_multimodal_description|overall_soundscape|non_diegetic_music)\s*$/gm, "$1:");
+  return c;
+}
+async function genOnce(imgUrl, utext, target, wantShots, prev){
+  const urls = Array.isArray(imgUrl) ? imgUrl : [imgUrl];
+  const msgs = [
+    {role:"system", content: activeText() + loraSystemSuffix() + lessonSuffix() + requiredSuffix()},
+    {role:"user", content:[{type:"text",text:utext},
+                           ...urls.map(u => ({type:"image_url", image_url:{url:u}}))]}
+  ];
+  /* corrective retry: show the model its previous output and exactly what failed */
+  if (prev && prev.issues.length){
+    msgs.push({role:"assistant", content: prev.content});
+    msgs.push({role:"user", content: "你的上一版輸出沒有通過檢查：\n"
+      + prev.issues.join("\n")
+      + "\n\n重新輸出**完整**的 prompt（所有欄位都要），只修正上面列的問題，其他內容保持不變。只輸出修正後的 prompt，不要任何說明。"});
+  }
+  const j = await chat(msgs, {max:4000});
+  const raw = j.choices[0].message.content || "";
+  const content = repair(trim(raw));
+  const v = validate(content, target, wantShots);
+  return { j, raw, content, v, score: v.E.length*100 + v.W.length };
+}
+async function genWithRetry(imgUrl, utext, target, wantShots, onStep){
+  const cfg = retryCfg();
+  let best = null, attempts = 0, prev = null;
+  for (let a = 0; a <= cfg.max; a++){
+    attempts = a + 1;
+    if (a > 0 && onStep) onStep(`重試 ${a}/${cfg.max}（帶著問題清單修正）`);
+    if (best && (abort || hregenAbort)) break;
+    const c = await genOnce(imgUrl, utext, target, wantShots, prev);
+    prev = {content: c.content,
+            issues: [...c.v.E.map(e => "[錯誤] " + e),
+                     ...(cfg.lvl === "ok" ? c.v.W.map(w => "[警告] " + w) : [])]};
+    if (!best || c.score < best.score) best = c;
+    if (isClean(c.v, cfg.lvl)) { best = c; break; }
+    if (abort || hregenAbort) break;
+  }
+  if (!best) throw new Error("已停止");
+  best.attempts = attempts;
+  return best;
+}
+async function runOne(it){
+  const inf = MODE_INFO[it.mode || curMode()];
+  if ((it.files || []).length < inf.min) throw new Error(`此模式需要 ${inf.min} 張圖（目前 ${(it.files||[]).length} 張）`);
+  const encs = [];
+  for (const f of it.files) encs.push(await encode(f));
+  const p = encs[0];
+  it.thumb = p.thumb; it.full = p.b64; it.w = p.w; it.h = p.h; it.orig = p.orig || null;
+  it.imgs = encs.map(e => e.b64);
+  it.more = encs.slice(1).map(e => e.b64);   // 額外圖片（尾幀/參考圖），存歷史用
+  if (!it.ar || !it.arTouched) it.ar = {...nearestAR(p.w, p.h)};
+  (it.previews || []).forEach(u => { try{ URL.revokeObjectURL(u); }catch(e){} });
+  it.previews = null; it.preview = null;
+  await gpuPrepare("llama", t => { it.state2 = t; render(); });
+  const t0 = performance.now();
+  LORA_NOTE = (it.note || "").trim();
+  let best;
+  try {
+    best = await genWithRetry(it.imgs, userNote(it), 20, 1,
+      t => { it.state2 = t; render(); });
+  } catch(e){ LORA_NOTE = ""; throw e; }
+  it.elapsed = ((performance.now()-t0)/1000).toFixed(1);
+  it.usage = best.j.usage||{}; it.timings = best.j.timings||{};
+  it.raw = best.raw;
+  { const la = loraApply(best.content); it.content = la.content; it.lora = la.lora; }
+  it.ctx = genContext();          // snapshot while LORA_NOTE is still set (note-forced keys included)
+  LORA_NOTE = "";
+  it.v = best.v;
+  it.attempts = best.attempts;
+  it.state = it.v.E.length ? "fail" : (it.v.W.length ? "warn" : "ok");
+  it.state2 = null;
+  render();
+
+  if ($("#tr").value === "1"){
+    it.state2 = "翻譯中"; render();
+    try{
+      const t = await chat([
+        {role:"system", content: TR_SYS},
+        {role:"user", content: it.content}
+      ], {temp:0.3, topp:0.9, max:1800});
+      it.zh = (t.choices[0].message.content||"").trim();
+    }catch(e){ it.zh = "（翻譯失敗："+e.message+"）"; }
+    it.state2 = null;
+  }
+  render(); record(it);
+}
+
+/* ---- 狀態篩選 ---- */
+const STATES=[["ok","通過","f-ok"],["warn","警告","f-warn"],["fail","錯誤","f-fail"],
+              ["pending","待處理","f-pending"],["error","失敗","f-error"]];
+let FILTER = new Set(STATES.map(s=>s[0]));
+
+function updateFilterBar(){
+  if (!items.length){ $("#fbar").style.display="none"; return; }
+  $("#fbar").style.display="flex";
+  const cnt={}; items.forEach(i=>cnt[i.state]=(cnt[i.state]||0)+1);
+  $("#fchips").innerHTML = STATES.filter(([k])=>cnt[k]).map(([k,label,cls])=>
+    `<button class="fchip ${cls} ${FILTER.has(k)?"on":""}" onclick="toggleFilter('${k}')">
+      ${label}<span class="n">${cnt[k]}</span></button>`).join("");
+  applyFilter();
+}
+const visibleItems = () =>
+  items.filter(i => i.state === "running" || i.keep || FILTER.has(i.state));
+function applyFilter(){
+  document.querySelectorAll("#out .card").forEach(c=>{
+    const on = c.dataset.st === "running" || c.dataset.keep === "1" || FILTER.has(c.dataset.st);
+    c.classList.toggle("hide", !on);
+  });
+  const q = visibleItems().filter(i => i.state !== "running");
+  $("#frerun").textContent = `重跑顯示中的 ${q.length} 張`;
+  $("#frerun").disabled = !q.length || running;
+}
+function clearKeep(){
+  items.forEach(i => i.keep = false);
+  document.querySelectorAll("#out .card").forEach(c => c.dataset.keep = "0");
+}
+window.toggleFilter = k => {
+  clearKeep();
+  FILTER.has(k) ? FILTER.delete(k) : FILTER.add(k);
+  // 篩到一張都不剩沒有意義，直接回到全選
+  const present = new Set(items.map(i => i.state));
+  if (![...present].some(st => FILTER.has(st))) FILTER = new Set(STATES.map(s => s[0]));
+  updateFilterBar();
+};
+$("#fall").onclick = () => { clearKeep(); FILTER = new Set(STATES.map(s=>s[0])); updateFilterBar(); };
+
+/* ---- 執行佇列 ---- */
+let running=false;
+function setRunning(on){
+  running=on;
+  $("#run").disabled=on; $("#stop").disabled=!on;
+  document.querySelector('.nav[data-view=run]').classList.toggle("busy", on);
+  if (!on) $("#expj").disabled=$("#expt").disabled=false;
+  applyFilter();
+}
+async function runQueue(list, label){
+  if (!list.length || running) return;
+  abort=false; setRunning(true);
+  let n=0;
+  for (const it of list){
+    if (abort) break;
+    it.state="running"; it.keep=true; it.zh=null; render();
+    $("#prog").textContent = `${label} ${++n}/${list.length} — ${it.name}`;
+    $("#navRun").textContent = `${n}/${list.length}`;
+    try{ await runOne(it); }
+    catch(e){ it.state="error"; it.err=e.message; render(); }
+  }
+  setRunning(false);
+  $("#prog").textContent = abort ? `已停止（完成 ${n} 張）` : `${label}完成，共 ${n} 張`;
+  $("#navRun").textContent = items.length || "";
+  convergence(); updateFilterBar();
+}
+$("#run").onclick = () => runQueue(items.filter(i=>i.state==="pending"||i.state==="error"), "處理中");
+$("#frerun").onclick = () => runQueue(visibleItems().filter(i => i.state !== "running"), "重跑");
+$("#stop").onclick=()=>{abort=true;$("#prog").textContent="停止中…"};
+$("#clear").onclick=()=>{items.forEach(i=>i.preview&&URL.revokeObjectURL(i.preview));
+  items=[];render();$("#conv").style.display="none";
+  $("#prog").textContent="";$("#run").disabled=true;$("#navRun").textContent="";
+  $("#fbar").style.display="none"};
+
+/* ================= 收斂統計 ================= */
+function convergence(){
+  const done = items.filter(i=>i.v);
+  if (done.length < 3){ $("#conv").style.display="none"; return; }
+  const cnt={}; done.forEach(i=>i.v.moves.forEach(m=>cnt[m]=(cnt[m]||0)+1));
+  const tot=Object.values(cnt).reduce((a,b)=>a+b,0);
+  const rows=Object.entries(cnt).sort((a,b)=>b[1]-a[1]).map(([m,k])=>{
+    const p=k/tot*100;
+    return `<tr><td style="font-family:ui-monospace,Consolas,monospace">${m}</td>
+      <td style="width:34%"><div class="bar" style="width:${p*2.4}%;${p>50?'background:var(--warn)':''}"></div></td>
+      <td class="meta" style="display:table-cell">${k}　${p.toFixed(1)}%</td>
+      <td style="color:var(--warn);font-size:12.5px">${p>50?"佔比過高，運鏡在收斂":""}</td></tr>`;
+  }).join("");
+  $("#conv").style.display="block";
+  $("#conv").innerHTML = `<h3>整體</h3>
+    <p class="ph">${done.length} 張中 <b>${done.filter(i=>i.state==="ok").length}</b> 張完全通過、
+      ${done.filter(i=>i.state==="warn").length} 張有警告、${done.filter(i=>i.state==="fail").length} 張有錯誤。</p>
+    <p class="lab">運鏡分佈</p>
+    <p class="hint" style="margin:0 0 8px">不同的圖本該產生不同的運鏡。若某一種超過 50%，代表模型在套習慣而不是看畫面。</p>
+    <table>${rows}</table>`;
+}
+
+/* ================= 渲染 ================= */
+function hl(t){
+  t = esc(t).replace(/\n/g,"<br>");
+  t = t.replace(/\[(Shot \d+|鏡頭 \d+)\]/g,'<b class="shot">[$1]</b>');
+  t = t.replace(/(The camera [a-z ]+ with (?:small|medium|large) amplitude at (?:slow|moderate|fast) speed\.)/g,
+    '<span class="cam">$1</span>');
+  t = t.replace(/(攝影機以[^。]*。)/g,'<span class="cam">$1</span>');
+  return t;
+}
+function field(c,a,b){
+  const i=c.indexOf(a); if(i<0) return "";
+  const j = b ? c.indexOf(b) : -1;
+  return c.slice(i+a.length, j>0 ? j : undefined).trim();
+}
+function bilingual(content, zh, note){
+  const d=field(content,"integrated_multimodal_description:","overall_soundscape:");
+  const s=field(content,"overall_soundscape:","non_diegetic_music:");
+  const m=field(content,"non_diegetic_music:",null);
+  return `<div class="cols">
+    <div class="col">
+      <p class="lab">integrated_multimodal_description</p><p>${hl(d)}</p>
+      <p class="lab">overall_soundscape</p><p>${hl(s)}</p>
+      <p class="lab">non_diegetic_music</p><p>${hl(m)}</p>
+    </div>
+    <div class="col zh"><p class="lab">中文對照${note?" · "+note:""}</p>
+      <p>${zh ? hl(zh) : '<span class="hint">—</span>'}</p></div>
+  </div>`;
+}
+function render(){
+  const ae = document.activeElement;
+  const keep = (ae && ae.dataset && ae.dataset.note !== undefined)
+    ? {k: ae.dataset.note, a: ae.selectionStart, b: ae.selectionEnd} : null;
+  $("#out").innerHTML = items.map((it,k)=>{
+    const b={pending:["b-run","待處理"],running:["b-run","產生中…"],ok:["b-ok","通過"],
+             warn:["b-warn","警告"],fail:["b-fail","錯誤"],error:["b-fail","失敗"]}[it.state];
+    let inner="";
+    if (it.state==="error") inner=`<pre>${esc(it.err)}</pre>`;
+    else if (it.content){
+      const iss=[...it.v.E.map(e=>`<li class="e">${esc(e)}</li>`),
+                 ...it.v.W.map(w=>`<li class="w">${esc(w)}</li>`),
+                 ...((it.v.I||[]).map(x=>`<li class="i">${esc(x)}</li>`))].join("");
+      const chips = it.v.pairs.map((p,i)=>`<span class="chip">${esc(it.v.moves[i])} · ${p}</span>`).join("");
+      inner = `${iss?`<ul class="issues">${iss}</ul>`:""}<div class="chips">${chips}</div>
+        ${loraBadges(it.lora)}${bilingual(it.content, it.zh, it.state2)}
+        <details><summary>原始輸出</summary><pre>${esc(it.raw)}</pre></details>
+        <div class="row" style="margin-top:10px">
+          <button class="ghost mini" onclick="redo(${k})">重跑這張</button>
+          <button class="ghost mini" onclick="copyOne(${k})">複製 prompt</button>
+          <button class="ghost mini" onclick="comfyFromItem(${k}, this)">🎬 送 ComfyUI</button>
+          <span class="hint" data-cstat="${k}"></span></div>`;
+    }
+    const thumbs = (it.previews && it.previews.length ? it.previews
+                    : (it.imgs && it.imgs.length ? it.imgs
+                    : [it.thumb || it.preview].filter(Boolean)));
+    const modeTag = `<span class="modetag">${MODES[it.mode] || MODES[curMode()]}</span>`;
+    return `<div class="card" data-st="${it.state}" data-keep="${it.keep?1:0}">
+      <div class="thumb">${thumbs.length
+          ? (thumbs.length === 1 ? `<img src="${thumbs[0]}">`
+             : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${thumbs.map((u,i) =>
+                 `<img src="${u}" title="圖 ${i+1}" style="aspect-ratio:1;object-fit:cover">`).join("")}</div>`)
+          : '<p class="ph">無預覽</p>'}
+        <div style="margin-top:6px">${modeTag}${thumbs.length>1?`<span class="hint" style="margin-left:6px">${thumbs.length} 張</span>`:""}</div>
+        <div class="note-wrap"><label>輸出比例（寬:高，預設依圖自動匹配）</label>
+          <div class="arwrap">
+            <div class="arrow">
+              <select onchange="setAR(${k}, this.value)">
+                ${["1:1","2:3","3:4","5:8","9:16","9:21"].map(r => `<option value="${r}" ${(it.ar&&it.ar.preset)===r?"selected":""}>${r}</option>`).join("")}
+                <option value="CUSTOM" ${(it.ar&&it.ar.preset)==="CUSTOM"?"selected":""}>自訂</option>
+              </select>
+              <button class="arswap ${it.ar&&it.ar.swap?"land":""}" onclick="setARSwap(${k})" title="直式／橫式切換">
+                <span class="ph-ic">▯</span>${it.ar&&it.ar.swap?"橫式":"直式"}</button>
+            </div>
+            ${(it.ar&&it.ar.preset)==="CUSTOM" ? `
+            <div class="arrow">
+              <input type="number" min="1" max="8192" value="${it.ar.w}" onchange="setARWH(${k}, this.value, null)" title="比例寬">
+              <span class="arsep">:</span>
+              <input type="number" min="1" max="8192" value="${it.ar.h}" onchange="setARWH(${k}, null, this.value)" title="比例高">
+            </div>` : ""}
+          </div></div>
+      </div>
+      <div>
+        <div class="note-wrap" style="margin:0 0 8px"><label>劇情提示（選填，中/英/日皆可）</label>
+          <textarea class="note" data-note="${k}" rows="3" placeholder="留空＝自由創作。輸入提示＝以此為劇情核心，例如：她在雪地裡撿到一隻迷路的小企鵝"
+            oninput="setNote(${k}, this.value); agrow(this)">${esc(it.note||"")}</textarea></div>
+        <div class="hd"><input type="checkbox" class="selck" ${it.sel?"checked":""} onclick="toggleSel(${k}, this.checked)" title="勾選後可批次生成 / 批次送 ComfyUI"><span class="badge ${b[0]}">${b[1]}</span><span class="name">${esc(it.name)}</span>${it.state2?`<span class="meta" style="margin:0;color:var(--warn)">${esc(it.state2)}</span>`:""}<button class="xdel" onclick="removeItem(${k})" ${it.state==="running"?"disabled":""} title="從清單移除這張（不影響已存的歷史紀錄）">✕</button></div>
+      ${it.elapsed?`<div class="meta"><span>${it.elapsed}s</span>
+        <span>${it.usage.completion_tokens||0} tokens</span>
+        <span>${(it.timings.predicted_per_second||0).toFixed(0)} t/s</span>
+        ${it.attempts>1?`<span>${it.attempts} 次嘗試</span>`:""}</div>`:""}
+      ${inner}</div></div>`;
+  }).join("");
+  document.querySelectorAll("#out .note").forEach(t => agrow(t));
+  updateSelBtns();
+  if (keep){
+    const el = document.querySelector(`[data-note="${keep.k}"]`);
+    if (el){ el.focus(); try{ el.setSelectionRange(keep.a, keep.b); }catch(e){} }
+  }
+  updateFilterBar();
+}
+function updateSelBtns(){
+  const sel = items.filter(i => i.sel);
+  $("#runsel").disabled = !sel.length || running;
+  $("#comfysel").disabled = !sel.some(i => i.content) || !onServer;
+  $("#selall").disabled = !items.length;
+  $("#selall").textContent = (items.length && items.every(i => i.sel)) ? "取消勾選" : "勾選全部";
+  $("#runsel").textContent = sel.length ? `生成勾選的（${sel.length}）` : "生成勾選的";
+  const nc = sel.filter(i => i.content).length;
+  $("#comfysel").textContent = nc ? `🎬 勾選的送 ComfyUI（${nc}）` : "🎬 勾選的送 ComfyUI";
+}
+window.toggleSel = (k, v) => { if (items[k]) items[k].sel = v; updateSelBtns(); };
+$("#selall").onclick = () => { const all = items.length && items.every(i => i.sel);
+  items.forEach(i => i.sel = !all); render(); };
+$("#runsel").onclick = () => runQueue(items.filter(i => i.sel && i.state !== "running"), "生成勾選");
+$("#comfysel").onclick = async () => {
+  const list = items.map((it, k) => ({it, k})).filter(x => x.it.sel && x.it.content);
+  if (!list.length) return;
+  $("#comfysel").disabled = true;
+  let n = 0;
+  for (const {it, k} of list){
+    $("#prog").textContent = `送 ComfyUI ${++n}/${list.length} — ${it.name}`;
+    comfyFromItem(k, null);                       // each card shows its own queue/render status
+    await new Promise(r => setTimeout(r, 400));   // stagger so ComfyUI queues them in order
+  }
+  $("#prog").textContent = `已送出 ${n} 張到 ComfyUI（各卡片顯示進度）`;
+  updateSelBtns();
+};
+window.redo = async k => { const it=items[k]; it.state="running"; it.keep=true; it.zh=null; render();
+  try{ await runOne(it) }catch(e){ it.state="error"; it.err=e.message; render() } convergence(); };
+window.copyOne = k => navigator.clipboard.writeText(items[k].content);
+window.removeItem = k => {
+  const it = items[k]; if (!it || it.state === "running") return;
+  if (it.preview) URL.revokeObjectURL(it.preview);
+  items.splice(k, 1);
+  render();
+  $("#run").disabled = !items.filter(i => i.state === "pending" || i.state === "error").length && !items.length;
+  $("#navRun").textContent = items.length || "";
+  $("#prog").textContent = items.length ? `${items.length} 張` : "";
+  if (!items.length){ $("#conv").style.display = "none"; $("#fbar").style.display = "none"; }
+};
+window.setNote = (k, v) => { if (items[k]) items[k].note = v; };
+window.agrow = t => { t.style.height = "auto"; t.style.height = (t.scrollHeight + 2) + "px"; };
+/* ---- 輸出比例（直式 寬:高 ＋ 橫式切換）；預設依圖片解析度自動匹配 ---- */
+const AR_LIST = [["1:1",1,1],["2:3",2,3],["3:4",3,4],["5:8",5,8],["9:16",9,16],["9:21",9,21]];
+function nearestAR(w, h){
+  if (!w || !h) return {preset:"2:3", w:2, h:3, swap:false};
+  const r = w / h; let best = null;
+  for (const [name, aw, ah] of AR_LIST) for (const swap of [false, true]){
+    const cand = swap ? ah/aw : aw/ah;
+    const d = Math.abs(Math.log(r) - Math.log(cand));
+    if (!best || d < best.d) best = {d, preset:name, w:aw, h:ah, swap};
+  }
+  return {preset:best.preset, w:best.w, h:best.h, swap:best.swap};
+}
+window.setAR = (k, v) => { const it = items[k]; if (!it) return;
+  if (v === "CUSTOM"){ it.ar = {...(it.ar||{w:2,h:3,swap:false}), preset:"CUSTOM"}; }
+  else { const a = AR_LIST.find(x => x[0] === v); it.ar = {preset:v, w:a[1], h:a[2], swap:(it.ar||{}).swap||false}; }
+  render(); };
+window.setARWH = (k, w, h) => { const it = items[k]; if (!it) return;
+  it.ar = {...(it.ar||{preset:"CUSTOM",w:2,h:3,swap:false})};
+  if (w != null) it.ar.w = Math.max(1, parseInt(w)||1);
+  if (h != null) it.ar.h = Math.max(1, parseInt(h)||1);
+  const hit = AR_LIST.find(x => x[1] === it.ar.w && x[2] === it.ar.h);
+  it.ar.preset = hit ? hit[0] : "CUSTOM";
+  render(); };
+window.setARSwap = k => { const it = items[k]; if (!it) return;
+  it.ar = {...(it.ar||{preset:"2:3",w:2,h:3,swap:false}), swap:!(it.ar||{}).swap}; render(); };
+function arPayload(it){
+  if (!it || !it.ar) return null;
+  const name = it.ar.preset === "CUSTOM" ? "CUSTOM"
+    : ({"1:1":"1:1 - Square","2:3":"2:3 - Classic","3:4":"3:4 - Photo","5:8":"5:8 - Tall","9:16":"9:16 - Social","9:21":"9:21 - Cinema"})[it.ar.preset];
+  return {preset:name, w:it.ar.w, h:it.ar.h, swap:!!it.ar.swap};
+}
+/* ---- 工作流預設參數（ComfyUI 設定頁） ---- */
+async function loadWfParams(){
+  if (!onServer) return;
+  try{
+    const j = await (await fetch("/api/comfy/params")).json();
+    const sel = $("#wres");
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">（照模板：${esc(j.resolution_preset||"?")}）</option>`
+      + (j.presets||[]).map(x => `<option value="${esc(x)}" ${x===cur?"selected":""}>${esc(x)}</option>`).join("");
+    $("#wfps").placeholder = j.fps != null ? `模板 ${j.fps}` : "模板值";
+    $("#wsteps").placeholder = j.steps != null ? `模板 ${j.steps}` : "模板值";
+    $("#wsv").placeholder = j.shift_video != null ? `模板 ${j.shift_video}` : "模板值";
+    $("#wsa").placeholder = j.shift_audio != null ? `模板 ${j.shift_audio}` : "模板值";
+    $("#wfstat").textContent = j.has_template ? "" : "還沒有模板 — 先更新或匯入模板，參數才有東西可以覆寫";
+  }catch(e){ $("#wfstat").textContent = "讀取失敗：" + e.message; }
+}
+function wfOverrides(){
+  const o = {};
+  const g = id => { const el = $(id); return el && el.value.trim() ? el.value.trim() : null; };
+  if (g("#wfps")) o.fps = g("#wfps");
+  if (g("#wres")) o.resolution_preset = g("#wres");
+  if (g("#wsteps")) o.steps = g("#wsteps");
+  if (g("#wsv")) o.shift_video = g("#wsv");
+  if (g("#wsa")) o.shift_audio = g("#wsa");
+  return Object.keys(o).length ? o : null;
+}
+window.setShots = (k, n) => { if (items[k]) { items[k].shots = n; render(); } };
+
+/* ================= ComfyUI 連線 / 工作流 / 強制 free ================= */
+async function loadComfyCfg(){
+  if (!onServer) return;
+  try{
+    const c = await (await fetch("/api/config")).json();
+    if (!$("#comfyUrl").value) $("#comfyUrl").value = c.comfy_url || "";
+    $("#wfDir").value = c.workflow_dir || "";
+  }catch(e){}
+  refreshGpu(); loadWorkflows();
+}
+async function refreshGpu(){
+  try{
+    const g = await (await fetch("/api/gpu")).json();
+    $("#gpuNow").textContent = g.used_mb != null
+      ? `${(g.used_mb/1024).toFixed(1)} / ${(g.total_mb/1024).toFixed(1)} GB`
+      : (g.error || "無法讀取");
+  }catch(e){ $("#gpuNow").textContent = "無法讀取"; }
+}
+$("#gpuRefresh").onclick = refreshGpu;
+$("#comfySaveUrl").onclick = async () => {
+  $("#comfyFreeStat").textContent = "保存中…";
+  try{
+    await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({comfy_url: $("#comfyUrl").value.trim(), workflow_dir: $("#wfDir").value.trim()})});
+    $("#comfyFreeStat").textContent = "已保存 ✔";
+    loadWorkflows();
+  }catch(e){ $("#comfyFreeStat").textContent = "保存失敗：" + e.message; }
+};
+$("#comfyFreeBtn").onclick = async () => {
+  $("#comfyFreeStat").textContent = "釋放中…";
+  try{
+    const j = await (await fetch("/api/comfy/free", {method:"POST"})).json();
+    if (j.error){ $("#comfyFreeStat").textContent = j.error; }
+    else {
+      const g = j.gpu || {};
+      $("#comfyFreeStat").textContent = "已要求 ComfyUI 卸載模型 ✔ VRAM "
+        + (g.used_mb != null ? (g.used_mb/1024).toFixed(1) + "GB" : "?");
+    }
+  }catch(e){ $("#comfyFreeStat").textContent = "失敗：" + e.message; }
+  refreshGpu();
+};
+async function loadWorkflows(){
+  try{
+    const j = await (await fetch("/api/workflows")).json();
+    const sel = $("#wfSelect");
+    if (j.error){ sel.innerHTML = `<option value="">（${esc(j.error)}）</option>`; return; }
+    sel.innerHTML = (j.items || []).map(x =>
+      `<option value="${esc(x.name)}" ${x.name === j.current ? "selected" : ""}>${esc(x.name)}${x.name === j.current ? "（使用中）" : ""}</option>`).join("")
+      || `<option value="">（資料夾內沒有 .json）</option>`;
+  }catch(e){ $("#wfSelect").innerHTML = `<option value="">（讀取失敗）</option>`; }
+}
+$("#wfRescan").onclick = loadWorkflows;
+$("#wfUse").onclick = async () => {
+  const name = $("#wfSelect").value;
+  if (!name){ $("#wfSelStat").textContent = "請先選擇工作流"; return; }
+  $("#wfSelStat").textContent = "載入中…";
+  try{
+    const j = await (await fetch("/api/workflows/select", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify({name})})).json();
+    $("#wfSelStat").textContent = j.error ? j.error : `已載入為模板 ✔（${j.nodes || "?"} 節點）`;
+    if (!j.error){ loadWorkflows(); loadWfParams(); }
+  }catch(e){ $("#wfSelStat").textContent = "失敗：" + e.message; }
+};
+
+/* ================= 歷史紀錄 ================= */
+function urlToDataURL(url){
+  return fetch(url).then(r => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.blob();
+  }).then(b => new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsDataURL(b);
+  }));
+}
+const API="/api/history";
+let hist=[];
+async function record(it){
+  if (!onServer) return;
+  try{
+    await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({image:it.name,dur:"20 seconds",state:it.state,
+        elapsed_s:parseFloat(it.elapsed),usage:it.usage,
+        errors:it.v?it.v.E:[],warnings:it.v?it.v.W:[],
+        content:it.content,raw:it.raw,zh:it.zh||"",note:it.note||"",thumb:it.thumb,full:it.full||"",
+        orig:it.orig||"", more:it.more||[],
+        attempts:it.attempts||1,shots:it.shots||1,
+        ...(() => { const c = it.ctx || genContext(); return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
+                     lora: c.lora ? {...c.lora, report:(it.lora||{}).report||null, issues:(it.lora||{}).issues||[]} : null}; })()})});
+    loadHist();
+    refreshHabits(true);
+    if ($("#navUploads")) fetch(UAPI).then(r=>r.json()).then(u=>{ uploads = u; $("#navUploads").textContent = u.length || ""; }).catch(()=>{});
+  }catch(e){}
+}
+async function loadHist(){
+  if (!onServer){
+    $("#hcount").textContent="以 file:// 開啟時無法保存紀錄，請用 start_app.bat 啟動";
+    $("#sfHist").textContent="紀錄未啟用"; return;
+  }
+  try{ hist = await (await fetch(API)).json(); renderHist(); }
+  catch(e){ $("#hcount").textContent="讀取紀錄失敗："+e.message; }
+}
+let hgroups = [];
+function renderHist(){
+  const rows = hVisible();
+  // 同一張圖的多次生成收合成一個群組（hist 已是新的在前）
+  const byImg = new Map();
+  for (const r of rows){
+    if (!byImg.has(r.image)) byImg.set(r.image, []);
+    byImg.get(r.image).push(r);
+  }
+  hgroups = [...byImg.entries()].map(([image, vs]) => ({image, vs}));
+  const totals = {};
+  hist.forEach(r => totals[r.image] = (totals[r.image] || 0) + 1);
+
+  $("#hcount").textContent = `${hgroups.length} 張圖 · ${rows.length} / ${hist.length} 筆`;
+  hSel = new Set([...hSel].filter(id => hist.some(r => r.id === id)));
+  updateHImport();
+  updateHBar();
+  $("#navHist").textContent = hist.length || "";
+  $("#sfHist").textContent = `紀錄 ${hist.length} 筆`;
+  $("#hgrid").innerHTML = hgroups.map((g, i) => {
+    const r = g.vs[0];                       // 最新一版代表這張卡
+    const d = r.nerr ? "s-fail" : (r.nwarn ? "s-warn" : "s-ok");
+    const total = totals[g.image] || g.vs.length;
+    const sel = hSel.has(r.id);
+    return `<button class="hcell ${sel?"hsel":""}" onclick="openGroup(${i})" title="${esc(g.image)} · ${total} 個版本">
+      <span class="hck" onclick="event.stopPropagation(); hToggle('${r.id}')" title="勾選後可匯入到上傳並處理">${sel?"✓":""}</span>
+      <span class="sdot ${d}"></span>
+      <span class="mtag ${["fl2va","ref2va"].includes(hMode(r))?"ot":""}">${MODES[hMode(r)]}</span>
+      ${r.rating ? `<span class="rmark">${r.rating==="up"?"👍":"👎"}</span>` : ""}
+      ${total > 1 ? `<span class="vcount">${total} 版</span>` : ""}
+      ${r.nmore ? `<span class="vcount" style="top:26px">+${r.nmore} 圖</span>` : ""}
+      <img src="/api/thumb/${r.id}.jpg" loading="lazy" onerror="this.style.visibility='hidden'">
+      <div class="cap">${esc(g.image)}</div>
+      <div class="cap t">${esc(r.ts.slice(5,16))} · ${esc(r.dur)}</div></button>`;
+  }).join("") || '<span class="hint">還沒有紀錄</span>';
+}
+let hSel = new Set();
+window.hToggle = id => { hSel.has(id) ? hSel.delete(id) : hSel.add(id); renderHist(); };
+function updateHImport(){
+  const b = $("#himport"); if (!b) return;
+  b.disabled = !hSel.size;
+  b.textContent = hSel.size ? `匯入 ${hSel.size} 張到上傳並處理` : "匯入到上傳並處理";
+}
+$("#hselnone") && ($("#hselnone").onclick = () => { hSel.clear(); renderHist(); });
+$("#himport") && ($("#himport").onclick = async () => {
+  if (!hSel.size) return;
+  $("#himport").disabled = true;
+  let n = 0;
+  for (const id of [...hSel]){
+    try{
+      const rec = await (await fetch(API + "/" + id)).json();
+      const url = rec.orig_ext ? `/api/orig/${id}.${rec.orig_ext}` : `/api/full/${id}.jpg`;
+      const blob = await (await fetch(url)).blob();
+      const f = new File([blob], rec.image || (id + ".jpg"), {type: blob.type || "image/jpeg"});
+      items.push({file: f, name: f.name, state: "pending", preview: URL.createObjectURL(f),
+                  note: rec.note || "", shots: rec.shots || undefined});
+      n++;
+    }catch(e){}
+  }
+  items.forEach(arFromPreview);
+  render();
+  $("#run").disabled = !items.length;
+  $("#prog").textContent = `${items.length} 張待處理`;
+  $("#navRun").textContent = items.length || "";
+  hSel.clear(); renderHist();
+  setView("run");
+});
+window.openGroup = i => {
+  const g = hgroups[i];
+  if (g) openRec(g.vs[0].id);
+};
+window.openRec = async id => {
+  const r = await (await fetch(API+"/"+id)).json();
+  const versions = hist.filter(x => x.image === r.image);   // 全部版本，新的在前
+  const vi = versions.findIndex(v => v.id === id);
+  const iss=[...(r.errors||[]).map(e=>`<li class="e">${esc(e)}</li>`),
+             ...(r.warnings||[]).map(w=>`<li class="w">${esc(w)}</li>`)].join("");
+  $("#mtitle").textContent = r.image;
+  const stw = (r.errors||[]).length ? ["錯誤","var(--acc)"]
+            : (r.warnings||[]).length ? ["警告","var(--warn)"] : ["通過","var(--ok)"];
+  $("#mmeta").innerHTML = `第 ${vi+1} / ${versions.length} 版 · <b style="color:${stw[1]}">${stw[0]}</b>`
+    + ` · ${esc(r.ts)} · 目標 ${esc(r.dur)} · ${r.elapsed_s}s · ${(r.usage||{}).completion_tokens||0} tokens`
+    + (r.attempts > 1 ? ` · ${r.attempts} 次嘗試` : "")
+    + (r.orig_ext ? ` · <span title="送 ComfyUI 用全解析度原圖">原圖 ${esc(r.orig_ext)}</span>` : ` · <span title="這筆只有 1024px 工作副本，送 ComfyUI 會用它">僅 1024px</span>`);
+  const hasFull = (hist.find(x => x.id === id) || {}).full !== false;
+  const vbar = versions.length > 1 ? `<div class="vbar">` + versions.map((v, k) => {
+    const st = v.nerr ? ["s-fail","錯誤","t-fail"] : (v.nwarn ? ["s-warn","警告","t-warn"] : ["s-ok","通過","t-ok"]);
+    return `<button class="vtab ${k===vi?"on":""}" onclick="openRec('${v.id}')">
+      <span class="sdot ${st[0]}" style="position:static;box-shadow:none"></span>
+      ${esc(v.ts.slice(5,16))}<span class="vst ${st[2]}">${st[1]}</span></button>`;
+  }).join("") + `</div>` : "";
+  const imgSrc = hasFull ? `/api/full/${r.id}.jpg` : `/api/thumb/${r.id}.jpg`;
+  const moreImgs = (r.nmore || 0)
+    ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">`
+      + Array.from({length: r.nmore}, (_, i) =>
+          `<img src="/api/extra/${r.id}/${i+1}.jpg" style="height:84px;border-radius:6px;border:1px solid var(--line)" title="附加圖 ${i+1}">`).join("")
+      + `</div>` : "";
+  $("#mbody").innerHTML = `
+    ${vbar}
+    <div class="mtop">
+      <div><a href="${imgSrc}" target="_blank" rel="noopener" title="開啟原圖">
+        <img class="mimg" src="${imgSrc}"
+          onerror="this.onerror=null;this.src='/api/thumb/${r.id}.jpg'"></a>${moreImgs}</div>
+      <div class="panel" style="margin:0;padding:16px">
+        <div class="note-wrap" style="margin:0">
+          <label>劇情提示（選填，重跑時會一起送給模型）</label>
+          <textarea class="note" id="mnote" rows="3"
+            placeholder="留空＝自由創作">${esc(r.note || "")}</textarea>
+        </div>
+        ${ctxLabel({mode:hMode(r), prompt_name:r.prompt_name, lora:(r.lora===undefined?undefined:r.lora)})}
+        <div class="seg sm" id="msseg" style="display:none"></div>
+        <div class="row" style="margin-top:12px">
+          <button class="mini" id="mrerun">重跑 Prompt</button>
+          <button class="mini" id="mcomfy" onclick="comfyFromRec('${r.id}', this)">🎬 送 ComfyUI 生成</button>
+        </div>
+        <p class="hint" style="margin-top:8px"><span id="mrstat">${hasFull
+          ? "重跑會用當時的圖片、模式與 system prompt，結果另存為新版本；不會動到目前的設定。"
+          : "這筆紀錄沒有保存原圖（舊版本存的），只能重新上傳跑。"}</span>
+          <span id="mcstat"></span></p>
+        <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+          <div class="row" style="gap:7px">
+            <span class="flab">評價（看完影片後）</span>
+            <button class="mini rbtn" id="mrup">👍 效果好</button>
+            <button class="mini rbtn" id="mrdn">👎 不好</button>
+          </div>
+          <div class="row" id="mtags" style="gap:6px;margin-top:7px"></div>
+          <div class="row" style="gap:7px;margin-top:7px">
+            <input type="text" id="mfb" placeholder="一句話備註（選填，之後「整理經驗」會用到）" style="flex:1;min-width:200px">
+            <button class="mini" id="mfbsave">儲存評價</button>
+            <span class="hint" id="mfbstat"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    ${iss?`<ul class="issues">${iss}</ul>`:""}
+    ${loraBadges(r.lora)}${bilingual(r.content, r.zh, r.zh?"":"當時未開啟翻譯")}
+    <details><summary>原始輸出</summary><pre>${esc(r.raw)}</pre></details>`;
+  let mShots = r.shots || 1;
+  document.querySelectorAll("#msseg button").forEach(b => b.onclick = () => {
+    mShots = +b.dataset.n;
+    document.querySelectorAll("#msseg button").forEach(x =>
+      x.classList.toggle("on", +x.dataset.n === mShots));
+  });
+  /* ---- 評價 ---- */
+  const FB_TAGS = ["劇情不合理","動作太小","動作突兀","人物/場景跑掉","畫面模糊","運鏡怪","音效/音樂怪"];
+  let mRating = r.rating || "", mTags = new Set(r.fb_tags || []);
+  $("#mfb").value = r.fb_note || "";
+  const drawRate = () => {
+    $("#mrup").classList.toggle("on", mRating === "up");
+    $("#mrdn").classList.toggle("on", mRating === "down");
+    $("#mtags").innerHTML = FB_TAGS.map(t =>
+      `<button class="fbchip ${mTags.has(t)?"on":""}" data-t="${t}">${t}</button>`).join("");
+    document.querySelectorAll("#mtags .fbchip").forEach(b => b.onclick = () => {
+      const t = b.dataset.t; mTags.has(t) ? mTags.delete(t) : mTags.add(t); drawRate(); });
+  };
+  drawRate();
+  $("#mrup").onclick = () => { mRating = mRating === "up" ? "" : "up"; drawRate(); };
+  $("#mrdn").onclick = () => { mRating = mRating === "down" ? "" : "down"; drawRate(); };
+  $("#mfbsave").onclick = async () => {
+    $("#mfbstat").textContent = "儲存中…";
+    try{
+      const j = await (await fetch(API + "/" + id + "/rate", {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({rating: mRating, fb_tags: [...mTags], fb_note: $("#mfb").value.trim()})})).json();
+      if (j.error) throw new Error(j.error);
+      $("#mfbstat").textContent = "已儲存 ✓";
+      const row = hist.find(x => x.id === id); if (row) row.rating = mRating;
+      renderHist(); refreshLessons();
+    }catch(e){ $("#mfbstat").textContent = "失敗：" + e.message; }
+  };
+  $("#mrerun").disabled = !hasFull;
+  $("#mrerun").onclick = () => rerunRecord(r, mShots);
+  $("#mcopy").onclick=()=>navigator.clipboard.writeText(r.content);
+  $("#mdel").onclick=async()=>{
+    const q = versions.length > 1
+      ? `刪除這個版本（${r.ts}）？其他 ${versions.length-1} 個版本會保留。`
+      : "刪除這筆紀錄？這是這張圖僅剩的版本。";
+    if (!confirm(q)) return;
+    await fetch(API+"/"+id,{method:"DELETE"});
+    await loadHist();
+    const remain = hist.filter(x => x.image === r.image);
+    if (remain.length) openRec(remain[0].id);
+    else $("#modal").classList.remove("on");
+  };
+  $("#modal").classList.add("on");
+};
+
+/* 依 id 取回原圖重跑一次，結果另存為新的一筆，回傳新 id */
+async function regenerate(rec, note, shots, onStep){
+  const step = onStep || (() => {});
+  step("取回圖片…");
+  const full = await urlToDataURL("/api/full/" + rec.id + ".jpg");
+  const thumb = await urlToDataURL("/api/thumb/" + rec.id + ".jpg").catch(() => "");
+  const more = [];
+  for (let i = 1; i <= (rec.nmore || 0); i++)
+    more.push(await urlToDataURL("/api/extra/" + rec.id + "/" + i + ".jpg").catch(() => null));
+  const imgs = [full, ...more.filter(Boolean)];
+  const target = 20;
+  const dim = await new Promise(res => {
+    const im = new Image();
+    im.onload = () => res({w: im.naturalWidth, h: im.naturalHeight});
+    im.onerror = () => res({w: 0, h: 0});
+    im.src = full;
+  });
+  const fake = {mode: hMode(rec), note: note || "", w: dim.w, h: dim.h};
+  const utext = userNote(fake);
+
+  await gpuPrepare("llama", step);
+  step("產生中…");
+  const t0 = performance.now();
+  LORA_NOTE = (note || "").trim();
+  let best;
+  try { best = await genWithRetry(imgs, utext, target, 1, step); }
+  catch(e){ LORA_NOTE = ""; throw e; }
+  const elapsed = ((performance.now()-t0)/1000).toFixed(1);
+  const j = best.j, raw = best.raw, v = best.v;
+  const la = loraApply(best.content); const content = la.content;
+  const ctxSnap = genContext();   // while LORA_NOTE is still set
+  LORA_NOTE = "";
+  const state = v.E.length ? "fail" : (v.W.length ? "warn" : "ok");
+
+  let zh = "";
+  if ($("#tr").value === "1"){
+    step("翻譯中…");
+    try{
+      const t = await chat([{role:"system", content: TR_SYS}, {role:"user", content}],
+                           {temp:0.3, topp:0.9, max:1800});
+      zh = (t.choices[0].message.content || "").trim();
+    }catch(e){ zh = "（翻譯失敗：" + e.message + "）"; }
+  }
+
+  step("保存中…");
+  const saved = await (await fetch(API, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({image:rec.image, dur:"20 seconds", state, elapsed_s:+elapsed,
+      usage:j.usage||{}, errors:v.E, warnings:v.W, content, raw, zh, note, thumb, full,
+      orig_from: rec.id, more: imgs.slice(1),
+      attempts:best.attempts, shots:1,
+      ...(() => { const c = ctxSnap; return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
+                   lora: c.lora ? {...c.lora, report:(la.lora||{}).report||null, issues:(la.lora||{}).issues||[]} : null}; })()})})).json();
+  return saved.id;
+}
+
+async function rerunRecord(r, shots){
+  const btn = $("#mrerun"), stat = $("#mrstat");
+  const note = ($("#mnote").value || "").trim();
+  btn.disabled = true;
+  try{
+    const ctx = {mode: hMode(r), prompt_id: r.prompt_id, lora: (r.lora === undefined ? undefined : r.lora)};
+    const id = await withContext(ctx, () => regenerate(r, note, shots || r.shots || 1, t => stat.textContent = t));
+    await loadHist();
+    openRec(id);
+  }catch(e){
+    stat.textContent = "重跑失敗：" + e.message;
+    btn.disabled = false;
+  }
+}
+
+/* ---- 歷史紀錄的狀態篩選與批次重生成 ---- */
+const HSTATES=[["ok","通過","f-ok"],["warn","警告","f-warn"],["fail","錯誤","f-fail"]];
+const HMODES=[["i2va","I2VA","f-cuts"],["fl2va","FL2VA","f-onetake"],["l2va","L2VA","f-cuts"],["ref2va","REF2VA","f-onetake"]];
+let HFILTER = new Set(HSTATES.map(x=>x[0])), HMFILTER = new Set(HMODES.map(x=>x[0])), hbusy = false;
+const hState = r => r.nerr ? "fail" : (r.nwarn ? "warn" : "ok");
+const hMode = r => (MODES[r.mode] ? r.mode : "i2va");   // records from before this feature count as i2va
+const hVisible = () => {
+  const q = $("#hfilter").value.trim().toLowerCase();
+  return hist.filter(r => HFILTER.has(hState(r)) && HMFILTER.has(hMode(r)) && (!q || (r.image||"").toLowerCase().includes(q)));
+};
+window.toggleHMode = k => {
+  HMFILTER.has(k) ? HMFILTER.delete(k) : HMFILTER.add(k);
+  if (!HMFILTER.size) HMFILTER = new Set(HMODES.map(x=>x[0]));
+  renderHist();
+};
+function updateHBar(){
+  if (!hist.length){ $("#hfbar").style.display="none"; return; }
+  $("#hfbar").style.display="flex";
+  const cnt={}; hist.forEach(r => cnt[hState(r)] = (cnt[hState(r)]||0)+1);
+  const mcnt = {}; hist.forEach(r => mcnt[hMode(r)] = (mcnt[hMode(r)]||0)+1);
+  const modeChips = HMODES.filter(([k])=>mcnt[k]).map(([k,label,cls])=>
+    `<button class="fchip ${cls} ${HMFILTER.has(k)?"on":""}" onclick="toggleHMode('${k}')">${label} <span class="n">${mcnt[k]}</span></button>`).join("");
+  $("#hfchips").innerHTML = (modeChips ? modeChips + '<span class="fsep"></span>' : "") + HSTATES.filter(([k])=>cnt[k]).map(([k,label,cls])=>
+    `<button class="fchip ${cls} ${HFILTER.has(k)?"on":""}" onclick="toggleHFilter('${k}')">
+      ${label}<span class="n">${cnt[k]}</span></button>`).join("");
+  const q = hRegenTargets();
+  $("#hregen").textContent = `重新生成顯示中的 ${q.length} 張圖`;
+  $("#hregen").disabled = !q.length || hbusy;
+}
+window.toggleHFilter = k => {
+  HFILTER.has(k) ? HFILTER.delete(k) : HFILTER.add(k);
+  const present = new Set(hist.map(hState));
+  if (![...present].some(st => HFILTER.has(st))) HFILTER = new Set(HSTATES.map(x=>x[0]));
+  renderHist();
+};
+$("#hfall").onclick = () => { HFILTER = new Set(HSTATES.map(x=>x[0])); renderHist(); };
+/* 每張圖取最新一個「有原圖」的可見版本 */
+function hRegenTargets(){
+  const seen = new Set(), out = [];
+  for (const r of hVisible()){
+    if (seen.has(r.image)) continue;
+    seen.add(r.image);
+    if (r.full !== false) out.push(r);
+  }
+  return out;
+}
+$("#hregen").onclick = async () => {
+  const rows = hRegenTargets();
+  const skipped = new Set(hVisible().map(r=>r.image)).size - rows.length;
+  if (!rows.length || hbusy) return;
+  if (!confirm(`重新生成 ${rows.length} 張圖？每張用其最新版本的原圖與補充劇情，結果另存為新版本。`)) return;
+  hbusy = true; hregenAbort = false; updateHBar();
+  $("#hstop").style.display = "inline-block";
+  let n = 0, ok = 0;
+  for (const row of rows){
+    if (hregenAbort) break;
+    n++;
+    $("#hprog").textContent = `重新生成 ${n}/${rows.length} — ${row.image}`;
+    try{
+      const rec = await (await fetch(API + "/" + row.id)).json();
+      const ctx = {mode: hMode(rec), prompt_id: rec.prompt_id, lora: (rec.lora === undefined ? undefined : rec.lora)};
+      await withContext(ctx, () => regenerate(rec, rec.note || "", rec.shots || 1, t =>
+        $("#hprog").textContent = `重新生成 ${n}/${rows.length} — ${row.image}　${t}`));
+      ok++;
+    }catch(e){
+      $("#hprog").textContent = `${row.image} 失敗：${e.message}`;
+    }
+  }
+  hbusy = false;
+  $("#hstop").style.display = "none";
+  await loadHist();
+  $("#hprog").textContent = (hregenAbort ? "已停止，" : "") + `完成 ${ok}/${rows.length} 張`
+    + (skipped ? `（另有 ${skipped} 張沒有保存原圖，已略過）` : "");
+};
+let hregenAbort = false;
+$("#mclose").onclick=()=>$("#modal").classList.remove("on");
+$("#modal").onclick=e=>{ if(e.target.id==="modal") $("#modal").classList.remove("on") };
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") $("#modal").classList.remove("on") });
+$("#hstop").onclick = () => { hregenAbort = true; $("#hprog").textContent = "停止中…"; };
+$("#hrefresh").onclick=loadHist;
+$("#hfilter").oninput=renderHist;
+$("#hclear").onclick=async()=>{
+  const n = hist.length;
+  if (!n) return;
+  // two-step: typed confirmation, because this is the one action that removes everything at once
+  const typed = prompt(`即將清除全部 ${n} 筆紀錄。
+
+檔案會搬到 history_trash/<時間>/ 而不是直接刪除，可以手動搬回來復原。
+
+要繼續，請輸入：CLEAR`);
+  if (typed !== "CLEAR") return;
+  const r = await (await fetch(API+"/clear",{method:"POST",headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({confirm:"CLEAR ALL HISTORY"})})).json();
+  if (r.error){ alert("清除失敗：" + r.error); return; }
+  alert(`已將 ${r.moved} 個檔案搬到：
+${r.trash}
+
+如需復原，把裡面的檔案搬回 history/ 後重新啟動伺服器。`);
+  loadHist(); };
+loadHist();
+refreshHabits(true);
+refreshLessons();
+refreshRequired();
+loadWfParams();
+renderPrompts();   // 先同步畫出內建，再去伺服器補其他組
+loadPrompts().then(() => { setMode(curMode()); });
+
+/* ================= ComfyUI 整合 ================= */
+const CAPI = "/api/comfy";
+function comfyFields(content, mode){
+  const na = t => /^n\/a\.?$/i.test(t.trim()) ? "N/A" : t;    // official spelling; the Director only treats a BLANK music field as N/A
+  const main = (mode || curMode()) === "ref2va" ? "detailed_description:" : "integrated_multimodal_description:";
+  return { imd: field(content, main, "overall_soundscape:"),
+           soundscape: na(field(content, "overall_soundscape:", "non_diegetic_music:")),
+           music: na(field(content, "non_diegetic_music:", null)) };
+}
+async function comfySend(payload, statusEl, btn){
+  if (btn) btn.disabled = true;
+  const set = t => { if (statusEl && statusEl.isConnected) statusEl.textContent = t; };
+  await gpuPrepare("comfy", set);   // 等 llama 閒置卸載、確認 VRAM 釋放後才送
+  set("送出中…");
+  try{
+    const r = await fetch(CAPI + "/run", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(payload)});
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status));
+    set("已排入佇列");
+    comfyPoll(j.prompt_id, set, btn);
+  }catch(e){
+    set("失敗：" + e.message);
+    if (btn) btn.disabled = false;
+  }
+}
+async function comfyPoll(pid, set, btn){
+  /* 4 s while queued/starting, then back off to 10 s once running (H3 renders take minutes);
+     pause entirely while the tab is hidden - nothing to show anyway. Hard cap ~30 min. */
+  const t0 = Date.now();
+  let delay = 4000;
+  while (Date.now() - t0 < 30 * 60 * 1000){
+    await new Promise(r => setTimeout(r, delay));
+    if (document.hidden){ await new Promise(r => document.addEventListener("visibilitychange", r, {once:true})); }
+    let j;
+    try{ j = await (await fetch(CAPI + "/status/" + pid)).json(); }
+    catch(e){ continue; }
+    if (j.state === "running") delay = 10000;
+    if (j.state === "queued") set(`排隊中（第 ${j.pos} 位）`);
+    else if (j.state === "running") set("生成中…");
+    else if (j.state === "done"){
+      const out = (j.outputs || []).find(x => x.endsWith(".mp4")) || "";
+      set("完成 ✓ " + out.split("/").pop());
+      if (btn) btn.disabled = false;
+      if ($("#navMedia")) loadMedia();
+      return;
+    }
+    else if (j.state === "error"){
+      set("ComfyUI 錯誤：" + (j.error || "見 ComfyUI 主控台"));
+      if (btn) btn.disabled = false;
+      return;
+    }
+  }
+  set("輪詢逾時——去媒體庫或 ComfyUI 查看結果");
+  if (btn) btn.disabled = false;
+}
+/* rec_id -> the server picks the full-resolution original (.orig.*) when it exists; dur -> Director duration,
+   so the seconds the prompt was written for are the seconds the clip is rendered at */
+window.comfyFromRec = (id, btnEl) => {
+  const stat = document.querySelector("#mcstat");
+  fetch(API + "/" + id).then(r => r.json()).then(rec => {
+    comfySend({rec_id: id, dur: "20 seconds", wf: wfOverrides(), ...comfyFields(rec.content, hMode(rec))}, stat, btnEl);
+  });
+};
+window.comfyFromItem = (k, btnEl) => {
+  const it = items[k]; if (!it || !it.content) return;
+  const stat = document.querySelector(`[data-cstat="${k}"]`);
+  comfySend({image: it.orig || it.full, dur: "20 seconds", wf: wfOverrides(), aspect: arPayload(it), ...comfyFields(it.content, it.mode)}, stat, btnEl);
+};
+
+$("#ctplfilebtn").onclick = () => $("#ctplfile").click();
+$("#ctplfile").onchange = async e => {
+  const f = e.target.files && e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  $("#ctplstat").textContent = "匯入中…";
+  let body;
+  try{ body = JSON.parse(await f.text()); }
+  catch(err){ $("#ctplstat").textContent = "失敗：檔案不是合法 JSON"; return; }
+  try{
+    const r = await fetch(CAPI + "/template", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
+    const j = await r.json();
+    $("#ctplstat").textContent = j.error
+      ? "失敗：" + j.error
+      : (j.ui_meta_attached
+        ? `已把 ${f.name} 掛為內嵌 metadata ✓ — 之後的影片會重新內嵌工作流`
+        : `已匯入 ${f.name}（${j.nodes} 節點，mode ${j.mode}${j.ui_meta_carried ? "，UI metadata 已從舊模板沿用 ✓" : (j.has_ui_meta ? "" : "，無 UI metadata — 再上傳一份 ComfyUI「Save」存的 UI 格式 workflow.json 即可補上（影片才會內嵌工作流）")}）`);
+  }catch(err){ $("#ctplstat").textContent = "失敗：" + err.message; }
+};
+$("#ctpl").onclick = async () => {
+  $("#ctplstat").textContent = "更新中…";
+  try{
+    const j = await (await fetch(CAPI + "/refresh", {method:"POST"})).json();
+    $("#ctplstat").textContent = j.error
+      ? "失敗：" + j.error
+      : `已更新（${j.nodes} 節點，來源輸出 ${j.output || "?"}）`;
+  }catch(e){ $("#ctplstat").textContent = "失敗：" + e.message; }
+};
+
+/* ================= 媒體庫 ================= */
+const MAPI = "/api/media";
+let media = [], mdKind = "all", mdCur = -1;
+
+const fmtSize = b => b >= 1e9 ? (b/1e9).toFixed(2)+" GB"
+  : b >= 1e6 ? (b/1e6).toFixed(1)+" MB"
+  : b >= 1e3 ? (b/1e3).toFixed(0)+" KB" : b + " B";
+const fmtTime = t => { const d = new Date(t*1000);
+  const z = n => String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; };
+const mUrl = (f, dl) => MAPI + "/file/" + f.path.split("/").map(encodeURIComponent).join("/") + (dl ? "?dl=1" : "");
+
+async function loadMedia(){
+  if (!onServer){ $("#mdcount").textContent = "需要透過 start_app.bat 啟動的服務"; return; }
+  try{
+    const r = await fetch(MAPI);
+    const j = await r.json();
+    if (j.error){ media = []; $("#mdcount").textContent = j.error; renderMedia(); return; }
+    media = j.files || [];
+    $("#navMedia").textContent = j.total || "";
+    renderMedia();
+  }catch(e){ $("#mdcount").textContent = "讀取失敗：" + e.message; }
+}
+/* ================= 上傳媒體庫 ================= */
+const UAPI = "/api/uploads";
+let uploads = [], upSel = new Set();
+const uUrl = (u, thumb) => UAPI + "/" + u.id + (thumb ? ".thumb.jpg" : ".jpg");
+const uOrigUrl = u => u.orig_ext ? UAPI + "/" + u.id + ".orig." + u.orig_ext : uUrl(u);   // full-res when stored
+async function loadUploads(){
+  if (!onServer){ $("#upcount").textContent = "以 file:// 開啟時無法使用，請用 start_app.bat 啟動"; return; }
+  try{ uploads = await (await fetch(UAPI)).json(); }
+  catch(e){ $("#upcount").textContent = "讀取失敗：" + e.message; return; }
+  upSel = new Set([...upSel].filter(id => uploads.some(u => u.id === id)));
+  renderUploads();
+}
+function upVisible(){
+  const q = $("#upfilter").value.trim().toLowerCase();
+  return uploads.filter(u => !q || (u.name||"").toLowerCase().includes(q) || (u.names||[]).some(x => x.toLowerCase().includes(q)));
+}
+function renderUploads(){
+  const rows = upVisible();
+  $("#upcount").textContent = `${rows.length} / ${uploads.length} 張` + (upSel.size ? ` · 已選 ${upSel.size}` : "");
+  if ($("#navUploads")) $("#navUploads").textContent = uploads.length || "";
+  $("#upimport").disabled = !upSel.size;
+  $("#updelsel").disabled = !upSel.size;
+  $("#upimport").textContent = upSel.size ? `匯入 ${upSel.size} 張到上傳並處理` : "匯入到上傳並處理";
+  $("#upgrid").innerHTML = rows.map(u => {
+    const i = uploads.indexOf(u);
+    const sel = upSel.has(u.id);
+    const dim = (u.ow && u.oh) ? `${u.ow}×${u.oh}` : ((u.w && u.h) ? `${u.w}×${u.h}` : "");
+    return `<div class="upcell ${sel?"sel":""}" data-id="${u.id}">
+      <img class="upprev" src="${uUrl(u,true)}" loading="lazy" onclick="openUpload(${i})" alt="">
+      <span class="upck" onclick="toggleUpSel('${u.id}')" title="選取">${sel?"✓":""}</span>
+      ${u.refs ? `<span class="uprefs" title="被 ${u.refs} 筆歷史紀錄使用">${u.refs} 筆</span>` : ""}
+      <div class="upcap" title="${esc(u.name||"")}">${esc(u.name||"(未命名)")}</div>
+      <div class="upcap t">${dim}${dim&&(u.osize||u.size)?" · ":""}${(u.osize||u.size)?fmtSize(u.osize||u.size):""}${u.orig_ext?"":" · 僅1024"}${u.ts?" · "+esc(String(u.ts).slice(5,16)):""}</div>
+      <div class="uprow">
+        <button onclick="importUploads(['${u.id}'])">匯入</button>
+        <button class="dl" onclick="delUploads(['${u.id}'])">刪除</button>
+      </div></div>`;
+  }).join("") || '<span class="hint">還沒有上傳過的圖片</span>';
+}
+window.toggleUpSel = id => { upSel.has(id) ? upSel.delete(id) : upSel.add(id); renderUploads(); };
+$("#upselall").onclick = () => { upVisible().forEach(u => upSel.add(u.id)); renderUploads(); };
+$("#upselnone").onclick = () => { upSel.clear(); renderUploads(); };
+$("#uprefresh").onclick = loadUploads;
+$("#upfilter").addEventListener("input", renderUploads);
+$("#upimport").onclick = () => importUploads([...upSel]);
+$("#updelsel").onclick = () => delUploads([...upSel]);
+/* lightbox: reuse the media lightbox */
+let mlbUpload = null;   // which upload the lightbox is showing (null = a ComfyUI media file)
+window.openUpload = i => {
+  const u = uploads[i]; if (!u) return;
+  mlbUpload = u.id;
+  $("#mlbName").textContent = u.name || "(未命名)";
+  const odim = (u.ow&&u.oh) ? `${u.ow}×${u.oh}（原圖）` : ((u.w&&u.h) ? `${u.w}×${u.h}（僅 1024 工作副本）` : "");
+  $("#mlbMeta").textContent = `${odim?odim+" · ":""}${(u.osize||u.size)?fmtSize(u.osize||u.size)+" · ":""}被 ${u.refs||0} 筆歷史紀錄使用 · ${u.ts||""}`;
+  $("#mlbDl").href = uOrigUrl(u); $("#mlbDl").setAttribute("download", u.name || (u.id + "." + (u.orig_ext||"jpg")));
+  $("#mlbBody").innerHTML = `<img src="${uOrigUrl(u)}">`;
+  $("#mlb").classList.add("on");
+};
+/* import: fetch the stored originals -> File objects -> the same add() path a drag-drop uses */
+window.importUploads = async ids => {
+  if (!ids.length) return;
+  const files = [];
+  for (const id of ids){
+    const u = uploads.find(x => x.id === id); if (!u) continue;
+    try{
+      const blob = await (await fetch(uOrigUrl(u))).blob();      // original bytes -> encode() keeps them for ComfyUI
+      const name = u.name || (id.slice(0,8) + "." + (u.orig_ext || "jpg"));
+      files.push(new File([blob], name, {type: blob.type || "image/jpeg"}));
+    }catch(e){}
+  }
+  if (!files.length){ alert("沒有可匯入的圖片"); return; }
+  add(files);
+  upSel.clear(); renderUploads();
+  setView("run");
+};
+/* delete: 3-way dialog. Always shows the REAL history count fetched from the server. */
+function upDialog(ids, refs, names){
+  return new Promise(resolve => {
+    const d = $("#updlg");
+    $("#updlgTitle").textContent = `刪除 ${ids.length} 張上傳圖片`;
+    $("#updlgMeta").textContent = names.length ? names.slice(0,4).join("、") + (names.length>4?` 等 ${names.length} 張`:"") : "";
+    $("#updlgBody").innerHTML = refs
+      ? `這${ids.length>1?"些":"張"}圖片被 <b>${refs}</b> 筆歷史紀錄使用。要怎麼處理？`
+      : `這${ids.length>1?"些":"張"}圖片沒有任何歷史紀錄使用。`;
+    $("#updlgCascade").style.display = refs ? "" : "none";
+    $("#updlgCascade").textContent = `連同 ${refs} 筆歷史一起刪`;
+    $("#updlgUnlink").textContent = refs ? "只從庫移除（保留歷史）" : "從庫移除";
+    const done = v => { d.classList.remove("on"); cleanup(); resolve(v); };
+    const onU = () => done("unlink"), onC = () => done("cascade"), onX = () => done(null);
+    const onKey = e => { if (e.key === "Escape") onX(); };
+    const onBg = e => { if (e.target === d) onX(); };
+    function cleanup(){
+      $("#updlgUnlink").removeEventListener("click", onU); $("#updlgCascade").removeEventListener("click", onC);
+      $("#updlgCancel").removeEventListener("click", onX); document.removeEventListener("keydown", onKey); d.removeEventListener("click", onBg);
+    }
+    $("#updlgUnlink").addEventListener("click", onU); $("#updlgCascade").addEventListener("click", onC);
+    $("#updlgCancel").addEventListener("click", onX); document.addEventListener("keydown", onKey); d.addEventListener("click", onBg);
+    d.classList.add("on");
+  });
+}
+window.delUploads = async ids => {
+  if (!ids.length) return;
+  let refs = 0;
+  for (const id of ids){
+    try{ refs += (await (await fetch(UAPI + "/" + id + "/history")).json()).length; }catch(e){}
+  }
+  const names = ids.map(id => (uploads.find(x => x.id === id)||{}).name).filter(Boolean);
+  const choice = await upDialog(ids, refs, names);
+  if (!choice) return;
+  if (choice === "cascade" && !confirm(`最後確認：真的要刪除 ${refs} 筆歷史紀錄？無法復原。`)) return;
+  let done = 0, delH = 0;
+  for (const id of ids){
+    try{
+      const j = await (await fetch(UAPI + "/" + id + (choice === "cascade" ? "?cascade=1" : ""), {method:"DELETE"})).json();
+      if (j.ok){ done++; delH += (j.deleted_history||0); }
+    }catch(e){}
+  }
+  upSel.clear();
+  await loadUploads();
+  if (typeof loadHist === "function") loadHist();
+  $("#upcount").textContent += choice === "cascade" ? ` · 已刪 ${done} 張圖、${delH} 筆歷史` : ` · 已從庫移除 ${done} 張（歷史保留）`;
+};
+
+function renderMedia(){
+  const kinds = [...new Set(media.map(f => f.kind))];
+  const kindName = {video:"影片", image:"圖片", audio:"音訊"};
+  $("#mdkinds").innerHTML = kinds.length > 1
+    ? [["all","全部"], ...kinds.map(k => [k, kindName[k]||k])].map(([k,label]) =>
+        `<button class="fchip ${k===mdKind?"on":""}" onclick="setMdKind('${k}')">${label}` +
+        `<span class="n">${k==="all"?media.length:media.filter(f=>f.kind===k).length}</span></button>`).join("")
+    : "";
+  const q = $("#mdfilter").value.trim().toLowerCase();
+  const rows = media.filter(f => (mdKind==="all" || f.kind===mdKind)
+    && (!q || f.path.toLowerCase().includes(q)));
+  const totalSize = rows.reduce((a,f)=>a+f.size,0);
+  $("#mdcount").textContent = `${rows.length} / ${media.length} 個檔案 · ${fmtSize(totalSize)}`;
+  $("#mdgrid").innerHTML = rows.map(f => {
+    const i = media.indexOf(f);
+    const prev = f.kind === "image"
+      ? `<img src="${mUrl(f)}" loading="lazy">`
+      : f.kind === "video"
+        ? `<img data-vthumb="${esc(f.path)}" alt=""><span class="play"><span>▶</span></span>`
+        : `<span style="display:grid;place-items:center;aspect-ratio:16/10;color:var(--faint);font-size:32px">♪</span>`;
+    return `<div class="mdcell">
+      <button class="mdprev" onclick="openMedia(${i})">${prev}</button>
+      <div class="mdcap" title="${esc(f.path)}">${esc(f.name)}</div>
+      <div class="mdcap t">${fmtSize(f.size)} · ${fmtTime(f.mtime)}</div>
+      <div class="mdrow">
+        <a href="${mUrl(f, true)}">下載</a>
+        <button onclick="delMedia(${i})">刪除</button>
+      </div></div>`;
+  }).join("") || '<span class="hint">沒有符合的檔案</span>';
+  document.querySelectorAll("#mdgrid img[data-vthumb]").forEach(img => {
+    const f = media.find(x => x.path === img.dataset.vthumb);
+    if (f) queueThumb(f, img);
+  });
+}
+
+/* 影片縮圖：一次只開一條連線循序抓第一幀，避免佔滿瀏覽器對同源的連線池 */
+const thumbCache = new Map(), thumbPending = new Set();
+let thumbQueue = [], thumbBusy = false;
+function thumbTarget(path){
+  // 每次都重新找當下的 img——render 可能已經重畫過，抓舊參照會落空
+  return [...document.querySelectorAll("#mdgrid img[data-vthumb]")]
+    .find(el => el.dataset.vthumb === path) || null;
+}
+function queueThumb(f, imgEl){
+  if (thumbCache.has(f.path)){ imgEl.src = thumbCache.get(f.path); return; }
+  if (thumbPending.has(f.path)) return;
+  thumbPending.add(f.path);
+  thumbQueue.push(f);
+  pumpThumbs();
+}
+async function pumpThumbs(){
+  if (thumbBusy) return;
+  thumbBusy = true;
+  while (thumbQueue.length){
+    const f = thumbQueue.shift();
+    if (!thumbCache.has(f.path)){
+      try{
+        thumbCache.set(f.path, await makeVideoThumb(mUrl(f)));
+      }catch(e){ thumbPending.delete(f.path); continue; }
+    }
+    thumbPending.delete(f.path);
+    const el = thumbTarget(f.path);
+    if (el) el.src = thumbCache.get(f.path);
+  }
+  thumbBusy = false;
+}
+function makeVideoThumb(src){
+  return new Promise((res, rej) => {
+    const v = document.createElement("video");
+    v.muted = true; v.preload = "metadata";
+    const done = (fn, arg) => { v.onerror = v.onseeked = v.onloadedmetadata = null;
+      v.removeAttribute("src"); v.load(); clearTimeout(bail); fn(arg); };
+    const bail = setTimeout(() => done(rej, new Error("timeout")), 10000);
+    v.onloadedmetadata = () => {
+      try { v.currentTime = Math.min(Math.max(0.4, (v.duration || 1) * 0.1), Math.max(0.1, (v.duration || 1) - 0.05)); }
+      catch(e){}
+    };
+    v.onseeked = () => {
+      try{
+        const sc = 320 / Math.max(v.videoWidth || 1, v.videoHeight || 1);
+        const c = document.createElement("canvas");
+        c.width = Math.max(1, Math.round(v.videoWidth * sc));
+        c.height = Math.max(1, Math.round(v.videoHeight * sc));
+        c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+        done(res, c.toDataURL("image/jpeg", 0.72));
+      }catch(e){ done(rej, e); }
+    };
+    v.onerror = () => done(rej, new Error("video error"));
+    v.src = src;
+  });
+}
+window.setMdKind = k => { mdKind = k; renderMedia(); };
+$("#mdfilter").oninput = renderMedia;
+$("#mdrefresh").onclick = loadMedia;
+
+window.openMedia = i => {
+  const f = media[i]; if (!f) return;
+  mlbUpload = null; mdCur = i;
+  $("#mlbName").textContent = f.name;
+  $("#mlbMeta").textContent = `${f.path} · ${fmtSize(f.size)} · ${fmtTime(f.mtime)}`;
+  $("#mlbDl").href = mUrl(f, true);
+  $("#mlbBody").innerHTML = f.kind === "image"
+    ? `<img src="${mUrl(f)}">`
+    : f.kind === "video"
+      ? `<video src="${mUrl(f)}" controls autoplay></video>`
+      : `<audio src="${mUrl(f)}" controls autoplay style="width:100%"></audio>`;
+  $("#mlb").classList.add("on");
+};
+function closeMlb(){
+  mlbUpload = null;
+  $("#mlb").classList.remove("on");
+  $("#mlbBody").innerHTML = "";     // 停止播放
+  mdCur = -1;
+}
+window.delMedia = async i => {
+  const f = media[i]; if (!f) return;
+  if (!confirm(`刪除「${f.name}」？檔案會從磁碟移除，無法復原。`)) return;
+  const r = await fetch(mUrl(f), {method:"DELETE"});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok){ alert("刪除失敗：" + (j.error || r.status)); return; }
+  if (mdCur === i) closeMlb();
+  loadMedia();
+  fetch(UAPI).then(r=>r.json()).then(u=>{ uploads = u; if ($("#navUploads")) $("#navUploads").textContent = u.length || ""; }).catch(()=>{});
+};
+$("#mlbClose").onclick = closeMlb;
+$("#mlbDel").onclick = () => { if (mlbUpload){ const id = mlbUpload; closeMlb(); delUploads([id]); } else if (mdCur >= 0) delMedia(mdCur); };
+$("#mlb").onclick = e => { if (e.target.id === "mlb") closeMlb(); };
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeMlb(); });
+if (onServer) fetch(MAPI).then(r=>r.json()).then(j=>{
+  if (j && j.total) $("#navMedia").textContent = j.total;
+}).catch(()=>{});
+
+/* ================= 匯出 ================= */
+function dl(name,text,mime){
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([text],{type:mime}));
+  a.download=name; a.click();
+}
+$("#expj").onclick=()=>dl("h3-results.json",JSON.stringify(
+  items.filter(i=>i.content).map(i=>({image:i.name,elapsed_s:+i.elapsed,usage:i.usage,
+    note:i.note||"",content:i.content,zh:i.zh,errors:i.v.E,warnings:i.v.W})),null,1),"application/json");
+$("#expt").onclick=()=>dl("h3-results.txt",items.filter(i=>i.content)
+  .map(i=>`########## ${i.name}\n${i.content}\n`+(i.zh?`\n--- 中文 ---\n${i.zh}\n`:"")).join("\n"),"text/plain");
+
+setView(store.get(VKEY) || "run");
+</script>

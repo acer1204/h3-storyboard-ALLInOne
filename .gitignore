@@ -10,3 +10,12 @@ full_outputs.txt
 ref4_out.txt
 report.html
 build_report.py
+config.json
+comfy-template.json
+history/
+history_trash/
+uploads/
+lessons/
+prompts/
+loras/
+*.bak

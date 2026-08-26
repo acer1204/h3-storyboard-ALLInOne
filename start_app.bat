@@ -1,5 +1,5 @@
 @echo off
-title StoryDirector-VA Frontend (port 7766)
+title H3 Storyboard WebUI (port 9998)
 cd /d "%~dp0"
 
 REM ===== Create dedicated Python venv on first run =====
@@ -13,13 +13,11 @@ if not exist "venv\Scripts\python.exe" (
     )
 )
 
-echo [START] StoryDirector-VA frontend at http://localhost:7766/app.html
-echo [INFO]  LLM backend: http://llamaserver.com:10011  (qwen3.8-27b)
+echo [START] H3 Storyboard WebUI at http://localhost:9998/
+echo [INFO]  llama-server / ComfyUI addresses are in config.json (editable in the web UI)
 echo [INFO]  Press Ctrl+C to stop.
 
-REM ===== Open browser =====
-start "" http://localhost:7766/app.html
+start "" http://localhost:9998/
 
-REM ===== Serve on port 7766 using the dedicated venv =====
-"venv\Scripts\python.exe" -m http.server 7766 --bind 0.0.0.0
+"venv\Scripts\python.exe" h3-server.py
 pause
