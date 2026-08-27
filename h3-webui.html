@@ -3279,7 +3279,7 @@ $("#mvFiles").onchange = e => {
 };
 $("#mvClear").onclick = () => { if (MV.busy) return;
   MV.slots.forEach(s => { if (s){ try{ URL.revokeObjectURL(s.url); }catch(err){} } });
-  MV.slots = []; MV.segs = []; MV.id = null; MV.phase = "edit"; MV.final = ""; MV.waiting = -1;
+  MV.slots = []; MV.segs = []; MV.id = null; MV.phase = "edit"; MV.final = ""; MV.waiting = -1; MV.manual = false;
   mvSyncSegs(); mvDraw(); };
 
 /* ---- 片段（segs）同步：N 張圖 → N-1 段，保留既有內容 ---- */
@@ -3372,7 +3372,10 @@ function mvDraw(){
         <textarea class="note" id="mvSegHintTxt" rows="2" ${ro}
           placeholder="例如：這一段她坐下來開始塗防曬">${esc(s.hint || "")}</textarea></div>
       <div class="row" style="margin:8px 0">
-        <button class="ghost mini" id="mvSegRegen" ${MV.busy || s.locked ? "disabled" : ""}>♻️ 重生成此段劇情</button>
+        <button class="ghost mini" id="mvSegRegen" ${MV.busy || s.locked ? "disabled" : ""}>♻️ 重新生成劇情</button>
+        ${s.locked && s.video ? `<button class="ghost mini" onclick="mvUnlockSeg(${MV.cur})" ${MV.busy ? "disabled" : ""}>🔓 解鎖此段</button>` : ""}
+        ${!s.locked && s._manual ? `<button class="mini" onclick="mvManualRerun(${MV.cur})" ${MV.busy ? "disabled" : ""}>🎬 重新生成影片</button>
+          <button class="ghost mini" onclick="mvRelockSeg(${MV.cur})" ${MV.busy || !s.video ? "disabled" : ""}>🔒 取消解鎖（維持原影片）</button>` : ""}
         ${s.attempts ? `<span class="hint">${s.attempts} 次嘗試</span>` : ""}
         ${s.v && s.v.E && s.v.E.length ? `<span class="hint" style="color:var(--acc)">錯誤 ${s.v.E.length}</span>` : ""}
         ${s.v && s.v.W && s.v.W.length ? `<span class="hint" style="color:var(--warn)">警告 ${s.v.W.length}</span>` : ""}
@@ -3454,7 +3457,7 @@ window.mvLoad = async id => {
     $("#mvPlan").value = rec.global_plan || "";
     MV.segs = (rec.segments || []).map(s => ({...mvNewSeg(), ...s,
       vstate: (s.locked && s.video) ? "done" : "", v: null}));
-    mvSyncSegs(); MV.cur = 0; MV.waiting = -1;
+    mvSyncSegs(); MV.cur = 0; MV.waiting = -1; MV.manual = false;
     setView("movie"); mvDraw();
     mvStat("已載入專案（可繼續操作或查看）");
   }catch(e){ alert("載入失敗：" + e.message); }
@@ -3621,6 +3624,16 @@ async function mvSubmitVideo(i){
       }
     }
     s.video = finalVideo; s._dirty = false;
+    if (s._manual){
+      // 人工解鎖後的單段重跑：完成即回鎖，不接下一段、不自動合併（合併一律手動）
+      s._manual = false; s.locked = true; s.vstate = "done"; MV.waiting = -1;
+      MV.busy = false;
+      const tail = i < MV.segs.length - 1 ? "；注意：後續片段仍是用舊接點生成的，若要連動請解鎖後續片段重跑" : "";
+      mvStat(`段 ${i + 1} 重新生成完成，已重新鎖定${s.verdict ? `（審查 ${s.verdict.score}/10）` : ""} — 不會自動合併，請手動按「合併片段並顯示」${tail}`);
+      document.title = "H3 Prompt 批次產生器";
+      mvDraw(); mvSave(false);
+      return;
+    }
     if (rvCfg().movieAuto){
       // 完全自動化：直接鎖定並續跑（mvContinue 會接下一段或觸發合併）
       MV.busy = false;
@@ -3690,8 +3703,8 @@ window.mvContinue = i => {
   mvSave(false);
   const next = MV.segs.findIndex((x, k) => k > i && !(x.locked && x.video));
   if (next >= 0) mvVideoStep(next);
-  else if (rvCfg().movieAuto){ mvStat("全部片段完成（自動模式）— 自動合併中…"); mvDraw(); mvMerge(); }
-  else { mvStat("全部片段已確認 — 可以按「合併片段並顯示」"); mvDraw(); }
+  else if (rvCfg().movieAuto && !MV.manual){ mvStat("全部片段完成（自動模式）— 自動合併中…"); mvDraw(); mvMerge(); }
+  else { mvStat("全部片段已確認 — 可以按「合併片段並顯示」" + (MV.manual ? "（有人工介入，不自動合併）" : "")); mvDraw(); }
 };
 window.mvAdjust = i => {
   const s = MV.segs[i];
@@ -3702,6 +3715,26 @@ window.mvAdjust = i => {
 };
 window.mvRegamble = i => { if (!MV.busy) mvSubmitVideo(i); };
 window.mvRerunVideo = i => { if (!MV.busy && MV.segs[i]._dirty) mvSubmitVideo(i); };
+
+/* ---- 已確認片段的人工解鎖：重調單段，完成後回鎖，合併一律手動 ---- */
+window.mvUnlockSeg = i => {
+  if (MV.busy) return;
+  const s = MV.segs[i];
+  if (!s || !s.locked) return;
+  s.locked = false; s.vstate = "adjust"; s._manual = true; MV.manual = true; MV.cur = i;
+  if (MV.phase === "merged") MV.phase = "videos";     // 舊成片已過時，改完要重新手動合併
+  mvStat(`段 ${i + 1} 已解鎖 — 可「重新生成劇情」（改任務/提示後）或直接「重新生成影片」；完成後會自動回鎖，但不會自動合併`);
+  mvDraw();
+};
+window.mvRelockSeg = i => {
+  if (MV.busy) return;
+  const s = MV.segs[i];
+  if (!s || !s.video) return;
+  s.locked = true; s.vstate = "done"; s._manual = false;
+  mvStat(`段 ${i + 1} 已重新鎖定（維持原影片）`);
+  mvDraw(); mvSave(false);
+};
+window.mvManualRerun = i => { if (!MV.busy) mvVideoStep(i); };   // 走 mvVideoStep 以沿用上一段實際 last-frame 銜接
 
 /* ---- 第③階段：合併 ---- */
 $("#mvMergeBtn").onclick = () => mvMerge();
