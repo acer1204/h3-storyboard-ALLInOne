@@ -3,6 +3,7 @@ __pycache__/
 TEST IMAGE/
 *.png
 *.jpg
+!docs/img/*.png
 results*.json
 jobs.json
 thumbs.json
@@ -18,4 +19,5 @@ uploads/
 lessons/
 prompts/
 loras/
+movies/
 *.bak
