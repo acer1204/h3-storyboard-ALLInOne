@@ -3073,7 +3073,7 @@ function rvEnabled(kind){ return !!rvCfg().modes[kind]; }
 
 const REVIEW_SYS = `你是影片生成品質審查員。你會看到：任務模式、劇情 prompt、輸入圖（首/尾幀或參考圖）、從生成影片抽出的幀（各標時間戳）、以及演算法偵測到的轉場候選點（type=cut 瞬間硬切、type=wipe 劃像轉場、type=transition 漸進轉場）。
 評估三件事：
-1. hard_cut：候選點附近的幀裡，是否存在「前後畫面不連貫的場景切換」。包含三種都算硬切：(a) 相鄰兩幀完全跳變（人物姿勢/場景瞬間更換）；(b) wipe 劃像轉場——畫面出現一條移動的分界線，新鏡頭把舊鏡頭逐漸「擦」掉（比對候選點前後 1 秒的幀：若前後是兩個不同構圖的鏡頭即成立）；(c) dissolve/fade 溶接淡變——前後兩幀構圖完全不同且中間有疊影或黑/白場。注意：首尾幀背景不同是設計預期；鏡頭快速移動、穿越物體、光線變化造成的漸進差異不算硬切。沒有演算法候選點時 hard_cut 一律 false。
+1. hard_cut：對每個候選點，先比較「候選點前約 1 秒」與「候選點後約 1 秒」的兩張幀：若兩張是不同構圖/不同景別/人物位置姿態無法連續銜接 → hard_cut=true，不必再看中間。三種都算硬切：(a) 相鄰兩幀完全跳變；(b) wipe 劃像轉場——畫面被一條移動分界線逐步取代（type=wipe 候選幾乎必為此類）；(c) dissolve/fade 溶接淡變。嚴禁用「推進/拉近/構圖收緊/運鏡」解釋候選點——除非候選點前後每一張密集幀都顯示同一鏡頭的連續演變（同一主體、同一背景、逐格小幅變化）。判定 hard_cut=true 時：score 不得高於 5，且 problems 第一條必須寫明切換時間點與類型。注意：首尾幀背景不同是設計預期；鏡頭快速移動、穿越物體、光線變化造成的漸進差異不算硬切。沒有演算法候選點時 hard_cut 一律 false。
 2. story_match（0-10）：幀序列是否大致按劇情發展（人物、動作、順序、場景）。
 3. ending_ok：最後幾幀是否自然收束（FL2VA/L2VA 需接近目標尾幀構圖，且不是最後一刻突然跳到位）。
 行動決策：
@@ -3118,7 +3118,7 @@ async function reviewVideo(videoRel, ctx, onStep){
   step("視覺審查中…");
   const nin = (ctx.inputs || []).length;
   const txt = "任務模式: " + (ctx.mode || "fl2va").toUpperCase() + "\n"
-    + "演算法轉場候選: " + (scan.cuts.length ? scan.cuts.map(c => c.t + "s(" + (c.type || "cut") + " 分數" + c.score + ")").join(", ") : "無") + "\n"
+    + "演算法轉場候選: " + (scan.cuts.length ? scan.cuts.map(c => c.t + "s(" + (c.type || "cut") + " 分數" + c.score + (c.conc != null ? " 集中度" + c.conc : "") + ")").join(", ") : "無") + "\n"
     + "影片長度: " + scan.duration + "s\n\n劇情 prompt:\n" + String(ctx.content || "").slice(0, 4000) + "\n\n"
     + "圖片順序: 前 " + nin + " 張是輸入圖（" + (ctx.inputLabel || "首幀/尾幀") + "），"
     + "之後是影片抽幀，時間戳依序為: " + scan.frames.map(f => f.t + "s").join(", ");
@@ -3136,8 +3136,21 @@ async function reviewVideo(videoRel, ctx, onStep){
     catch(e2){ v = {action: "accept", score: 6, hard_cut: false, problems: ["審查輸出無法解析，放行"]}; }
   }
   if (!scan.cuts.length) v.hard_cut = false;          // 雙重同意：演算法沒候選就不採信視覺喊硬切
+  // 高確信候選：wipe 特徵（跨距大＋變化集中成移動邊界）或超大瞬間跳變，演算法幾乎不會誤判，
+  // 視覺審查不得用「推進/構圖收緊」之類的說法否決（實測模型會這樣幫真硬切開脫）
+  const certain = scan.cuts.find(c =>
+    (c.type === "wipe" && c.score >= 0.2 && (c.conc == null || c.conc >= 0.85)) ||
+    (c.type === "cut" && c.src === "gray" && c.score >= 0.25));   // 灰階逐格尺度限定；ffmpeg scene 分數量綱不同，仍交視覺仲裁
+  if (certain && !v.hard_cut){
+    v.hard_cut = true; v.cut_time = certain.t;
+    (v.problems = v.problems || []).unshift(
+      `演算法確認 ${certain.t}s ${certain.type === "wipe" ? "wipe 劃像轉場" : "瞬間硬切"}`
+      + `（分數 ${certain.score}${certain.conc != null ? "、集中度 " + certain.conc : ""}）— 視覺審查判為運鏡，已強制改列硬切`);
+    if (v.action === "accept") v.action = "reroll";
+  }
   if (!["accept", "reroll", "revise"].includes(v.action)) v.action = "accept";
   v.score = typeof v.score === "number" ? v.score : 5;
+  if (v.hard_cut && v.score > 5) v.score = 5;          // 一致性：有硬切不可能高分（避免 8/10＋硬切的矛盾輸出）
   // 及格分數門檻：分數達標且無確認硬切＝通過（不重跑）；反之未達標一定不通過
   const pass = rvCfg().passScore;
   if (!v.hard_cut && v.score >= pass) v.action = "accept";

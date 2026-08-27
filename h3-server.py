@@ -231,7 +231,7 @@ def _gray_transition_scan(ff, ap, fps=8.0, w=64, h=36):
     # 瞬間硬切：單格差異遠高於本片自身的運動基準
     for i, v in enumerate(d1):
         if v > max(0.12, 5.0 * med1) and v == max(d1[max(0, i - 2):i + 3]):
-            events.append({"t": round((i + 1) / fps, 2), "score": round(v, 3), "type": "cut"})
+            events.append({"t": round((i + 1) / fps, 2), "score": round(v, 3), "type": "cut", "src": "gray"})
     # 漸進轉場：跨距差異連續超標的區段（wipe / dissolve / fade）
     thr = max(0.15, 3.0 * medg)
     i = 0
@@ -257,7 +257,8 @@ def _gray_transition_scan(ff, ap, fps=8.0, w=64, h=36):
                 tot = sum(cols) or 1
                 conc = max(conc, sum(sorted(cols, reverse=True)[:max(1, w // 5)]) / tot)
             events.append({"t": round(tc, 2), "score": round(dg[k], 3),
-                           "type": "wipe" if conc > 0.5 else "transition"})
+                           "type": "wipe" if conc > 0.5 else "transition",
+                           "conc": round(conc, 2), "src": "gray"})
         i = j
     return events
 
@@ -289,13 +290,13 @@ def review_scan(rel, scene_thr=0.30, max_frames=24):
             cur_t = float(mt.group(1))
         ms = re.search(r"lavfi\.scene_score=([0-9.]+)", line)
         if ms and cur_t is not None:
-            cuts.append({"t": round(cur_t, 2), "score": round(float(ms.group(1)), 3), "type": "cut"})
+            cuts.append({"t": round(cur_t, 2), "score": round(float(ms.group(1)), 3), "type": "cut", "src": "scene"})
             cur_t = None
-    # 1b) 灰階序列分析：補抓 scene 偵測漏掉的低單格分數瞬切與 wipe/dissolve
+    # 1b) 灰階序列分析：瞬切與 wipe/dissolve。以灰階候選為主（尺度一致、帶 wipe 特徵，
+    # 供前端高確信強制規則使用）；scene 候選只在附近沒有灰階候選時補進來。
     try:
-        for ev in _gray_transition_scan(ff, ap):
-            if not any(abs(c["t"] - ev["t"]) < 0.7 for c in cuts):
-                cuts.append(ev)
+        gray = _gray_transition_scan(ff, ap)
+        cuts = gray + [c for c in cuts if not any(abs(g["t"] - c["t"]) < 0.7 for g in gray)]
     except Exception:
         pass
     cuts = sorted(cuts, key=lambda c: c["t"])[:8]
