@@ -699,8 +699,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   </div>
 
   <div class="panel">
-    <h3>System prompt <span class="modetag" id="spmodetag"></span></h3>
-    <p class="ph">四種模式（I2VA / FL2VA / L2VA / REF2VA）<b>共用同一份</b> system prompt——內建版本已涵蓋四種模式的格式規則。
+    <h3>生成影片 System Prompt（全部類型） <span class="modetag" id="spmodetag"></span></h3>
+    <p class="ph">I2VA / FL2VA / L2VA / REF2VA 四種模式<b>共用同一份</b>生成用 system prompt——內建版本已涵蓋四種模式的格式規則。
       左邊勾選哪一組，產生時就用哪一組。編輯內容會自動保存到伺服器。</p>
     <div class="splayout">
       <div class="splist">
@@ -722,6 +722,17 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
         <textarea id="sp" spellcheck="false"></textarea>
         <p class="status" id="pstat"></p>
       </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>評分審查影片 System Prompt</h3>
+    <p class="ph">「硬切檢測與自動重試」的視覺審查員指令——審查影片時帶入，定義評分規則與 accept / reroll / revise 的決策。
+      修改時務必保留「只輸出 JSON」的要求與欄位格式，否則審查結果無法解析。編輯即自動保存（存於本機瀏覽器）。</p>
+    <textarea id="rvSp" spellcheck="false" style="width:100%;min-height:260px;resize:vertical"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="ghost mini" id="rvSpReset">↩ 還原預設</button>
+      <span class="status" id="rvSpStat" style="margin:0"></span>
     </div>
   </div>
 
@@ -3070,6 +3081,31 @@ const REVIEW_SYS = `你是影片生成品質審查員。你會看到：任務模
 只輸出 JSON，不要其他文字：
 {"action":"accept|reroll|revise","score":0-10,"hard_cut":true|false,"cut_time":數字或null,"story_match":0-10,"ending_ok":true|false,"problems":["…"],"revise_instruction":"…"}`;
 
+/* 評分審查 system prompt：可在系統設定編輯，存於本機；空/未存 → 用內建 REVIEW_SYS */
+const RVSP_KEY = "h3.reviewsys.v1";
+function getReviewSys(){ return store.get(RVSP_KEY) || REVIEW_SYS; }
+(function rvSpInit(){
+  const ta = $("#rvSp");
+  if (!ta) return;
+  ta.value = getReviewSys();
+  let t;
+  ta.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      const v = ta.value.trim();
+      if (v && v !== REVIEW_SYS) store.set(RVSP_KEY, v);
+      else store.del(RVSP_KEY);
+      $("#rvSpStat").textContent = "已保存";
+      setTimeout(() => $("#rvSpStat").textContent = "", 1200);
+    }, 600);
+  });
+  $("#rvSpReset").onclick = () => {
+    store.del(RVSP_KEY); ta.value = REVIEW_SYS;
+    $("#rvSpStat").textContent = "已還原預設";
+    setTimeout(() => $("#rvSpStat").textContent = "", 1500);
+  };
+})();
+
 async function reviewVideo(videoRel, ctx, onStep){
   const step = onStep || (() => {});
   step("抽幀＋場景掃描…");
@@ -3087,7 +3123,7 @@ async function reviewVideo(videoRel, ctx, onStep){
   const content = [{type: "text", text: txt}];
   (ctx.inputs || []).forEach(u => content.push({type: "image_url", image_url: {url: u}}));
   scan.frames.forEach(f => content.push({type: "image_url", image_url: {url: "data:image/jpeg;base64," + f.b64}}));
-  const j = await chat([{role: "system", content: REVIEW_SYS}, {role: "user", content}], {temp: 0.2, max: 800});
+  const j = await chat([{role: "system", content: getReviewSys()}, {role: "user", content}], {temp: 0.2, max: 800});
   let raw = (j.choices[0].message.content || "").trim()
     .replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/```\s*$/, "");
   let v;
