@@ -1588,6 +1588,31 @@ class H(SimpleHTTPRequestHandler):
                                    "media_root": CONFIG["media_root"], "workflow_dir": CONFIG["workflow_dir"],
                                    "gpu_free_mb": CONFIG["gpu_free_mb"]})
 
+        if p == "/api/workflows/upload":
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            name = os.path.basename(str(body.get("name") or "workflow.json"))
+            name = re.sub(r"[^\w\-. 一-鿿぀-ヿ]", "_", name)
+            if not name.lower().endswith(".json"):
+                name += ".json"
+            data = body.get("data")
+            if not isinstance(data, (dict, list)):
+                return self.send_json({"error": "data 必須是 JSON 物件"}, 400)
+            wd = CONFIG["workflow_dir"]
+            try:
+                os.makedirs(wd, exist_ok=True)
+                fp = os.path.join(wd, name)
+                if os.path.exists(fp):   # 不覆蓋既有檔，加時間戳
+                    name = "%s_%s.json" % (name[:-5], time.strftime("%m%d_%H%M%S"))
+                    fp = os.path.join(wd, name)
+                with open(fp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=1)
+            except OSError as e:
+                return self.send_json({"error": "寫入失敗: %s" % e}, 500)
+            return self.send_json({"ok": True, "name": name})
+
         if p == "/api/workflows/select":
             try:
                 body = self.read_json()

@@ -63,7 +63,7 @@ body{background:var(--bg);color:var(--fg);
   transition:border-color .12s}
 .slot:hover{border-color:var(--acc)}
 .slot.has{border-style:solid}
-.slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
 .slot .sno{position:absolute;top:6px;left:8px;background:var(--btn);color:var(--btnfg);border-radius:12px;
   padding:0 9px;font-size:11px;font-weight:700;z-index:2;opacity:.92}
 .slot .sx{position:absolute;top:5px;right:5px;width:24px;height:24px;border:0;border-radius:50%;cursor:pointer;
@@ -75,6 +75,9 @@ body{background:var(--bg);color:var(--fg);
 .slot.has .slab{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.8)}
 .slot.locked{cursor:not-allowed;opacity:.55;border-style:solid;background:var(--code)}
 .slot.locked:hover{border-color:var(--line)}
+.slot.has{cursor:grab}
+.slot.dragging{opacity:.35}
+.slot.dragover{border-color:var(--acc);border-style:solid;box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 40%,transparent)}
 .nav.sub.on{font-weight:600}
 .app.collapsed #histsub{display:none}
 .nav.busy .cnt{color:var(--acc)}
@@ -325,19 +328,28 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   .col.zh{border-left:0;border-top:1px solid var(--line2);padding-left:0;padding-top:16px}}
 @media(max-width:860px){
   .app{grid-template-columns:1fr}
+  .app.collapsed{grid-template-columns:1fr}
   .side{position:fixed;bottom:0;left:0;right:0;top:auto;height:auto;width:100%;
-    flex-direction:row;padding:6px 8px;border-right:0;border-top:1px solid var(--line);
+    flex-direction:row;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    padding:6px 8px;border-right:0;border-top:1px solid var(--line);
     z-index:50;backdrop-filter:blur(8px)}
-  .brand,.sidefoot{display:none}
-  .nav{flex-direction:column;gap:4px;margin:0;padding:7px 4px;font-size:11px;text-align:center;
-    justify-content:center;border-radius:10px}
+  .sidetop,.brand,.sidefoot{display:none}
+  #histsub{display:contents}
+  .nav,.app.collapsed .nav{flex:0 0 auto;flex-direction:column;gap:4px;margin:0;padding:7px 6px;font-size:11px;text-align:center;
+    justify-content:center;border-radius:10px;min-width:56px}
+  .app.collapsed .nav span:not(.cnt){display:inline}
+  .nav.sub{padding:7px 6px;font-size:10.5px;min-width:52px}
   .nav svg{width:19px;height:19px}
   .nav .cnt{margin-left:0;position:absolute;top:3px;right:calc(50% - 26px);font-size:10px}
-  .main{padding:26px 18px 92px}
+  .main{padding:22px 14px 96px}
   .vh{font-size:20px}
   .card{grid-template-columns:1fr;gap:14px}
   .card>.thumb{max-width:180px}
   .modal{padding:12px}.sheet{padding:18px}
+  .slotgrid{grid-template-columns:repeat(auto-fill,minmax(104px,1fr))}
+  .panel{padding:14px}
+  #mvCards{grid-template-columns:repeat(auto-fill,minmax(170px,1fr)) !important}
+  pre{font-size:12px}
 }
 </style>
 
@@ -578,20 +590,11 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <select id="wfSelect" style="min-width:280px"><option value="">（載入中…）</option></select>
       <button class="ghost mini" id="wfUse">使用此工作流</button>
       <button class="ghost mini" id="wfRescan">重新掃描</button>
+      <button class="ghost mini" id="wfUpload">⬆ 上傳工作流檔</button>
+      <input type="file" id="wfFile" accept=".json,application/json" style="display:none">
       <span class="status" id="wfSelStat" style="margin:0"></span>
     </div>
-  </div>
-
-  <div class="panel">
-    <h3>ComfyUI 整合</h3>
-    <p class="ph">「送 ComfyUI 生成」用的工作流模板 = ComfyUI 最近一次成功的生成。
-      模板兩種來源：在 ComfyUI 成功跑一次後按「用最近一次成功生成更新模板」，或直接上傳 workflow JSON——<b>Export (API)</b> 檔＝可執行的節點圖；<b>Save</b> 存的 UI 格式檔＝掛為內嵌 metadata（影片內嵌工作流靠它）。兩種都吃，先匯 API 再匯 UI 最完整。之後每次送出只替換圖片（全解析度原圖）、三個欄位與影片秒數。</p>
-    <div class="row">
-      <button class="ghost mini" id="ctpl">用最近一次成功生成更新模板</button>
-      <button class="ghost mini" id="ctplfilebtn">從 workflow.json 匯入模板</button>
-      <input type="file" id="ctplfile" accept=".json,application/json" style="display:none">
-      <span class="status" id="ctplstat" style="margin:0"></span>
-    </div>
+    <p class="hint" style="margin-top:8px">上傳的 .json 會存進工作流資料夾並出現在下拉清單；Save 存檔或 Export (API) 格式都支援，選用時自動轉成可執行模板（不需要先在 ComfyUI 跑過）。</p>
   </div>
 
   <div class="panel">
@@ -1500,6 +1503,42 @@ function clearSlots(){
   S.forEach(s => { if (s && s.url){ try{ URL.revokeObjectURL(s.url); }catch(e){} } });
   SLOTS_BY[curMode()] = [];
 }
+
+/* ===== 拖曳重排：把 from 格的圖插到 to 格位置（保持其餘相對順序、自動壓實空格） ===== */
+function reorderCompact(arr, from, to){
+  const items = arr.map((s, i) => s ? {s, i} : null).filter(Boolean);
+  const fi = items.findIndex(x => x.i === from);
+  if (fi < 0) return arr;
+  const [moved] = items.splice(fi, 1);
+  let ti = items.findIndex(x => x.i >= to);
+  if (ti < 0) ti = items.length;
+  items.splice(ti, 0, moved);
+  const out = [];
+  items.forEach((x, k) => out[k] = x.s);
+  return out;
+}
+function wireSlotDrag(gridSel, getArr, apply){
+  document.querySelectorAll(gridSel + " .slot[data-i], " + gridSel + " .slot[data-mi]").forEach(el => {
+    const idx = +(el.dataset.i !== undefined ? el.dataset.i : el.dataset.mi);
+    const filled = el.classList.contains("has");
+    el.draggable = filled;
+    el.ondragstart = e => {
+      if (!filled){ e.preventDefault(); return; }
+      e.dataTransfer.setData("text/plain", String(idx));
+      e.dataTransfer.effectAllowed = "move";
+      el.classList.add("dragging");
+    };
+    el.ondragend = () => el.classList.remove("dragging");
+    el.ondragover = e => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; el.classList.add("dragover"); };
+    el.ondragleave = () => el.classList.remove("dragover");
+    el.ondrop = e => {
+      e.preventDefault(); el.classList.remove("dragover");
+      const from = parseInt(e.dataTransfer.getData("text/plain"), 10);
+      if (isNaN(from) || from === idx) return;
+      apply(reorderCompact(getArr(), from, idx));
+    };
+  });
+}
 function renderSlots(){
   const zone = $("#slotzone");
   const inf = MODE_INFO[curMode()];
@@ -1529,6 +1568,7 @@ function renderSlots(){
     setSlot(+b.dataset.x, null);
     renderSlots();
   });
+  wireSlotDrag("#slotgrid", () => slotsArr(), out => { SLOTS_BY[curMode()] = out; renderSlots(); });
   const filled = S.filter(Boolean).length;
   const need = MODE_INFO[curMode()].min;
   $("#slotAdd").disabled = filled < need;
@@ -2642,33 +2682,23 @@ window.comfyFromItem = (k, btnEl) => {
              ...comfyFields(it.content, it.mode)}, stat, btnEl);
 };
 
-$("#ctplfilebtn").onclick = () => $("#ctplfile").click();
-$("#ctplfile").onchange = async e => {
+/* 上傳工作流 .json → 存進工作流資料夾，下拉即可選用 */
+$("#wfUpload").onclick = () => $("#wfFile").click();
+$("#wfFile").onchange = async e => {
   const f = e.target.files && e.target.files[0]; e.target.value = "";
   if (!f) return;
-  $("#ctplstat").textContent = "匯入中…";
-  let body;
-  try{ body = JSON.parse(await f.text()); }
-  catch(err){ $("#ctplstat").textContent = "失敗：檔案不是合法 JSON"; return; }
+  $("#wfSelStat").textContent = "上傳中…";
+  let data;
+  try{ data = JSON.parse(await f.text()); }
+  catch(err){ $("#wfSelStat").textContent = "失敗：檔案不是合法 JSON"; return; }
   try{
-    const r = await fetch(CAPI + "/template", {method:"POST",
-      headers:{"Content-Type":"application/json"}, body: JSON.stringify(body)});
-    const j = await r.json();
-    $("#ctplstat").textContent = j.error
-      ? "失敗：" + j.error
-      : (j.ui_meta_attached
-        ? `已把 ${f.name} 掛為內嵌 metadata ✓ — 之後的影片會重新內嵌工作流`
-        : `已匯入 ${f.name}（${j.nodes} 節點，mode ${j.mode}${j.ui_meta_carried ? "，UI metadata 已從舊模板沿用 ✓" : (j.has_ui_meta ? "" : "，無 UI metadata — 再上傳一份 ComfyUI「Save」存的 UI 格式 workflow.json 即可補上（影片才會內嵌工作流）")}）`);
-  }catch(err){ $("#ctplstat").textContent = "失敗：" + err.message; }
-};
-$("#ctpl").onclick = async () => {
-  $("#ctplstat").textContent = "更新中…";
-  try{
-    const j = await (await fetch(CAPI + "/refresh", {method:"POST"})).json();
-    $("#ctplstat").textContent = j.error
-      ? "失敗：" + j.error
-      : `已更新（${j.nodes} 節點，來源輸出 ${j.output || "?"}）`;
-  }catch(e){ $("#ctplstat").textContent = "失敗：" + e.message; }
+    const j = await (await fetch("/api/workflows/upload", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: f.name, data})})).json();
+    if (j.error) throw new Error(j.error);
+    $("#wfSelStat").textContent = `已上傳 ${j.name} ✓ — 從下拉選擇後按「使用此工作流」`;
+    loadWorkflows();
+  }catch(err){ $("#wfSelStat").textContent = "上傳失敗：" + err.message; }
 };
 
 /* ================= 媒體庫 ================= */
@@ -2979,6 +3009,7 @@ function mvRender(){
     if (MV.slots[i]){ try{ URL.revokeObjectURL(MV.slots[i].url); }catch(err){} }
     MV.slots[i] = null; mvSyncSegs(); mvDraw();
   });
+  wireSlotDrag("#mvGrid", () => MV.slots, out => { if (!MV.busy) mvApplyReorder(out); });
   const n = mvImgs().length;
   $("#mvCount").textContent = n ? `已放 ${n} 張 → ${Math.max(0, n - 1)} 個片段` : "";
 }
@@ -3003,6 +3034,27 @@ function mvSyncSegs(){
   while (MV.segs.length < n) MV.segs.push(mvNewSeg());
   MV.segs.length = n;
   if (MV.cur >= n) MV.cur = Math.max(0, n - 1);
+}
+
+/* ---- 拖曳重排套用：配對（i, i+1）變了的片段，劇情/影片作廢須重生成（提示保留） ---- */
+function mvApplyReorder(newSlots){
+  const oldPairs = MV.segs.map((s, i) => [MV.slots[i], MV.slots[i + 1]]);
+  MV.slots = newSlots;
+  mvSyncSegs();
+  let cleared = 0;
+  MV.segs.forEach((s, i) => {
+    const a = MV.slots[i], b = MV.slots[i + 1];
+    const op = oldPairs[i] || [];
+    if (op[0] !== a || op[1] !== b){
+      if (s.content || s.video) cleared++;
+      Object.assign(s, mvNewSeg(), {hint: s.hint});   // 保留該段提示，其餘重置
+    }
+  });
+  MV.waiting = -1;
+  if (MV.phase === "merged"){ MV.phase = "prompts"; MV.final = ""; }
+  if (cleared) mvStat(`已重排順序 — ${cleared} 個片段因圖片配對改變，需重新生成劇情`);
+  else mvStat("已重排順序");
+  mvDraw(); mvSave(true);
 }
 
 /* ---- 主畫面重繪 ---- */
