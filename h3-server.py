@@ -181,9 +181,73 @@ def find_ffmpeg():
     return None
 
 
+def _gray_transition_scan(ff, ap, fps=8.0, w=64, h=36):
+    """硬切檢測第一層 B：低解析灰階幀序列分析。
+    逐格差異峰值抓「瞬間硬切」；跨距（~0.9 秒）差異峰值抓「漸進轉場」——
+    wipe（劃像）逐格只動一條窄帶、單格分數永遠不高，ffmpeg scene 偵測抓不到，
+    但跨距前後兩張圖幾乎完全不同；再用直欄集中度分辨 wipe 與 dissolve。
+    回傳 [{t, score, type: cut|wipe|transition}]。"""
+    import subprocess as sp
+    import statistics
+    r = sp.run([ff, "-i", ap, "-vf", "fps=%g,scale=%d:%d,format=gray" % (fps, w, h),
+                "-f", "rawvideo", "-"], capture_output=True, timeout=180)
+    raw = r.stdout
+    fsz = w * h
+    n = len(raw) // fsz
+    if n < 6:
+        return []
+    fr = [raw[i * fsz:(i + 1) * fsz] for i in range(n)]
+
+    def mad(a, b):
+        s = 0
+        for x, y in zip(a, b):
+            s += x - y if x >= y else y - x
+        return s / (fsz * 255.0)
+
+    d1 = [mad(fr[i], fr[i + 1]) for i in range(n - 1)]
+    gap = max(2, int(fps * 0.9))
+    dg = [mad(fr[i], fr[i + gap]) for i in range(n - gap)]
+    med1 = statistics.median(d1) or 1e-6
+    medg = statistics.median(dg) or 1e-6
+    events = []
+    # 瞬間硬切：單格差異遠高於本片自身的運動基準
+    for i, v in enumerate(d1):
+        if v > max(0.12, 5.0 * med1) and v == max(d1[max(0, i - 2):i + 3]):
+            events.append({"t": round((i + 1) / fps, 2), "score": round(v, 3), "type": "cut"})
+    # 漸進轉場：跨距差異連續超標的區段（wipe / dissolve / fade）
+    thr = max(0.15, 3.0 * medg)
+    i = 0
+    while i < len(dg):
+        if dg[i] <= thr:
+            i += 1
+            continue
+        j = i
+        while j < len(dg) and dg[j] > thr:
+            j += 1
+        k = max(range(i, j), key=lambda x: dg[x])
+        tc = (k + gap / 2.0) / fps
+        if not any(abs(e["t"] - tc) < gap / fps for e in events):
+            conc = 0.0        # 變化量集中在少數直欄 = 有移動分界線 = wipe
+            for s in range(k, min(k + gap, n - 1)):
+                cols = [0] * w
+                a, b = fr[s], fr[s + 1]
+                for y in range(h):
+                    row = y * w
+                    for x in range(w):
+                        d = a[row + x] - b[row + x]
+                        cols[x] += d if d >= 0 else -d
+                tot = sum(cols) or 1
+                conc = max(conc, sum(sorted(cols, reverse=True)[:max(1, w // 5)]) / tot)
+            events.append({"t": round(tc, 2), "score": round(dg[k], 3),
+                           "type": "wipe" if conc > 0.5 else "transition"})
+        i = j
+    return events
+
+
 def review_scan(rel, scene_thr=0.30, max_frames=24):
-    """硬切檢測第一層：ffmpeg 場景偵測（候選切點）＋抽幀（等距＋切點附近密集＋最後一幀）。
-    回傳 {duration, cuts:[{t,score}], frames:[{t,b64}]}；b64 為 448px JPEG。"""
+    """硬切檢測第一層：ffmpeg 場景偵測＋灰階幀序列分析（瞬切與 wipe/dissolve 漸進轉場），
+    再抽幀（等距＋候選點附近密集＋最後一幀）。
+    回傳 {duration, cuts:[{t,score,type}], frames:[{t,b64}]}；b64 為 448px JPEG。"""
     import subprocess as sp
     import base64 as b64mod
     ff = find_ffmpeg()
@@ -207,9 +271,16 @@ def review_scan(rel, scene_thr=0.30, max_frames=24):
             cur_t = float(mt.group(1))
         ms = re.search(r"lavfi\.scene_score=([0-9.]+)", line)
         if ms and cur_t is not None:
-            cuts.append({"t": round(cur_t, 2), "score": round(float(ms.group(1)), 3)})
+            cuts.append({"t": round(cur_t, 2), "score": round(float(ms.group(1)), 3), "type": "cut"})
             cur_t = None
-    cuts = cuts[:8]
+    # 1b) 灰階序列分析：補抓 scene 偵測漏掉的低單格分數瞬切與 wipe/dissolve
+    try:
+        for ev in _gray_transition_scan(ff, ap):
+            if not any(abs(c["t"] - ev["t"]) < 0.7 for c in cuts):
+                cuts.append(ev)
+    except Exception:
+        pass
+    cuts = sorted(cuts, key=lambda c: c["t"])[:8]
     # 2) 抽幀時間點：等距 10 張 + 每個切點 ±0.6/±0.2 秒 + 最後一幀
     times = set()
     n_even = 10
@@ -217,7 +288,9 @@ def review_scan(rel, scene_thr=0.30, max_frames=24):
         for k in range(n_even):
             times.add(round(0.2 + (dur - 0.4) * k / max(1, n_even - 1), 2))
         for c in cuts:
-            for dt in (-0.6, -0.2, 0.2, 0.6):
+            # 漸進轉場（wipe/dissolve）跨度約 1 秒，要取更寬的前後幀才能看出前後不連貫
+            offs = (-0.6, -0.2, 0.2, 0.6) if c.get("type") == "cut" else (-1.1, -0.6, 0.2, 0.6, 1.1)
+            for dt in offs:
                 t = c["t"] + dt
                 if 0 <= t <= dur - 0.05:
                     times.add(round(t, 2))
@@ -2401,7 +2474,14 @@ def main():
         print("uploads: backfill skipped: %s" % e)
     if not os.path.exists(os.path.join(ROOT, PAGE)):
         print("[ERROR] 找不到 %s" % PAGE); sys.exit(1)
-    srv = ThreadingHTTPServer((a.bind, a.port), H)
+    # 禁用 SO_REUSEADDR：Windows 上它允許同一個 port 被多個實例同時綁定，
+    # 舊碼實例會偷接請求造成「改了程式卻沒生效」的假象——寧可第二個實例直接啟動失敗。
+    ThreadingHTTPServer.allow_reuse_address = False
+    try:
+        srv = ThreadingHTTPServer((a.bind, a.port), H)
+    except OSError:
+        print("[ERROR] port %d 已被占用——已有另一個 h3-server 在跑，請先關掉它再啟動。" % a.port)
+        sys.exit(1)
     print("  服務位址 : http://%s:%d" % (a.bind, a.port))
     print("  llama    : %s" % CONFIG["llama_url"])
     print("  ComfyUI  : %s" % CONFIG["comfy_url"])
