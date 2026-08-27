@@ -1741,6 +1741,8 @@ class H(SimpleHTTPRequestHandler):
                        "state": str(s.get("state") or "")[:10],
                        "locked": bool(s.get("locked")),
                        "video": str(s.get("video") or "")[:300],
+                       "ai_score": s.get("ai_score"),
+                       "ai_problems": [str(x)[:300] for x in (s.get("ai_problems") or [])][:8],
                    } for s in segs[:12]]}
             with LOCK:
                 old = {}
@@ -1924,6 +1926,46 @@ class H(SimpleHTTPRequestHandler):
                         pass
                 save_index(rows)
             return self.send_json({"ok": True, "marked": done})
+
+        m = re.match(r"^/api/history/([^/]+)/review$", p)
+        if m:
+            rid = unquote(m.group(1))
+            if not ID_RE.match(rid):
+                return self.send_json({"error": "bad id"}, 400)
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            try:
+                score = max(0, min(10, float(body.get("score"))))
+            except Exception:
+                return self.send_json({"error": "score 必須是 0-10 的數字"}, 400)
+            rv = {"score": round(score, 1),
+                  "action": str(body.get("action") or "")[:10],
+                  "hard_cut": bool(body.get("hard_cut")),
+                  "cut_time": body.get("cut_time"),
+                  "story_match": body.get("story_match"),
+                  "ending_ok": bool(body.get("ending_ok", True)),
+                  "problems": [str(x)[:300] for x in (body.get("problems") or [])][:8],
+                  "tries": int(body.get("tries") or 0),
+                  "video": str(body.get("video") or "")[:300],
+                  "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
+            fp = os.path.join(HIST, rid + ".json")
+            if not os.path.exists(fp):
+                return self.send_json({"error": "not found"}, 404)
+            with LOCK:
+                with open(fp, encoding="utf-8") as f:
+                    rec = json.load(f)
+                rec["review"] = rv
+                with open(fp, "w", encoding="utf-8") as f:
+                    json.dump(rec, f, ensure_ascii=False, indent=1)
+                rows = load_index()
+                for row in rows:
+                    if row.get("id") == rid:
+                        row["ai_score"] = rv["score"]
+                        break
+                save_index(rows)
+            return self.send_json({"ok": True})
 
         m = re.match(r"^/api/history/([^/]+)/rate$", p)
         if m:

@@ -653,6 +653,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <label class="small"><input type="checkbox" id="rvMovie"> FL2VA Movie</label>
     </div>
     <div class="grid" style="margin-top:10px">
+      <div><label>及格分數（AI 評分 ≥ 此值且無確認硬切＝通過，不重跑）</label>
+        <input type="number" id="rvPass" min="0" max="10" step="0.5" value="7"></div>
       <div><label>每段自動重試上限</label><input type="number" id="rvRetry" min="0" max="10" value="5"></div>
       <div><label>FL2VA Movie 執行模式</label><select id="rvMovieAuto">
         <option value="0" selected>手動（每段完成後等待指示）</option>
@@ -2253,7 +2255,7 @@ let hist=[];
 async function record(it){
   if (!onServer) return;
   try{
-    await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},
+    const _r = await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({image:it.name,dur:"20 seconds",state:it.state,
         elapsed_s:parseFloat(it.elapsed),usage:it.usage,
         errors:it.v?it.v.E:[],warnings:it.v?it.v.W:[],
@@ -2262,6 +2264,7 @@ async function record(it){
         attempts:it.attempts||1,shots:it.shots||1,
         ...(() => { const c = it.ctx || genContext(); return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
                      lora: c.lora ? {...c.lora, report:(it.lora||{}).report||null, issues:(it.lora||{}).issues||[]} : null}; })()})});
+    try{ const saved = await _r.json(); if (saved && saved.id) it.rec_id = saved.id; }catch(e){}
     loadHist();
     refreshHabits(true);
     if ($("#navUploads")) fetch(UAPI).then(r=>r.json()).then(u=>{ uploads = u; $("#navUploads").textContent = u.length || ""; }).catch(()=>{});
@@ -2308,7 +2311,7 @@ function renderHist(){
       ${r.nmore ? `<span class="vcount" style="top:26px">+${r.nmore} 圖</span>` : ""}
       <img src="/api/thumb/${r.id}.jpg" loading="lazy" onerror="this.style.visibility='hidden'">
       <div class="cap">${esc(g.image)}</div>
-      <div class="cap t">${esc(r.ts.slice(5,16))} · ${esc(r.dur)}</div></button>`;
+      <div class="cap t">${esc(r.ts.slice(5,16))} · ${esc(r.dur)}${r.ai_score != null ? ` · <b style="color:${r.ai_score >= 7 ? "var(--ok)" : "var(--warn)"}">AI ${r.ai_score}</b>` : ""}</div></button>`;
   }).join("") || '<span class="hint">還沒有紀錄</span>';
 }
 let hSel = new Set();
@@ -2412,6 +2415,15 @@ window.openRec = async id => {
         </div>
       </div>
     </div>
+    ${r.review ? `<div class="panel" style="margin:14px 0;padding:14px">
+      <b>🤖 AI 影片審查</b>
+      <span class="badge ${r.review.score >= 7 ? "" : "fail"}" style="margin-left:8px">${r.review.score}/10</span>
+      <span class="hint">行動：${esc(r.review.action || "")}${r.review.tries ? ` · 重試 ${r.review.tries} 次` : ""}
+        · 劇情符合 ${r.review.story_match != null ? r.review.story_match + "/10" : "?"}
+        · 結尾收束 ${r.review.ending_ok ? "✔" : "✘"}
+        ${r.review.hard_cut ? ` · <span style="color:var(--acc)">硬切 @${r.review.cut_time}s</span>` : " · 無硬切"}</span>
+      ${(r.review.problems || []).length ? `<ul class="issues" style="margin-top:6px">${r.review.problems.map(x => `<li class="w">${esc(x)}</li>`).join("")}</ul>` : ""}
+    </div>` : ""}
     ${iss?`<ul class="issues">${iss}</ul>`:""}
     ${loraBadges(r.lora)}${bilingual(r.content, r.zh, r.zh?"":"當時未開啟翻譯")}
     <details><summary>原始輸出</summary><pre>${esc(r.raw)}</pre></details>`;
@@ -2714,7 +2726,7 @@ window.comfyFromRec = (id, btnEl) => {
     for (let n = 1; n <= (rec.nmore || 0); n++){
       try{ inputs.push(await urlToDataURL("/api/extra/" + id + "/" + n + ".jpg")); }catch(e){}
     }
-    comfyRunReviewed(payload, {mode, content: rec.content, inputs,
+    comfyRunReviewed(payload, {mode, content: rec.content, inputs, recId: id,
       inputLabel: mode === "ref2va" ? "參考圖" : "首幀/尾幀"}, stat, btnEl);
   });
 };
@@ -2726,7 +2738,7 @@ window.comfyFromItem = (k, btnEl) => {
                    mode, content: it.content, more: it.more || [],
                    ...comfyFields(it.content, mode)};
   if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
-  comfyRunReviewed(payload, {mode, content: it.content, inputs: it.imgs || [it.full],
+  comfyRunReviewed(payload, {mode, content: it.content, inputs: it.imgs || [it.full], recId: it.rec_id,
     inputLabel: mode === "ref2va" ? "參考圖" : (mode === "fl2va" ? "首幀、尾幀" : mode === "l2va" ? "目標尾幀" : "首幀"),
     reviseFn: async (instruction) => {
       $("#mode").value = mode;
@@ -3043,7 +3055,7 @@ const RV_KEY = "h3.review.v1";
 function rvCfg(){
   let c = {};
   try{ c = JSON.parse(store.get(RV_KEY) || "{}"); }catch(e){}
-  const out = Object.assign({modes: {}, retry: 5, movieAuto: false}, c);
+  const out = Object.assign({modes: {}, retry: 5, passScore: 7, movieAuto: false}, c);
   out.modes = out.modes || {};
   return out;
 }
@@ -3051,6 +3063,7 @@ function rvPersist(){
   const c = {modes: {i2va: $("#rvI2va").checked, fl2va: $("#rvFl2va").checked, l2va: $("#rvL2va").checked,
                      ref2va: $("#rvRef2va").checked, movie: $("#rvMovie").checked},
              retry: Math.max(0, Math.min(10, parseInt($("#rvRetry").value) || 5)),
+             passScore: Math.max(0, Math.min(10, parseFloat($("#rvPass").value) || 7)),
              movieAuto: $("#rvMovieAuto").value === "1"};
   store.set(RV_KEY, JSON.stringify(c));
   $("#rvStat").textContent = "已保存";
@@ -3062,8 +3075,9 @@ function rvPersist(){
   $("#rvL2va").checked = !!c.modes.l2va; $("#rvRef2va").checked = !!c.modes.ref2va;
   $("#rvMovie").checked = !!c.modes.movie;
   $("#rvRetry").value = c.retry;
+  $("#rvPass").value = c.passScore;
   $("#rvMovieAuto").value = c.movieAuto ? "1" : "0";
-  ["rvI2va","rvFl2va","rvL2va","rvRef2va","rvMovie","rvRetry","rvMovieAuto"].forEach(id => {
+  ["rvI2va","rvFl2va","rvL2va","rvRef2va","rvMovie","rvRetry","rvPass","rvMovieAuto"].forEach(id => {
     $("#" + id).addEventListener("change", rvPersist);
   });
 })();
@@ -3134,11 +3148,27 @@ async function reviewVideo(videoRel, ctx, onStep){
     catch(e2){ v = {action: "accept", score: 6, hard_cut: false, problems: ["審查輸出無法解析，放行"]}; }
   }
   if (!scan.cuts.length) v.hard_cut = false;          // 雙重同意：演算法沒候選就不採信視覺喊硬切
-  if (v.hard_cut && v.action === "accept") v.action = "reroll";
   if (!["accept", "reroll", "revise"].includes(v.action)) v.action = "accept";
   v.score = typeof v.score === "number" ? v.score : 5;
+  // 及格分數門檻：分數達標且無確認硬切＝通過（不重跑）；反之未達標一定不通過
+  const pass = rvCfg().passScore;
+  if (!v.hard_cut && v.score >= pass) v.action = "accept";
+  else if (v.action === "accept") v.action = "reroll";
   v.scan = {cuts: scan.cuts, duration: scan.duration};
   return v;
+}
+
+/* 把最終審查結果寫進歷史紀錄（歷史卡片顯示 AI 評分與依據） */
+async function rvPersistToRec(recId, v, tries){
+  if (!recId || !v) return;
+  try{
+    await fetch("/api/history/" + recId + "/review", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({score: v.score, action: v.action, hard_cut: v.hard_cut,
+        cut_time: v.cut_time, story_match: v.story_match, ending_ok: v.ending_ok,
+        problems: v.problems || [], tries: tries || 0, video: v._video || ""})});
+    loadHist();
+  }catch(e){}
 }
 
 /* 單發送單（run 頁 / 歷史）用的審查重試流程 */
@@ -3163,10 +3193,17 @@ async function comfyRunReviewed(payload, ctx, statusEl, btn){
     try{ v = await reviewVideo(mp4, ctx, set); }
     catch(e){ set("審查失敗（" + e.message + "），視為通過"); }
     if (!v){ set("完成 ✔ " + mp4); break; }
-    if (!best || v.score > best.score) best = {video: mp4, score: v.score};
-    if (v.action === "accept"){ set("完成 ✔ 審查 " + v.score + "/10 · " + mp4); break; }
+    v._video = mp4;
+    if (!best || v.score > best.score) best = {video: mp4, score: v.score, v};
+    if (v.action === "accept"){
+      set("完成 ✔ 審查 " + v.score + "/10（及格線 " + rvCfg().passScore + "）· " + mp4);
+      rvPersistToRec(ctx.recId, v, tries);
+      break;
+    }
     if (tries >= rvCfg().retry){
-      set("重試達上限，保留最佳（" + best.score + "/10）：" + best.video); break;
+      set("重試達上限，保留最佳（" + best.score + "/10）：" + best.video);
+      rvPersistToRec(ctx.recId, best.v, tries);
+      break;
     }
     tries++;
     set("審查未過（" + v.score + "/10）→ " + (v.action === "revise" ? "修劇情" : "換 seed")
@@ -3296,6 +3333,9 @@ function mvDraw(){
         ${b ? `<img src="${b.url}" style="width:48%;aspect-ratio:3/4;object-fit:cover;border-radius:7px">` : ""}
       </div>
       <div style="margin-top:6px;font-size:13px"><b>段 ${i + 1}</b>（${i + 1}→${i + 2}）　${st}　${vlink}</div>
+      ${(() => { const sc = s.verdict ? s.verdict.score : s.ai_score;
+        const pb = s.verdict ? (s.verdict.problems || []) : (s.ai_problems || []);
+        return sc != null ? `<div class="hint" style="margin-top:4px">🤖 AI ${sc}/10${pb.length ? `　<span title="${esc(pb.join("；"))}">依據▾</span>` : ""}</div>` : ""; })()}
       ${act}</div>`;
   }).join("");
   /* 片段分頁 */
@@ -3339,7 +3379,9 @@ async function mvSave(withImages){
   const body = {id: MV.id, title: ($("#mvHint").value.trim() || "FL2VA Movie").slice(0, 60),
     global_hint: $("#mvHint").value.trim(), status: MV.phase, final: MV.final,
     segments: MV.segs.map(s => ({hint: s.hint, content: s.content, zh: s.zh,
-                                 state: s.state, locked: s.locked, video: s.video}))};
+                                 state: s.state, locked: s.locked, video: s.video,
+                                 ai_score: s.verdict ? s.verdict.score : (s.ai_score != null ? s.ai_score : null),
+                                 ai_problems: s.verdict ? (s.verdict.problems || []) : (s.ai_problems || [])}))};
   if (withImages) body.images = await Promise.all(mvImgs().map(async s => (await encode(s.file)).b64));
   try{
     const r = await (await fetch("/api/movies", {method: "POST",
