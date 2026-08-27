@@ -571,11 +571,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
   <div class="panel">
     <h3>連線與資源</h3>
-    <div class="grid">
-      <div style="grid-column:1/-1"><label>ComfyUI 位址</label><input type="text" id="comfyUrl" placeholder="http://127.0.0.1:8188"></div>
-    </div>
+    <p class="ph">ComfyUI／llama-server 位址設定在伺服器端的 <code>config.json</code>（與 h3-server.py 同資料夾）。改檔存檔即生效，不需重啟、也不會顯示在網頁上。</p>
     <div class="row" style="margin-top:12px">
-      <button class="ghost mini" id="comfySaveUrl">保存位址</button>
       <button class="mini" id="comfyFreeBtn">🧹 強制 Free ComfyUI（卸載模型釋放 VRAM）</button>
       <span class="status" id="comfyFreeStat" style="margin:0"></span>
     </div>
@@ -585,10 +582,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
   <div class="panel">
     <h3>📁 工作流</h3>
-    <p class="ph">從工作流資料夾選一個 .json 直接載入為模板（Export (API) 或 Save 格式都可）。</p>
-    <div class="grid">
-      <div style="grid-column:1/-1"><label>工作流資料夾</label><input type="text" id="wfDir"></div>
-    </div>
+    <p class="ph">從工作流資料夾（<code>config.json</code> 的 <code>workflow_dir</code>）選一個 .json 直接載入為模板（Export (API) 或 Save 格式都可）。</p>
     <div class="row" style="margin-top:10px">
       <select id="wfSelect" style="min-width:280px"><option value="">（載入中…）</option></select>
       <button class="ghost mini" id="wfUse">使用此工作流</button>
@@ -624,8 +618,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <select id="mode" style="display:none">
       <option value="i2va">i2va</option><option value="fl2va">fl2va</option>
       <option value="l2va">l2va</option><option value="ref2va">ref2va</option></select>
+    <p class="ph">llama-server 位址設定在伺服器端的 <code>config.json</code>（<code>llama_url</code>），改檔存檔即生效；網頁不顯示、也不需填寫。</p>
     <div class="grid">
-      <div style="grid-column:1/-1"><label>llama-server 位址</label><input type="text" id="server"></div>
       <div><label>中文翻譯</label><select id="tr">
         <option value="1" selected>開啟</option><option value="0">關閉</option></select></div>
       <div><label>自動重試次數</label><input type="text" id="retry" value="3"></div>
@@ -794,7 +788,7 @@ const onServer = location.protocol.startsWith("http");
 
 /* ================= 設定持久化 ================= */
 const SKEY="h3.settings.v1", SPKEY="h3.sp.v1", VKEY="h3.view.v1";
-const FIELDS={server:"#server",tr:"#tr",
+const FIELDS={tr:"#tr",
               retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
               wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa"};
 const store={
@@ -802,21 +796,13 @@ const store={
   set(k,v){try{localStorage.setItem(k,v);return true}catch(e){return false}},
   del(k){try{localStorage.removeItem(k)}catch(e){}}
 };
-/* llama-server address: URL ?server= > saved setting > server-side config.json > local default */
-let DEFAULT_SERVER = "http://127.0.0.1:8080";
+/* 伺服器位址不在前端：llama/ComfyUI 位址一律存在伺服器端 config.json，由後端代理連線 */
 (() => {
-  $("#server").value = DEFAULT_SERVER;
   const q = new URLSearchParams(location.search);
   for (const [k,el] of Object.entries(FIELDS)) if (q.has(k)) $(el).value = q.get(k);
   let saved={}; try{ saved = JSON.parse(store.get(SKEY)||"{}") }catch(e){}
   for (const [k,el] of Object.entries(FIELDS))
     if (saved[k] != null && saved[k] !== "") $(el).value = saved[k];
-  // pull the deployment default from the server; only apply if the user has not set one themselves
-  if (location.protocol.startsWith("http") && !q.has("server") && !(saved.server)){
-    fetch("/api/config").then(r => r.json()).then(c => {
-      if (c && c.llama_url){ DEFAULT_SERVER = c.llama_url; if (!$("#server").value || $("#server").value === "http://127.0.0.1:8080") { $("#server").value = c.llama_url; saveSettings(); } }
-    }).catch(() => {});
-  }
 })();
 function saveSettings(){
   const o={}; for (const [k,el] of Object.entries(FIELDS)) o[k]=$(el).value;
@@ -1457,7 +1443,8 @@ function setDot(state, text){
 $("#ping").onclick = async () => {
   $("#conn").textContent = "連線中…"; setDot("", "檢查中…");
   try{
-    const j = await (await fetch($("#server").value.replace(/\/$/,"") + "/props")).json();
+    const j = await (await fetch("/api/llama/props")).json();
+    if (j.error) throw new Error(j.error);
     $("#conn").innerHTML = `<span style="color:var(--ok)">連線正常</span> · ${j.model_ftype||"?"}`
       + ` · vision ${j.modalities?.vision?"on":"off"} · ctx ${j.default_generation_settings?.n_ctx||"?"}`;
     setDot("up", "llama-server 正常");
@@ -1702,7 +1689,8 @@ function trim(c){
 }
 
 async function chat(messages, opts={}){
-  const r = await fetch($("#server").value.replace(/\/$/,"") + "/v1/chat/completions", {
+  /* llama 位址只存在伺服器端 config.json；瀏覽器一律走同源代理 */
+  const r = await fetch("/api/llama/chat", {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({model:"qwen3.8-27b", messages, stream:false,
       temperature: opts.temp ?? 1.0,
@@ -2191,11 +2179,6 @@ window.setShots = (k, n) => { if (items[k]) { items[k].shots = n; render(); } };
 /* ================= ComfyUI 連線 / 工作流 / 強制 free ================= */
 async function loadComfyCfg(){
   if (!onServer) return;
-  try{
-    const c = await (await fetch("/api/config")).json();
-    if (!$("#comfyUrl").value) $("#comfyUrl").value = c.comfy_url || "";
-    $("#wfDir").value = c.workflow_dir || "";
-  }catch(e){}
   refreshGpu(); loadWorkflows();
 }
 async function refreshGpu(){
@@ -2207,15 +2190,6 @@ async function refreshGpu(){
   }catch(e){ $("#gpuNow").textContent = "無法讀取"; }
 }
 $("#gpuRefresh").onclick = refreshGpu;
-$("#comfySaveUrl").onclick = async () => {
-  $("#comfyFreeStat").textContent = "保存中…";
-  try{
-    await fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({comfy_url: $("#comfyUrl").value.trim(), workflow_dir: $("#wfDir").value.trim()})});
-    $("#comfyFreeStat").textContent = "已保存 ✔";
-    loadWorkflows();
-  }catch(e){ $("#comfyFreeStat").textContent = "保存失敗：" + e.message; }
-};
 $("#comfyFreeBtn").onclick = async () => {
   $("#comfyFreeStat").textContent = "釋放中…";
   try{

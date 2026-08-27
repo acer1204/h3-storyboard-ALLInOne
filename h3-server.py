@@ -111,6 +111,24 @@ CONFIG = load_config()
 MEDIA_ROOT = CONFIG["media_root"]
 COMFY_URL = CONFIG["comfy_url"].rstrip("/")
 
+_CFG_MTIME = [os.path.getmtime(CONFIG_PATH) if os.path.exists(CONFIG_PATH) else 0]
+
+
+def maybe_reload_config():
+    """config.json 被手動編輯後自動重讀（以 mtime 判斷），改位址不需要重啟伺服器。"""
+    global CONFIG, MEDIA_ROOT, COMFY_URL
+    try:
+        mt = os.path.getmtime(CONFIG_PATH)
+    except OSError:
+        return
+    if mt == _CFG_MTIME[0]:
+        return
+    _CFG_MTIME[0] = mt
+    CONFIG = load_config()
+    MEDIA_ROOT = CONFIG["media_root"]
+    COMFY_URL = CONFIG["comfy_url"].rstrip("/")
+    print("[config] config.json 已重新載入")
+
 
 def save_config():
     """Persist the editable keys to config.json and refresh module globals."""
@@ -675,7 +693,18 @@ def media_list(limit=1000):
 
 def comfy_api(path, data=None, timeout=30):
     import urllib.request as _u
+    maybe_reload_config()
     req = _u.Request(COMFY_URL + path,
+                     data=json.dumps(data).encode() if data is not None else None,
+                     headers={"Content-Type": "application/json"} if data is not None else {})
+    return json.loads(_u.urlopen(req, timeout=timeout).read() or b"{}")
+
+
+def llama_api(path, data=None, timeout=600):
+    """代理 llama-server：位址只存在 config.json，瀏覽器一律走同源 /api/llama/*。"""
+    import urllib.request as _u
+    base = CONFIG["llama_url"].rstrip("/")
+    req = _u.Request(base + path,
                      data=json.dumps(data).encode() if data is not None else None,
                      headers={"Content-Type": "application/json"} if data is not None else {})
     return json.loads(_u.urlopen(req, timeout=timeout).read() or b"{}")
@@ -1634,11 +1663,16 @@ class H(SimpleHTTPRequestHandler):
             return
 
         if p == "/api/config":
-            return self.send_json({"llama_url": CONFIG["llama_url"], "comfy_url": CONFIG["comfy_url"],
-                                   "media_root": CONFIG["media_root"],
-                                   "workflow_dir": CONFIG["workflow_dir"],
-                                   "workflow_current": CONFIG.get("workflow_current", ""),
+            # 位址類設定不再送到瀏覽器——一律存在伺服器端 config.json，前端只走同源代理
+            return self.send_json({"workflow_current": CONFIG.get("workflow_current", ""),
                                    "gpu_free_mb": CONFIG.get("gpu_free_mb", 4000)})
+
+        if p == "/api/llama/props":
+            maybe_reload_config()
+            try:
+                return self.send_json(llama_api("/props", timeout=10))
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 502)
 
         if p == "/api/gpu":
             return self.send_json(gpu_mem())
@@ -1699,6 +1733,19 @@ class H(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         p = urlparse(self.path).path
+
+        if p == "/api/llama/chat":
+            maybe_reload_config()
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            if not isinstance(body, dict):
+                return self.send_json({"error": "empty body"}, 400)
+            try:
+                return self.send_json(llama_api("/v1/chat/completions", body, timeout=600))
+            except Exception as e:
+                return self.send_json({"error": "llama-server: %s" % e}, 502)
 
         if p == "/api/config":
             try:
