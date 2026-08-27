@@ -1736,10 +1736,12 @@ class H(SimpleHTTPRequestHandler):
                    "up_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                    "title": str(body.get("title") or "")[:80],
                    "global_hint": str(body.get("global_hint") or "")[:2000],
+                   "global_plan": str(body.get("global_plan") or "")[:4000],
                    "status": str(body.get("status") or "editing")[:20],
                    "final": str(body.get("final") or "")[:300],
                    "segments": [{
                        "hint": str(s.get("hint") or "")[:2000],
+                       "beat": str(s.get("beat") or "")[:1000],
                        "content": str(s.get("content") or ""),
                        "zh": str(s.get("zh") or ""),
                        "state": str(s.get("state") or "")[:10],

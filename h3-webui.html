@@ -465,9 +465,12 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <button class="ghost mini" id="mvClear">清空格子</button>
       <span class="status" id="mvCount" style="margin:0"></span>
     </div>
-    <div class="note-wrap" style="margin-top:10px"><label>整體劇情提示（選填，套用到每一段）</label>
+    <div class="note-wrap" style="margin-top:10px"><label>整體劇情提示（選填，作為整體劇情規劃的方向）</label>
       <textarea class="note" id="mvHint" rows="2" placeholder="例如：她從清晨出門到夜晚回家的一天"></textarea></div>
+    <div class="note-wrap" style="margin-top:10px"><label>整體劇情（自動規劃：模型先看完全部分鏡圖寫出貫穿全片的劇情，再分配給各片段；可編輯）</label>
+      <textarea class="note" id="mvPlan" rows="4" placeholder="尚未規劃 — 按「整體劇情規劃」單獨生成，或按「片段劇情生成」時自動先規劃"></textarea></div>
     <div class="row" style="margin-top:12px">
+      <button class="ghost" id="mvPlanBtn" disabled>🧠 整體劇情規劃</button>
       <button id="mvGenPrompts" disabled>✍️ 片段劇情生成</button>
       <button id="mvGenVideos" disabled>🎬 劇情影片處理</button>
       <button id="mvMergeBtn" disabled>🧵 合併片段並顯示</button>
@@ -3314,6 +3317,7 @@ function mvDraw(){
   const n = MV.segs.length;
   const allPrompted = n > 0 && MV.segs.every(s => s.content);
   const allLocked   = n > 0 && MV.segs.every(s => s.locked && s.video);
+  $("#mvPlanBtn").disabled = MV.busy || mvImgs().length < 2;
   $("#mvGenPrompts").disabled = MV.busy || n < 1;
   $("#mvGenPrompts").textContent = MV.segs.some(s => s.content) ? "✍️ 補生成缺少的片段劇情" : "✍️ 片段劇情生成";
   $("#mvGenVideos").disabled = MV.busy || !allPrompted || allLocked;
@@ -3361,7 +3365,10 @@ function mvDraw(){
     const ro = s.locked ? "disabled" : "";
     $("#mvSegHint").textContent = s.locked ? "（已確認，唯讀）" : "";
     $("#mvSegBody").innerHTML = `
-      <div class="note-wrap"><label>此片段的補充提示（選填，與整體提示一起送）</label>
+      <div class="note-wrap"><label>🧭 本段任務（整體劇情規劃分配；可編輯）</label>
+        <textarea class="note" id="mvSegBeatTxt" rows="2" ${ro}
+          placeholder="整體劇情規劃後自動填入；也可自己指定這一段要演什麼、說什麼">${esc(s.beat || "")}</textarea></div>
+      <div class="note-wrap" style="margin-top:8px"><label>此片段的補充提示（選填）</label>
         <textarea class="note" id="mvSegHintTxt" rows="2" ${ro}
           placeholder="例如：這一段她坐下來開始塗防曬">${esc(s.hint || "")}</textarea></div>
       <div class="row" style="margin:8px 0">
@@ -3373,6 +3380,8 @@ function mvDraw(){
       ${s.content ? bilingual(s.content, s.zh, null) : '<p class="hint">尚未生成劇情</p>'}`;
     const txt = $("#mvSegHintTxt");
     if (txt) txt.oninput = () => { s.hint = txt.value; };
+    const bt = $("#mvSegBeatTxt");
+    if (bt) bt.oninput = () => { s.beat = bt.value; };
     const rg = $("#mvSegRegen");
     if (rg) rg.onclick = () => { if (!MV.busy && !s.locked) mvGenSeg(MV.cur, true); };
   }
@@ -3388,8 +3397,9 @@ function mvDraw(){
 async function mvSave(withImages){
   if (!onServer || !MV.segs.length) return;
   const body = {id: MV.id, title: ($("#mvHint").value.trim() || "FL2VA Movie").slice(0, 60),
-    global_hint: $("#mvHint").value.trim(), status: MV.phase, final: MV.final,
-    segments: MV.segs.map(s => ({hint: s.hint, content: s.content, zh: s.zh,
+    global_hint: $("#mvHint").value.trim(), global_plan: $("#mvPlan").value.trim(),
+    status: MV.phase, final: MV.final,
+    segments: MV.segs.map(s => ({hint: s.hint, beat: s.beat || "", content: s.content, zh: s.zh,
                                  state: s.state, locked: s.locked, video: s.video,
                                  ai_score: s.verdict ? s.verdict.score : (s.ai_score != null ? s.ai_score : null),
                                  ai_problems: s.verdict ? (s.verdict.problems || []) : (s.ai_problems || [])}))};
@@ -3441,6 +3451,7 @@ window.mvLoad = async id => {
     }
     MV.id = id; MV.final = rec.final || ""; MV.phase = rec.status || "edit";
     $("#mvHint").value = rec.global_hint || "";
+    $("#mvPlan").value = rec.global_plan || "";
     MV.segs = (rec.segments || []).map(s => ({...mvNewSeg(), ...s,
       vstate: (s.locked && s.video) ? "done" : "", v: null}));
     mvSyncSegs(); MV.cur = 0; MV.waiting = -1;
@@ -3448,6 +3459,56 @@ window.mvLoad = async id => {
     mvStat("已載入專案（可繼續操作或查看）");
   }catch(e){ alert("載入失敗：" + e.message); }
 };
+
+/* ---- 第⓪階段：整體劇情規劃（先總後分，保證跨段連貫） ---- */
+const MV_PLAN_SYS = `你是連續分鏡影片的編劇統籌。使用者會給你 N 張按順序的分鏡圖（第 i 段影片＝第 i 張到第 i+1 張的過渡）與整體提示。
+你要先看完全部圖片，寫出一條貫穿全片、有起承轉合的整體劇情，再把它分配到每一段。
+要求：
+- 劇情必須連貫：後一段承接前一段結束時的狀態與情緒；對話要像同一部片的連續對白，可以跨段呼應，不要每段各說各話
+- 用繁體中文輸出；台詞計畫直接寫日文台詞
+- 只輸出 JSON，不要其他文字：
+{"story":"整體劇情概要（150字內）","segments":[{"beat":"這一段的具體行為與情緒（50字內）","dialogue":"這一段的日文台詞計畫（0~2句，須承接前段對話）"}]}
+- segments 數量必須等於 N-1，依序對應`;
+async function mvPlanStory(){
+  const files = mvImgs();
+  if (files.length < 2) return false;
+  MV.busy = true; mvDraw();
+  try{
+    $("#mode").value = "fl2va";
+    const encs = [];
+    for (const sl of files) encs.push(sl._enc || (sl._enc = await encode(sl.file)));
+    await gpuPrepare("llama", t => mvStat("整體規劃：" + t));
+    mvStat("整體劇情規劃中…（一次看完全部分鏡圖）");
+    const n = files.length;
+    const content = [{type: "text", text:
+      `共 ${n} 張分鏡圖（依順序），將產生 ${n - 1} 段影片，每段 ${WF_DUR} 秒。`
+      + `整體提示：${$("#mvHint").value.trim() || "（無，自由發揮）"}`}]
+      .concat(encs.map(e => ({type: "image_url", image_url: {url: e.b64}})));
+    const j = await chat([{role: "system", content: MV_PLAN_SYS}, {role: "user", content}],
+                         {temp: 0.8, max: 1600});
+    let raw = (j.choices[0].message.content || "").trim()
+      .replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/```\s*$/, "");
+    let plan;
+    try{ plan = JSON.parse(raw); }
+    catch(e){
+      const m = raw.match(/\{[\s\S]*\}/);
+      try{ plan = JSON.parse(m ? m[0] : ""); }catch(e2){ plan = {story: raw.slice(0, 400), segments: []}; }
+    }
+    $("#mvPlan").value = plan.story || "";
+    mvSyncSegs();
+    (plan.segments || []).slice(0, MV.segs.length).forEach((p, i) => {
+      MV.segs[i].beat = [p.beat, p.dialogue ? "台詞計畫：" + p.dialogue : ""].filter(Boolean).join("；");
+    });
+    mvStat("整體劇情已規劃 ✔ — 可編輯整體劇情或各段任務後再生成片段劇情");
+    MV.busy = false; mvDraw(); mvSave(false);
+    return true;
+  }catch(e){
+    mvStat("整體規劃失敗：" + e.message);
+    MV.busy = false; mvDraw();
+    return false;
+  }
+}
+$("#mvPlanBtn").onclick = () => { if (!MV.busy) mvPlanStory(); };
 
 /* ---- 第①階段：片段劇情生成 ---- */
 async function mvGenSeg(i, force){
@@ -3462,7 +3523,13 @@ async function mvGenSeg(i, force){
   s._encA = eA; s._encB = eB;
   await gpuPrepare("llama", t => mvStat(`段 ${i + 1}：${t}`));
   mvStat(`段 ${i + 1}：生成劇情中…`);
-  const note = [s.hint, $("#mvHint").value.trim()].filter(Boolean).join("；");
+  const parts = [];
+  const planStory = $("#mvPlan").value.trim();
+  if (planStory) parts.push(`整體劇情概要（全片共 ${MV.segs.length} 段，需前後連貫）：${planStory}`);
+  if (s.beat) parts.push(`本段（第 ${i + 1}/${MV.segs.length} 段）在整體劇情中的任務：${s.beat}`);
+  if (s.hint) parts.push(s.hint);
+  if (!planStory && $("#mvHint").value.trim()) parts.push($("#mvHint").value.trim());
+  const note = parts.join("\n");
   const best = await genWithRetry([eA.b64, eB.b64], userNote({mode: "fl2va", note, w: eA.w, h: eA.h}),
                                   20, 1, t => mvStat(`段 ${i + 1}：${t}`));
   s.content = best.content; s.v = best.v; s.attempts = best.attempts;
@@ -3482,6 +3549,11 @@ $("#mvGenPrompts").onclick = async () => {
   if (MV.busy) return;
   mvSyncSegs();
   if (!MV.segs.length) return;
+  // 先總後分：還沒有整體劇情就先自動規劃一次
+  if (!$("#mvPlan").value.trim()){
+    const ok = await mvPlanStory();
+    if (!ok) mvStat("整體規劃失敗 — 改用各段獨立生成（連貫性較差）");
+  }
   MV.busy = true; MV.phase = "prompts"; mvDraw();
   try{
     await mvSave(true);                        // 第一次保存含圖片
@@ -3575,7 +3647,11 @@ async function mvReviseSeg(i, instruction){
   const eB = s._encB || await encode(MV.slots[i + 1].file);
   await gpuPrepare("llama", t => mvStat(`段 ${i + 1}：${t}`));
   mvStat(`段 ${i + 1}：依審查意見修劇情…`);
-  const note = [s.hint, $("#mvHint").value.trim()].filter(Boolean).join("；");
+  const _p = [];
+  if ($("#mvPlan").value.trim()) _p.push(`整體劇情概要：${$("#mvPlan").value.trim()}`);
+  if (s.beat) _p.push(`本段任務：${s.beat}`);
+  if (s.hint) _p.push(s.hint);
+  const note = _p.join("\n");
   const prev = {content: s.content, issues: ["[影片審查意見] " + instruction]};
   const g = await genOnce([eA.b64, eB.b64], userNote({mode: "fl2va", note, w: eA.w, h: eA.h}), 20, 1, prev);
   s.content = g.content; s.v = g.v;
