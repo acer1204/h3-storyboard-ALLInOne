@@ -1,0 +1,623 @@
+{
+ "2568": {
+  "inputs": {
+   "frame_rate": [
+    "1512:1669",
+    0
+   ],
+   "codec": "H.264",
+   "container": "MP4",
+   "bit_depth": "Auto",
+   "quality": 20,
+   "log_level": "Standard",
+   "pingpong": false,
+   "save_metadata": true,
+   "filename_prefix": "video/%date:yyyy-MM-dd%/%date:hhmmss%",
+   "save_output": true,
+   "pass_frames": false,
+   "crop_to_audio": true,
+   "audio_codec": true,
+   "audio_bitrate": "192k",
+   "save_first_frame": true,
+   "save_last_frame": true,
+   "images": [
+    "1512:2528",
+    0
+   ],
+   "audio": [
+    "1512:2675",
+    0
+   ]
+  },
+  "class_type": "DaSiWa_EnhancedVideoCombine",
+  "_meta": {
+   "title": "DaSiWa Enhanced Video Combine"
+  }
+ },
+ "2678": {
+  "inputs": {
+   "stack_data": "[{\"on\":true,\"lora\":\"MiniMax H3\\\\minimax_h3_turbo_v4_step600_ema_pruned_comfyui.safetensors\",\"str\":1,\"vs\":1,\"as\":1},{\"on\":true,\"lora\":\"MiniMax H3\\\\concept\\\\MysticXXX_MMH3-V2.safetensors\",\"str\":0.5,\"vs\":1,\"as\":1},{\"on\":true,\"lora\":\"None\",\"str\":1,\"vs\":1,\"as\":1},{\"on\":true,\"lora\":\"None\",\"str\":1,\"vs\":1,\"as\":1},{\"on\":true,\"lora\":\"None\",\"str\":1,\"vs\":1,\"as\":1},{\"on\":true,\"lora\":\"None\",\"str\":1,\"vs\":1,\"as\":1},{\"on\":true,\"lora\":\"None\",\"str\":1,\"vs\":1,\"as\":1}]",
+   "model_type": "Basic",
+   "model": [
+    "2693",
+    5
+   ],
+   "clip": [
+    "1512:2587",
+    0
+   ]
+  },
+  "class_type": "DaSiWa_LTX2LoraLoader",
+  "_meta": {
+   "title": "DaSiWa Advanced LoRA Loader"
+  }
+ },
+ "2693": {
+  "inputs": {
+   "mode": "I2VA",
+   "prompt": "",
+   "width": [
+    "1512:2531",
+    0
+   ],
+   "height": [
+    "1512:2531",
+    1
+   ],
+   "duration": 15,
+   "ref_image_size": "match",
+   "timeline_data": "{\"version\": 1, \"items\": [{\"id\": \"image-1787332221166-0\", \"enabled\": true, \"order\": 0, \"slot\": 0, \"start\": 0, \"duration\": 1, \"type\": \"image\", \"value\": \"example.png\", \"thumbnail\": null}], \"prompt_blocks\": [], \"builder_state\": {\"version\": 1, \"mode\": \"I2VA\", \"imd\": \"[Shot 1] 2D-animated, a medium shot, the subject shown in <Picture 1> lifts a hand in greeting. The camera holds a static shot.\", \"soundscape\": \"Soft room ambience with light fabric rustle.\", \"music\": \"N/A\", \"duration\": 5, \"ref\": {\"subject_defs\": [], \"summary_types\": [\"reference generation\"], \"summary_text\": \"\", \"retention\": [], \"style_line\": \"\", \"detail\": \"\", \"soundscape\": \"Natural outdoor park ambience continues throughout the scene, including a gentle breeze, faint birdsong, softly rustling leaves, and realistic footsteps on grass. The flying disc creates a subtle spinning whoosh after being thrown. The dog produces rhythmic paw impacts while running, followed by a soft bite sound when it catches the disc and a muted grass impact when it lands. No dialogue, barking, or human voices.\", \"music\": \"N/A\", \"subject_definitions\": \"<Subject 1> is the young girl in <Picture 2>, with long straight dark hair, a light straw hat, a sleeveless floral-patterned dress, and bare feet. <Subject 2> is the black-and-white dog in <Picture 3>, with a mostly white body, distinctive black patches, black ears, dark facial markings around the eyes, and a light-colored collar. <Object 1> is the translucent bright blue plastic flying disc in <Picture 1>, with a circular raised center and decorative details around its rim.\", \"summary\": \"[multi-reference character and object generation + continuous action] In a sunny green park, <Subject 1> throws <Object 1> forward from her hand. <Subject 2> notices the flying disc, turns toward it, runs after it, jumps into the air, catches the same disc cleanly with its mouth, and lands safely while holding it. The complete action unfolds as one clear and physically coherent 10-second sequence.\", \"retention_analysis\": \"<Subject 1> (appears in [Shot 1], [Shot 2], and [Shot 5]): fully_preserved - retain the girl's facial features, age, long straight dark hair, straw hat, floral-patterned sleeveless dress, bare feet, and natural body proportions exactly as shown in <Picture 2>.\\n<Subject 2> (appears in [Shot 1] through [Shot 5]): fully_preserved - retain the dog's body shape, size, black-and-white coat pattern, black ears, facial markings, collar, and realistic anatomy exactly as shown in <Picture 3>.\\n<Object 1> (appears in [Shot 1] through [Shot 5]): fully_preserved - retain the flying disc's translucent bright blue material, circular shape, raised center, thickness, and decorative rim exactly as shown in <Picture 1>.\\n<Picture 1>: fully_preserved - object and appearance reference for <Object 1>.\\n<Picture 2>: fully_preserved - identity, appearance, and wardrobe reference for <Subject 1>.\\n<Picture 3>: fully_preserved - identity, anatomy, coat-pattern, and collar reference for <Subject 2>.\", \"detailed_description\": \"The target video uses a natural cinematic live-action style with bright daylight, soft sunlight, realistic colors, smooth motion, and physically accurate movement. The scene takes place in a spacious green park with short grass and softly blurred trees in the background. The girl, dog, and flying disc remain visually consistent throughout the complete 10-second video. The same blue flying disc remains visible during the throw, chase, catch, and landing.\\n\\n[Shot 1] At 00:00.000, a stable medium-wide shot shows <Subject 1> standing on the left side of the frame in a sunny green park, holding <Object 1> horizontally in her right hand at waist height. <Subject 2> stands several steps away on the right side, relaxed but alert. The girl looks toward the open field, shifts her weight slightly backward, and prepares to throw. The dog looks at the girl and then focuses intently on the flying disc.\\n\\n[Shot 2] At 00:01.500, <Subject 1> swings her right arm forward and releases <Object 1> with a natural wrist motion. The bright blue flying disc spins rapidly and travels forward in a smooth, slightly rising arc. The girl's right arm continues into a natural throwing follow-through. <Subject 2>'s ears perk up, its head turns sharply to track the moving disc, and its body immediately transitions from standing into a run.\\n\\n[Shot 3] At 00:03.000, the camera smoothly pans and tracks alongside <Subject 2> as the dog runs energetically across the grass after <Object 1>. The dog's stride is fast, coordinated, and anatomically correct, with natural leg, ear, and tail movement. The dog keeps its eyes fixed on the spinning blue disc above and slightly ahead of it. The disc maintains a smooth and physically believable airborne trajectory.\\n\\n[Shot 4] At 00:06.000, <Object 1> begins to descend. <Subject 2> accelerates for two final strides and jumps powerfully upward. The camera shifts into a slightly lower tracking angle and uses subtle slow motion only around the catch. The dog opens its mouth at the correct moment and catches the rim of the same blue flying disc cleanly in mid-air. The disc remains firmly held between the dog's jaws without changing shape, size, or color.\\n\\n[Shot 5] At 00:08.000, <Subject 2> descends naturally and lands safely on the grass, with its front paws touching down first followed by its hind paws. The dog maintains balance while securely holding <Object 1> in its mouth, takes a few short steps forward to absorb the landing, and then stands proudly. <Subject 1> is visible in the background smiling and beginning to walk toward the dog. Hold this successful ending naturally until 00:10.000.\\n\\nCamera movement begins with a stable medium-wide composition showing the girl, dog, and throwing direction. Use a smooth lateral pan to follow the disc and dog, followed by a low-angle tracking shot during the chase. Keep the horizon stable. Use only subtle slow motion during the mid-air catch and return to normal speed for the landing.\\n\\nAvoid duplicate girls, duplicate dogs, duplicate flying discs, extra people, extra animals, disappearing objects, changing object colors, broken anatomy, extra limbs, deformed paws, unnatural running, floating, teleportation, reversed motion, object clipping, unsafe landing, sudden camera cuts, extreme zooming, camera shake, or background changes. The girl must release the disc before the dog begins chasing it. The dog must follow, catch, and retain exactly the same blue flying disc thrown by the girl.\"}}}",
+   "builder_state": "{\"version\": 1, \"mode\": \"I2VA\", \"imd\": \"[Shot 1] 2D-animated, a medium shot, the subject shown in <Picture 1> lifts a hand in greeting. The camera holds a static shot.\", \"soundscape\": \"Soft room ambience with light fabric rustle.\", \"music\": \"N/A\", \"duration\": 5, \"ref\": {\"subject_defs\": [], \"summary_types\": [\"reference generation\"], \"summary_text\": \"\", \"retention\": [], \"style_line\": \"\", \"detail\": \"\", \"soundscape\": \"Natural outdoor park ambience continues throughout the scene, including a gentle breeze, faint birdsong, softly rustling leaves, and realistic footsteps on grass. The flying disc creates a subtle spinning whoosh after being thrown. The dog produces rhythmic paw impacts while running, followed by a soft bite sound when it catches the disc and a muted grass impact when it lands. No dialogue, barking, or human voices.\", \"music\": \"N/A\", \"subject_definitions\": \"<Subject 1> is the young girl in <Picture 2>, with long straight dark hair, a light straw hat, a sleeveless floral-patterned dress, and bare feet. <Subject 2> is the black-and-white dog in <Picture 3>, with a mostly white body, distinctive black patches, black ears, dark facial markings around the eyes, and a light-colored collar. <Object 1> is the translucent bright blue plastic flying disc in <Picture 1>, with a circular raised center and decorative details around its rim.\", \"summary\": \"[multi-reference character and object generation + continuous action] In a sunny green park, <Subject 1> throws <Object 1> forward from her hand. <Subject 2> notices the flying disc, turns toward it, runs after it, jumps into the air, catches the same disc cleanly with its mouth, and lands safely while holding it. The complete action unfolds as one clear and physically coherent 10-second sequence.\", \"retention_analysis\": \"<Subject 1> (appears in [Shot 1], [Shot 2], and [Shot 5]): fully_preserved - retain the girl's facial features, age, long straight dark hair, straw hat, floral-patterned sleeveless dress, bare feet, and natural body proportions exactly as shown in <Picture 2>.\\n<Subject 2> (appears in [Shot 1] through [Shot 5]): fully_preserved - retain the dog's body shape, size, black-and-white coat pattern, black ears, facial markings, collar, and realistic anatomy exactly as shown in <Picture 3>.\\n<Object 1> (appears in [Shot 1] through [Shot 5]): fully_preserved - retain the flying disc's translucent bright blue material, circular shape, raised center, thickness, and decorative rim exactly as shown in <Picture 1>.\\n<Picture 1>: fully_preserved - object and appearance reference for <Object 1>.\\n<Picture 2>: fully_preserved - identity, appearance, and wardrobe reference for <Subject 1>.\\n<Picture 3>: fully_preserved - identity, anatomy, coat-pattern, and collar reference for <Subject 2>.\", \"detailed_description\": \"The target video uses a natural cinematic live-action style with bright daylight, soft sunlight, realistic colors, smooth motion, and physically accurate movement. The scene takes place in a spacious green park with short grass and softly blurred trees in the background. The girl, dog, and flying disc remain visually consistent throughout the complete 10-second video. The same blue flying disc remains visible during the throw, chase, catch, and landing.\\n\\n[Shot 1] At 00:00.000, a stable medium-wide shot shows <Subject 1> standing on the left side of the frame in a sunny green park, holding <Object 1> horizontally in her right hand at waist height. <Subject 2> stands several steps away on the right side, relaxed but alert. The girl looks toward the open field, shifts her weight slightly backward, and prepares to throw. The dog looks at the girl and then focuses intently on the flying disc.\\n\\n[Shot 2] At 00:01.500, <Subject 1> swings her right arm forward and releases <Object 1> with a natural wrist motion. The bright blue flying disc spins rapidly and travels forward in a smooth, slightly rising arc. The girl's right arm continues into a natural throwing follow-through. <Subject 2>'s ears perk up, its head turns sharply to track the moving disc, and its body immediately transitions from standing into a run.\\n\\n[Shot 3] At 00:03.000, the camera smoothly pans and tracks alongside <Subject 2> as the dog runs energetically across the grass after <Object 1>. The dog's stride is fast, coordinated, and anatomically correct, with natural leg, ear, and tail movement. The dog keeps its eyes fixed on the spinning blue disc above and slightly ahead of it. The disc maintains a smooth and physically believable airborne trajectory.\\n\\n[Shot 4] At 00:06.000, <Object 1> begins to descend. <Subject 2> accelerates for two final strides and jumps powerfully upward. The camera shifts into a slightly lower tracking angle and uses subtle slow motion only around the catch. The dog opens its mouth at the correct moment and catches the rim of the same blue flying disc cleanly in mid-air. The disc remains firmly held between the dog's jaws without changing shape, size, or color.\\n\\n[Shot 5] At 00:08.000, <Subject 2> descends naturally and lands safely on the grass, with its front paws touching down first followed by its hind paws. The dog maintains balance while securely holding <Object 1> in its mouth, takes a few short steps forward to absorb the landing, and then stands proudly. <Subject 1> is visible in the background smiling and beginning to walk toward the dog. Hold this successful ending naturally until 00:10.000.\\n\\nCamera movement begins with a stable medium-wide composition showing the girl, dog, and throwing direction. Use a smooth lateral pan to follow the disc and dog, followed by a low-angle tracking shot during the chase. Keep the horizon stable. Use only subtle slow motion during the mid-air catch and return to normal speed for the landing.\\n\\nAvoid duplicate girls, duplicate dogs, duplicate flying discs, extra people, extra animals, disappearing objects, changing object colors, broken anatomy, extra limbs, deformed paws, unnatural running, floating, teleportation, reversed motion, object clipping, unsafe landing, sudden camera cuts, extreme zooming, camera shake, or background changes. The girl must release the disc before the dog begins chasing it. The dog must follow, catch, and retain exactly the same blue flying disc thrown by the girl.\"}}",
+   "fl2va_model": [
+    "1512:1536",
+    0
+   ],
+   "ref2va_model": [
+    "1512:2663",
+    0
+   ]
+  },
+  "class_type": "MiniMaxH3Director",
+  "_meta": {
+   "title": "MiniMax H3 Director"
+  }
+ },
+ "1512:2528": {
+  "inputs": {
+   "denoise": true,
+   "denoise_quality": "Ultra",
+   "deblur": true,
+   "deblur_quality": "Ultra",
+   "upscale": "VSR",
+   "upscale_quality": "Ultra",
+   "resize_type": "Scale",
+   "scale": 2,
+   "megapixels": 2,
+   "width": 1920,
+   "height": 1080,
+   "divisible_by": "32",
+   "ratio_preset": "16:9",
+   "resize_method": "Center Crop (Fill)",
+   "device_id": 0,
+   "empty_cache": false,
+   "images": [
+    "1512:2677",
+    0
+   ]
+  },
+  "class_type": "DaSiWa_RTX_UpscalerRefiner",
+  "_meta": {
+   "title": "DaSiWa RTX Upscaler & Refiner"
+  }
+ },
+ "1512:2591": {
+  "inputs": {
+   "noise": [
+    "1512:2600",
+    0
+   ],
+   "guider": [
+    "1512:2592",
+    0
+   ],
+   "sampler": [
+    "1512:2598",
+    0
+   ],
+   "sigmas": [
+    "1512:2590",
+    0
+   ],
+   "latent_image": [
+    "1512:2701",
+    1
+   ]
+  },
+  "class_type": "SamplerCustomAdvanced",
+  "_meta": {
+   "title": "SamplerCustomAdvanced"
+  }
+ },
+ "1512:2586": {
+  "inputs": {
+   "unet_name": "MiniMax H3\\minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  },
+  "class_type": "UNETLoader",
+  "_meta": {
+   "title": "載入擴散模型"
+  }
+ },
+ "1512:2588": {
+  "inputs": {
+   "unet_name": "MiniMax H3\\minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+   "weight_dtype": "default"
+  },
+  "class_type": "UNETLoader",
+  "_meta": {
+   "title": "載入擴散模型"
+  }
+ },
+ "1512:2669": {
+  "inputs": {
+   "samples": [
+    "1512:2668",
+    0
+   ],
+   "vae": [
+    "1512:2585",
+    0
+   ]
+  },
+  "class_type": "VAEDecodeAudio",
+  "_meta": {
+   "title": "VAE 解碼音訊"
+  }
+ },
+ "1512:2587": {
+  "inputs": {
+   "clip_name": "MiniMax H3\\qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+   "type": "minimax",
+   "device": "default"
+  },
+  "class_type": "CLIPLoader",
+  "_meta": {
+   "title": "載入 CLIP"
+  }
+ },
+ "1512:2668": {
+  "inputs": {
+   "noise": [
+    "1512:2600",
+    0
+   ],
+   "guider": [
+    "1512:2667",
+    0
+   ],
+   "sampler": [
+    "1512:2598",
+    0
+   ],
+   "sigmas": [
+    "1512:2679",
+    0
+   ],
+   "latent_image": [
+    "1512:2700",
+    1
+   ]
+  },
+  "class_type": "SamplerCustomAdvanced",
+  "_meta": {
+   "title": "SamplerCustomAdvanced"
+  }
+ },
+ "1512:2598": {
+  "inputs": {
+   "sampler_name": "euler"
+  },
+  "class_type": "KSamplerSelect",
+  "_meta": {
+   "title": "K採樣器選擇"
+  }
+ },
+ "1512:2671": {
+  "inputs": {
+   "samples": [
+    "1512:2668",
+    0
+   ],
+   "vae": [
+    "1512:2584",
+    0
+   ]
+  },
+  "class_type": "VAEDecode",
+  "_meta": {
+   "title": "VAE 解碼"
+  }
+ },
+ "1512:2590": {
+  "inputs": {
+   "scheduler": "beta",
+   "steps": 8,
+   "denoise": 1,
+   "model": [
+    "2678",
+    0
+   ]
+  },
+  "class_type": "BasicScheduler",
+  "_meta": {
+   "title": "BasicScheduler"
+  }
+ },
+ "1512:2679": {
+  "inputs": {
+   "scheduler": "beta",
+   "steps": 8,
+   "denoise": 1,
+   "model": [
+    "2678",
+    0
+   ]
+  },
+  "class_type": "BasicScheduler",
+  "_meta": {
+   "title": "BasicScheduler"
+  }
+ },
+ "1512:2663": {
+  "inputs": {
+   "enable_fp16_accumulation": true,
+   "model": [
+    "1512:2664",
+    0
+   ]
+  },
+  "class_type": "ModelPatchTorchSettings",
+  "_meta": {
+   "title": "Model Patch Torch Settings"
+  }
+ },
+ "1512:2630": {
+  "inputs": {
+   "samples": [
+    "1512:2591",
+    0
+   ],
+   "vae": [
+    "1512:2584",
+    0
+   ]
+  },
+  "class_type": "VAEDecode",
+  "_meta": {
+   "title": "VAE 解碼"
+  }
+ },
+ "1512:2631": {
+  "inputs": {
+   "samples": [
+    "1512:2591",
+    0
+   ],
+   "vae": [
+    "1512:2585",
+    0
+   ]
+  },
+  "class_type": "VAEDecodeAudio",
+  "_meta": {
+   "title": "VAE 解碼音訊"
+  }
+ },
+ "1512:2675": {
+  "inputs": {
+   "switch": [
+    "2693",
+    6
+   ],
+   "on_false": [
+    "1512:2669",
+    0
+   ],
+   "on_true": [
+    "1512:2631",
+    0
+   ]
+  },
+  "class_type": "ComfySwitchNode",
+  "_meta": {
+   "title": "切換"
+  }
+ },
+ "1512:2584": {
+  "inputs": {
+   "vae_name": "MiniMax H3\\minimax_h3_video_vae_fp16.safetensors"
+  },
+  "class_type": "VAELoader",
+  "_meta": {
+   "title": "Load VAE Video"
+  }
+ },
+ "1512:2585": {
+  "inputs": {
+   "vae_name": "MiniMax H3\\minimax_h3_audio_vae_fp32.safetensors"
+  },
+  "class_type": "VAELoader",
+  "_meta": {
+   "title": "Load VAE Audio"
+  }
+ },
+ "1512:2683": {
+  "inputs": {
+   "reuse_threshold": 0.3,
+   "start_percent": 0.2,
+   "end_percent": 0.9,
+   "verbose": false,
+   "model": [
+    "1512:2588",
+    0
+   ]
+  },
+  "class_type": "EasyCache",
+  "_meta": {
+   "title": "EasyCache"
+  }
+ },
+ "1512:2681": {
+  "inputs": {
+   "reuse_threshold": 0.3,
+   "start_percent": 0.2,
+   "end_percent": 0.9,
+   "verbose": false,
+   "model": [
+    "1512:2586",
+    0
+   ]
+  },
+  "class_type": "EasyCache",
+  "_meta": {
+   "title": "EasyCache"
+  }
+ },
+ "1512:1536": {
+  "inputs": {
+   "enable_fp16_accumulation": true,
+   "model": [
+    "1512:2650",
+    0
+   ]
+  },
+  "class_type": "ModelPatchTorchSettings",
+  "_meta": {
+   "title": "Model Patch Torch Settings"
+  }
+ },
+ "1512:2650": {
+  "inputs": {
+   "sage_attention": "sageattn_qk_int8_pv_fp8_cuda++",
+   "allow_compile": false,
+   "model": [
+    "1512:2685",
+    0
+   ]
+  },
+  "class_type": "PathchSageAttentionKJ",
+  "_meta": {
+   "title": "Patch Sage Attention KJ"
+  }
+ },
+ "1512:2664": {
+  "inputs": {
+   "sage_attention": "sageattn_qk_int8_pv_fp8_cuda++",
+   "allow_compile": false,
+   "model": [
+    "1512:2686",
+    0
+   ]
+  },
+  "class_type": "PathchSageAttentionKJ",
+  "_meta": {
+   "title": "Patch Sage Attention KJ"
+  }
+ },
+ "1512:2686": {
+  "inputs": {
+   "model": [
+    "1512:2683",
+    0
+   ]
+  },
+  "class_type": "MiniMaxH3MemoryEfficientSageAttentionPatch",
+  "_meta": {
+   "title": "MiniMax H3 Mem Eff Sage Attention Patch"
+  }
+ },
+ "1512:2667": {
+  "inputs": {
+   "model": [
+    "1512:2691",
+    0
+   ],
+   "conditioning": [
+    "1512:2700",
+    0
+   ]
+  },
+  "class_type": "BasicGuider",
+  "_meta": {
+   "title": "基礎引導器"
+  }
+ },
+ "1512:2592": {
+  "inputs": {
+   "model": [
+    "1512:2692",
+    0
+   ],
+   "conditioning": [
+    "1512:2701",
+    0
+   ]
+  },
+  "class_type": "BasicGuider",
+  "_meta": {
+   "title": "基礎引導器"
+  }
+ },
+ "1512:2692": {
+  "inputs": {
+   "shift_video": 12,
+   "shift_audio": 6,
+   "model": [
+    "2678",
+    0
+   ]
+  },
+  "class_type": "MiniMaxH3SigmaShift",
+  "_meta": {
+   "title": "ModelSamplingMiniMaxH3"
+  }
+ },
+ "1512:2691": {
+  "inputs": {
+   "shift_video": 12,
+   "shift_audio": 6,
+   "model": [
+    "2678",
+    0
+   ]
+  },
+  "class_type": "MiniMaxH3SigmaShift",
+  "_meta": {
+   "title": "ModelSamplingMiniMaxH3"
+  }
+ },
+ "1512:2700": {
+  "inputs": {
+   "clip": [
+    "1512:2587",
+    0
+   ],
+   "vae": [
+    "1512:2584",
+    0
+   ],
+   "guide": [
+    "2693",
+    0
+   ],
+   "audio_vae": [
+    "1512:2585",
+    0
+   ]
+  },
+  "class_type": "MiniMaxH3DirectorGuide",
+  "_meta": {
+   "title": "MiniMax H3 Director Guide"
+  }
+ },
+ "1512:2701": {
+  "inputs": {
+   "clip": [
+    "2678",
+    1
+   ],
+   "vae": [
+    "1512:2584",
+    0
+   ],
+   "guide": [
+    "2693",
+    0
+   ],
+   "audio_vae": [
+    "1512:2585",
+    0
+   ]
+  },
+  "class_type": "MiniMaxH3DirectorGuide",
+  "_meta": {
+   "title": "MiniMax H3 Director Guide"
+  }
+ },
+ "1512:2685": {
+  "inputs": {
+   "model": [
+    "1512:2681",
+    0
+   ]
+  },
+  "class_type": "MiniMaxH3MemoryEfficientSageAttentionPatch",
+  "_meta": {
+   "title": "MiniMax H3 Mem Eff Sage Attention Patch"
+  }
+ },
+ "1512:2600": {
+  "inputs": {
+   "noise_seed": 1051529584030056
+  },
+  "class_type": "RandomNoise",
+  "_meta": {
+   "title": "隨機雜訊"
+  }
+ },
+ "1512:2531": {
+  "inputs": {
+   "resolution_preset": "576p",
+   "no_scale": false,
+   "scale_from_image": false,
+   "aspect_preset_when_not_image": "2:3 - Classic",
+   "swap_aspect_when_not_image": false,
+   "custom_aspect_width": 16,
+   "custom_aspect_height": 9,
+   "mode": "WAN/LTX (Div32)",
+   "custom_divisor": 8
+  },
+  "class_type": "DaSiWa_ResolutionScaleCalculator",
+  "_meta": {
+   "title": "DaSiWa Resolution Scale Calculator"
+  }
+ },
+ "1512:2677": {
+  "inputs": {
+   "switch": [
+    "2693",
+    6
+   ],
+   "on_false": [
+    "1512:2671",
+    0
+   ],
+   "on_true": [
+    "1512:2630",
+    0
+   ]
+  },
+  "class_type": "ComfySwitchNode",
+  "_meta": {
+   "title": "切換"
+  }
+ },
+ "1512:1669": {
+  "inputs": {
+   "value": 24
+  },
+  "class_type": "PrimitiveFloat",
+  "_meta": {
+   "title": "FPS"
+  }
+ },
+ "1512:2718": {
+  "inputs": {
+   "value": "女生裸體，帶著nipple clamps,TifaLockhart,"
+  },
+  "class_type": "PrimitiveStringMultiline",
+  "_meta": {
+   "title": "POSITIVE PROMPT"
+  }
+ }
+}
