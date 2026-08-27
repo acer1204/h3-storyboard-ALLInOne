@@ -1358,6 +1358,7 @@ function validate(c, target, wantShots){
   const E=[], W=[], I=[];
   const mode = (typeof curMode === "function") ? curMode() : "i2va";
   const isRef = mode === "ref2va";
+  const wmin = Math.max(120, Math.round((typeof WF_DUR !== "undefined" ? (WF_DUR || 20) : 20) * 15));
 
   /* ---------- 0. transport hygiene ---------- */
   if (c.includes("<think>")) E.push("<think> 洩漏進 content");
@@ -1371,7 +1372,7 @@ function validate(c, target, wantShots){
     const m = c.match(/detailed_description:\s*([\s\S]*?)\s*overall_soundscape:/);
     body = m ? m[1] : "";
     const words = body.split(/\s+/).filter(Boolean).length;
-    if (words < 300) E.push("detailed_description 只有 " + words + " 詞（需 >=300）");
+    if (words < wmin) E.push("detailed_description 只有 " + words + " 詞（需 >=" + wmin + "）");
     if (!(c.match(/<Subject \d+>/g) || []).length) E.push("缺 <Subject N> 主體定義");
     if (!(c.match(/<Picture \d+>/g) || []).length) E.push("缺 <Picture N> 對應");
     if (!/summary:\s*\[/.test(c)) W.push("summary 缺任務標籤（[reference generation] …）");
@@ -1386,7 +1387,7 @@ function validate(c, target, wantShots){
     const m = c.match(/integrated_multimodal_description:?\s*([\s\S]*?)\s*overall_soundscape/);
     body = m ? m[1] : "";
     const words = body.split(/\s+/).filter(Boolean).length;
-    if (words < 300) E.push("主段落只有 " + words + " 詞（需 >=300）");
+    if (words < wmin) E.push("主段落只有 " + words + " 詞（需 >=" + wmin + "）");
     if (!/\[Shot 1\]/.test(body)) E.push("需以 [Shot 1] 開場");
     if (/\[Shot [2-9]\]/.test(c)) E.push("出現 [Shot 2]+ — 此模式必須一鏡到底");
     if (/\bcuts? to\b/i.test(body)) E.push("出現 \"cuts to\" — 禁止硬切");
@@ -1752,6 +1753,10 @@ function userNote(it){
   it.angle = angle;
   let t = `Task mode: ${mode}. Creative angle for this run: ${angle}. `
         + `Analyze the image(s) and write the story prompt in the strict format for this mode.`;
+  if ((WF_DUR || 20) !== 20)
+    t += ` IMPORTANT — target video duration is ${WF_DUR} seconds (NOT 20): scale ALL story timing to ${WF_DUR}s`
+       + ` (phase boundaries, second marks, pacing, beat count) and aim for at least ${Math.max(120, Math.round(WF_DUR * 15))} words in the main narrative,`
+       + ` overriding any 20-second or word-count assumption in the format rules.`;
   const fl = frameLine(it.w, it.h);
   if (fl) t += "\n" + fl;
   const n = (it.note || "").trim();
@@ -2147,10 +2152,14 @@ function arPayload(it){
   return {preset:name, w:it.ar.w, h:it.ar.h, swap:!!it.ar.swap};
 }
 /* ---- 工作流預設參數（ComfyUI 設定頁） ---- */
+/* 影片時長跟隨目前模板（Director 的 duration）；劇情長度/時間軸與送單都用它 */
+let WF_DUR = 20;
+const durStr = () => (WF_DUR || 20) + " seconds";
 async function loadWfParams(){
   if (!onServer) return;
   try{
     const j = await (await fetch("/api/comfy/params")).json();
+    if (j.duration && j.duration >= 1 && j.duration <= 120) WF_DUR = j.duration;
     const sel = $("#wres");
     const cur = sel.value;
     sel.innerHTML = `<option value="">（照模板：${esc(j.resolution_preset||"?")}）</option>`
@@ -2159,7 +2168,9 @@ async function loadWfParams(){
     $("#wsteps").placeholder = j.steps != null ? `模板 ${j.steps}` : "模板值";
     $("#wsv").placeholder = j.shift_video != null ? `模板 ${j.shift_video}` : "模板值";
     $("#wsa").placeholder = j.shift_audio != null ? `模板 ${j.shift_audio}` : "模板值";
-    $("#wfstat").textContent = j.has_template ? "" : "還沒有模板 — 先更新或匯入模板，參數才有東西可以覆寫";
+    $("#wfstat").textContent = j.has_template
+      ? (j.duration ? `模板影片時長 ${j.duration} 秒 — 劇情寫作與輸出都會跟隨此時長` : "")
+      : "還沒有模板 — 先選用或上傳工作流，參數才有東西可以覆寫";
   }catch(e){ $("#wfstat").textContent = "讀取失敗：" + e.message; }
 }
 function wfOverrides(){
@@ -2256,7 +2267,7 @@ async function record(it){
   if (!onServer) return;
   try{
     const _r = await fetch(API,{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({image:it.name,dur:"20 seconds",state:it.state,
+      body:JSON.stringify({image:it.name,dur:durStr(),state:it.state,
         elapsed_s:parseFloat(it.elapsed),usage:it.usage,
         errors:it.v?it.v.E:[],warnings:it.v?it.v.W:[],
         content:it.content,raw:it.raw,zh:it.zh||"",note:it.note||"",thumb:it.thumb,full:it.full||"",
@@ -2523,7 +2534,7 @@ async function regenerate(rec, note, shots, onStep){
 
   step("保存中…");
   const saved = await (await fetch(API, {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({image:rec.image, dur:"20 seconds", state, elapsed_s:+elapsed,
+    body: JSON.stringify({image:rec.image, dur:durStr(), state, elapsed_s:+elapsed,
       usage:j.usage||{}, errors:v.E, warnings:v.W, content, raw, zh, note, thumb, full,
       orig_from: rec.id, more: imgs.slice(1),
       attempts:best.attempts, shots:1,
@@ -2717,7 +2728,7 @@ window.comfyFromRec = (id, btnEl) => {
   fetch(API + "/" + id).then(async rec0 => {
     const rec = await rec0.json();
     const mode = hMode(rec);
-    const payload = {rec_id: id, dur: "20 seconds", wf: wfOverrides(),
+    const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(),
                      mode, content: rec.content, ...comfyFields(rec.content, mode)};
     if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
     // 審查啟用：抓紀錄的圖片作為審查輸入（修劇情不支援歷史紀錄路徑，revise 會退為換 seed）
@@ -2734,7 +2745,7 @@ window.comfyFromItem = (k, btnEl) => {
   const it = items[k]; if (!it || !it.content) return;
   const stat = document.querySelector(`[data-cstat="${k}"]`);
   const mode = it.mode || curMode();
-  const payload = {image: it.orig || it.full, dur: "20 seconds", wf: wfOverrides(), aspect: arPayload(it),
+  const payload = {image: it.orig || it.full, dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
                    mode, content: it.content, more: it.more || [],
                    ...comfyFields(it.content, mode)};
   if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
@@ -3501,7 +3512,7 @@ async function mvSubmitVideo(i){
     await gpuPrepare("comfy", t => mvStat(`段 ${i + 1}：${t}`));
     mvStat(`段 ${i + 1}：送出影片生成…`);
     const payload = {image: encIn.orig || encIn.b64, more: [encB.b64], mode: "fl2va",
-                     content: s.content, dur: "20 seconds", wf: wfOverrides(),
+                     content: s.content, dur: durStr(), wf: wfOverrides(),
                      ...comfyFields(s.content, "fl2va")};
     const r = await (await fetch(CAPI + "/run", {method: "POST",
       headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)})).json();

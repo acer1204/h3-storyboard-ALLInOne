@@ -1340,7 +1340,7 @@ class H(SimpleHTTPRequestHandler):
 
         if p == "/api/comfy/params":
             out = {"presets": RES_PRESETS, "aspects": [a[0] for a in ASPECTS] + ["CUSTOM"],
-                   "fps": None, "resolution_preset": None, "steps": None,
+                   "fps": None, "resolution_preset": None, "steps": None, "duration": None,
                    "shift_video": None, "shift_audio": None, "has_template": os.path.exists(COMFY_TEMPLATE)}
             try:
                 with open(COMFY_TEMPLATE, encoding="utf-8") as f:
@@ -1351,6 +1351,10 @@ class H(SimpleHTTPRequestHandler):
                     ins = node.get("inputs", {})
                     if ct == "BasicScheduler" and out["steps"] is None:
                         out["steps"] = ins.get("steps")
+                    if ct == "MiniMaxH3Director" and out["duration"] is None:
+                        d = ins.get("duration")
+                        if isinstance(d, (int, float)):
+                            out["duration"] = int(d)
                     if ct == "MiniMaxH3SigmaShift" and out["shift_video"] is None:
                         out["shift_video"] = ins.get("shift_video")
                         out["shift_audio"] = ins.get("shift_audio")
