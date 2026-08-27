@@ -3480,6 +3480,14 @@ $("#mvGenPrompts").onclick = async () => {
     mvStat("片段劇情全部就緒 — 逐段檢查，不滿意可改提示後「重生成此段劇情」；都滿意就按「劇情影片處理」");
   }catch(e){ mvStat("✘ " + e.message); }
   MV.busy = false; mvDraw(); mvSave(false);
+  // 完全自動化：劇情就緒後直接進影片階段（含審查），一路跑到合併
+  if (rvCfg().movieAuto && MV.segs.length && MV.segs.every(s => s.content)){
+    mvStat("片段劇情就緒（自動模式）— 自動開始影片處理…");
+    MV.phase = "videos";
+    const i = MV.segs.findIndex(s => !(s.locked && s.video));
+    if (i >= 0) mvVideoStep(i);
+    else mvMerge();
+  }
 };
 
 /* ---- 第②階段：逐段影片（完成一段 → 等待指示） ---- */
