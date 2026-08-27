@@ -641,6 +641,27 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   </div>
 
   <div class="panel">
+    <h3>🎞️ 進階：硬切檢測與自動重試</h3>
+    <p class="ph">影片生成完後自動品質審查（混合架構：ffmpeg 場景偵測抓硬切候選 → 視覺模型看幀確認並判斷劇情符合度）。
+      不通過會自動「換 seed 重跑」或「修劇情重跑」，直到通過或用完重試次數（保留評分最高的一次）。
+      只有勾選的類型會啟用。</p>
+    <div class="row" style="gap:16px;flex-wrap:wrap">
+      <label class="small"><input type="checkbox" id="rvI2va"> I2VA</label>
+      <label class="small"><input type="checkbox" id="rvFl2va"> FL2VA</label>
+      <label class="small"><input type="checkbox" id="rvL2va"> L2VA</label>
+      <label class="small"><input type="checkbox" id="rvRef2va"> REF2VA</label>
+      <label class="small"><input type="checkbox" id="rvMovie"> FL2VA Movie</label>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <div><label>每段自動重試上限</label><input type="number" id="rvRetry" min="0" max="10" value="5"></div>
+      <div><label>FL2VA Movie 執行模式</label><select id="rvMovieAuto">
+        <option value="0" selected>手動（每段完成後等待指示）</option>
+        <option value="1">完全自動化（審查通過自動續跑到合併）</option></select></div>
+    </div>
+    <p class="status" id="rvStat" style="margin-top:6px"></p>
+  </div>
+
+  <div class="panel">
     <h3>📚 經驗庫（整理經驗）</h3>
     <p class="ph">你在歷史紀錄上的 👍👎／標籤／備註會累積在這裡。按「整理經驗」讓模型<b>一次歸納全部待整理的反饋</b>，
       提出通用規則；你審核後入庫，之後每次生成都會注入（依模式）。建議累積約 5 筆再整理，規則會準得多。</p>
@@ -2670,16 +2691,43 @@ async function comfyPoll(pid, set, btn){
    so the seconds the prompt was written for are the seconds the clip is rendered at */
 window.comfyFromRec = (id, btnEl) => {
   const stat = document.querySelector("#mcstat");
-  fetch(API + "/" + id).then(r => r.json()).then(rec => {
-    comfySend({rec_id: id, dur: "20 seconds", wf: wfOverrides(), ...comfyFields(rec.content, hMode(rec))}, stat, btnEl);
+  fetch(API + "/" + id).then(async rec0 => {
+    const rec = await rec0.json();
+    const mode = hMode(rec);
+    const payload = {rec_id: id, dur: "20 seconds", wf: wfOverrides(),
+                     mode, content: rec.content, ...comfyFields(rec.content, mode)};
+    if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
+    // 審查啟用：抓紀錄的圖片作為審查輸入（修劇情不支援歷史紀錄路徑，revise 會退為換 seed）
+    const inputs = [];
+    try{ inputs.push(await urlToDataURL("/api/full/" + id + ".jpg")); }catch(e){}
+    for (let n = 1; n <= (rec.nmore || 0); n++){
+      try{ inputs.push(await urlToDataURL("/api/extra/" + id + "/" + n + ".jpg")); }catch(e){}
+    }
+    comfyRunReviewed(payload, {mode, content: rec.content, inputs,
+      inputLabel: mode === "ref2va" ? "參考圖" : "首幀/尾幀"}, stat, btnEl);
   });
 };
 window.comfyFromItem = (k, btnEl) => {
   const it = items[k]; if (!it || !it.content) return;
   const stat = document.querySelector(`[data-cstat="${k}"]`);
-  comfySend({image: it.orig || it.full, dur: "20 seconds", wf: wfOverrides(), aspect: arPayload(it),
-             mode: it.mode || curMode(), content: it.content, more: it.more || [],
-             ...comfyFields(it.content, it.mode)}, stat, btnEl);
+  const mode = it.mode || curMode();
+  const payload = {image: it.orig || it.full, dur: "20 seconds", wf: wfOverrides(), aspect: arPayload(it),
+                   mode, content: it.content, more: it.more || [],
+                   ...comfyFields(it.content, mode)};
+  if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
+  comfyRunReviewed(payload, {mode, content: it.content, inputs: it.imgs || [it.full],
+    inputLabel: mode === "ref2va" ? "參考圖" : (mode === "fl2va" ? "首幀、尾幀" : mode === "l2va" ? "目標尾幀" : "首幀"),
+    reviseFn: async (instruction) => {
+      $("#mode").value = mode;
+      await gpuPrepare("llama", () => {});
+      const prev = {content: it.content, issues: ["[影片審查意見] " + instruction]};
+      const g = await genOnce(it.imgs || [it.full],
+        userNote({mode, note: (it.note || "").trim(), w: it.w, h: it.h}), 20, 1, prev);
+      it.content = g.content; it.v = g.v;
+      it.state = g.v.E.length ? "fail" : (g.v.W.length ? "warn" : "ok");
+      render();
+      return it.content;
+    }}, stat, btnEl);
 };
 
 /* 上傳工作流 .json → 存進工作流資料夾，下拉即可選用 */
@@ -2979,6 +3027,125 @@ if (onServer) fetch(MAPI).then(r=>r.json()).then(j=>{
   if (j && j.total) $("#navMedia").textContent = j.total;
 }).catch(()=>{});
 
+/* ================= 硬切檢測與視覺審查（v1.2） ================= */
+const RV_KEY = "h3.review.v1";
+function rvCfg(){
+  let c = {};
+  try{ c = JSON.parse(store.get(RV_KEY) || "{}"); }catch(e){}
+  const out = Object.assign({modes: {}, retry: 5, movieAuto: false}, c);
+  out.modes = out.modes || {};
+  return out;
+}
+function rvPersist(){
+  const c = {modes: {i2va: $("#rvI2va").checked, fl2va: $("#rvFl2va").checked, l2va: $("#rvL2va").checked,
+                     ref2va: $("#rvRef2va").checked, movie: $("#rvMovie").checked},
+             retry: Math.max(0, Math.min(10, parseInt($("#rvRetry").value) || 5)),
+             movieAuto: $("#rvMovieAuto").value === "1"};
+  store.set(RV_KEY, JSON.stringify(c));
+  $("#rvStat").textContent = "已保存";
+  clearTimeout(rvPersist.t); rvPersist.t = setTimeout(() => $("#rvStat").textContent = "", 1500);
+}
+(function rvInit(){
+  const c = rvCfg();
+  $("#rvI2va").checked = !!c.modes.i2va; $("#rvFl2va").checked = !!c.modes.fl2va;
+  $("#rvL2va").checked = !!c.modes.l2va; $("#rvRef2va").checked = !!c.modes.ref2va;
+  $("#rvMovie").checked = !!c.modes.movie;
+  $("#rvRetry").value = c.retry;
+  $("#rvMovieAuto").value = c.movieAuto ? "1" : "0";
+  ["rvI2va","rvFl2va","rvL2va","rvRef2va","rvMovie","rvRetry","rvMovieAuto"].forEach(id => {
+    $("#" + id).addEventListener("change", rvPersist);
+  });
+})();
+function rvEnabled(kind){ return !!rvCfg().modes[kind]; }
+
+const REVIEW_SYS = `你是影片生成品質審查員。你會看到：任務模式、劇情 prompt、輸入圖（首/尾幀或參考圖）、從生成影片抽出的幀（各標時間戳）、以及演算法偵測到的硬切候選點。
+評估三件事：
+1. hard_cut：候選點附近的密集幀裡，是否存在「相鄰兩幀畫面完全跳變（人物姿勢/場景瞬間更換），且無法用劇情或連續運鏡解釋」。注意：首尾幀背景不同是設計預期；鏡頭快速移動、穿越物體、光線變化造成的漸進差異不算硬切。沒有演算法候選點時 hard_cut 一律 false。
+2. story_match（0-10）：幀序列是否大致按劇情發展（人物、動作、順序、場景）。
+3. ending_ok：最後幾幀是否自然收束（FL2VA/L2VA 需接近目標尾幀構圖，且不是最後一刻突然跳到位）。
+行動決策：
+- 無確認硬切、story_match >= 7、ending_ok → "accept"
+- 問題像隨機瑕疵（單處小跳變、劇情大致正確）→ "reroll"（換種子重跑，劇情不動）
+- 問題出在劇情本身（要求 20 秒做不完的變化、隱含換場景、結尾預算不足）→ "revise"，並在 revise_instruction 用中文寫具體修改指令（例如：把位置移動提前到 8-14 秒、刪除換場景、加強最後 6 秒的收束描寫）
+只輸出 JSON，不要其他文字：
+{"action":"accept|reroll|revise","score":0-10,"hard_cut":true|false,"cut_time":數字或null,"story_match":0-10,"ending_ok":true|false,"problems":["…"],"revise_instruction":"…"}`;
+
+async function reviewVideo(videoRel, ctx, onStep){
+  const step = onStep || (() => {});
+  step("抽幀＋場景掃描…");
+  const scan = await (await fetch("/api/review/scan", {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify({video: videoRel})})).json();
+  if (scan.error) throw new Error(scan.error);
+  await gpuPrepare("llama", step);
+  step("視覺審查中…");
+  const nin = (ctx.inputs || []).length;
+  const txt = "任務模式: " + (ctx.mode || "fl2va").toUpperCase() + "\n"
+    + "演算法硬切候選: " + (scan.cuts.length ? scan.cuts.map(c => c.t + "s(分數" + c.score + ")").join(", ") : "無") + "\n"
+    + "影片長度: " + scan.duration + "s\n\n劇情 prompt:\n" + String(ctx.content || "").slice(0, 4000) + "\n\n"
+    + "圖片順序: 前 " + nin + " 張是輸入圖（" + (ctx.inputLabel || "首幀/尾幀") + "），"
+    + "之後是影片抽幀，時間戳依序為: " + scan.frames.map(f => f.t + "s").join(", ");
+  const content = [{type: "text", text: txt}];
+  (ctx.inputs || []).forEach(u => content.push({type: "image_url", image_url: {url: u}}));
+  scan.frames.forEach(f => content.push({type: "image_url", image_url: {url: "data:image/jpeg;base64," + f.b64}}));
+  const j = await chat([{role: "system", content: REVIEW_SYS}, {role: "user", content}], {temp: 0.2, max: 800});
+  let raw = (j.choices[0].message.content || "").trim()
+    .replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/```\s*$/, "");
+  let v;
+  try{ v = JSON.parse(raw); }
+  catch(e){
+    const m = raw.match(/\{[\s\S]*\}/);
+    try{ v = JSON.parse(m ? m[0] : ""); }
+    catch(e2){ v = {action: "accept", score: 6, hard_cut: false, problems: ["審查輸出無法解析，放行"]}; }
+  }
+  if (!scan.cuts.length) v.hard_cut = false;          // 雙重同意：演算法沒候選就不採信視覺喊硬切
+  if (v.hard_cut && v.action === "accept") v.action = "reroll";
+  if (!["accept", "reroll", "revise"].includes(v.action)) v.action = "accept";
+  v.score = typeof v.score === "number" ? v.score : 5;
+  v.scan = {cuts: scan.cuts, duration: scan.duration};
+  return v;
+}
+
+/* 單發送單（run 頁 / 歷史）用的審查重試流程 */
+async function comfyRunReviewed(payload, ctx, statusEl, btn){
+  if (btn) btn.disabled = true;
+  const set = t => { if (statusEl && statusEl.isConnected) statusEl.textContent = t; };
+  let tries = 0, best = null;
+  for (;;){
+    await gpuPrepare("comfy", set);
+    set("送出中…");
+    let r;
+    try{
+      r = await (await fetch(CAPI + "/run", {method: "POST",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)})).json();
+    }catch(e){ set("失敗：" + e.message); break; }
+    if (r.error){ set("失敗：" + r.error); break; }
+    set("影片生成中…");
+    let mp4;
+    try{ mp4 = await mvPollDone(r.prompt_id); }
+    catch(e){ set("失敗：" + e.message); break; }
+    let v = null;
+    try{ v = await reviewVideo(mp4, ctx, set); }
+    catch(e){ set("審查失敗（" + e.message + "），視為通過"); }
+    if (!v){ set("完成 ✔ " + mp4); break; }
+    if (!best || v.score > best.score) best = {video: mp4, score: v.score};
+    if (v.action === "accept"){ set("完成 ✔ 審查 " + v.score + "/10 · " + mp4); break; }
+    if (tries >= rvCfg().retry){
+      set("重試達上限，保留最佳（" + best.score + "/10）：" + best.video); break;
+    }
+    tries++;
+    set("審查未過（" + v.score + "/10）→ " + (v.action === "revise" ? "修劇情" : "換 seed")
+        + " 重跑（" + tries + "/" + rvCfg().retry + "）");
+    if (v.action === "revise" && v.revise_instruction && ctx.reviseFn){
+      try{
+        const nc = await ctx.reviseFn(v.revise_instruction, set);
+        if (nc){ payload.content = nc; Object.assign(payload, comfyFields(nc, ctx.mode)); }
+      }catch(e){ set("修劇情失敗（" + e.message + "），改為換 seed 重跑"); }
+    }
+  }
+  loadMedia();
+  if (btn) btn.disabled = false;
+}
+
 /* ================= FL2VA Movie：三階段（片段劇情 → 逐段影片 → 合併） ================= */
 const MV = {
   id: null, slots: [], pick: 0, MAX: 12,
@@ -3255,14 +3422,75 @@ async function mvSubmitVideo(i){
     if (r.error) throw new Error(r.error);
     mvStat(`段 ${i + 1}：影片生成中（${String(r.prompt_id).slice(0, 8)}…）`);
     const mp4 = await mvPollDone(r.prompt_id);
-    s.video = mp4; s.vstate = "waiting"; s._dirty = false; MV.waiting = i;
-    mvStat(`段 ${i + 1} 影片完成 — 請按「可繼續」或「需調整」`);
+    /* ---- v1.2 審查迴圈 ---- */
+    let finalVideo = mp4;
+    if (rvEnabled("movie")){
+      let verdict = null;
+      try{
+        verdict = await reviewVideo(mp4, {mode: "fl2va", content: s.content,
+          inputs: [encIn.b64, encB.b64], inputLabel: "首幀輸入、尾幀目標"},
+          t => mvStat(`段 ${i + 1}：${t}`));
+      }catch(e){ mvStat(`段 ${i + 1}：審查失敗（${e.message}），視為通過`); }
+      if (verdict){
+        s.verdict = verdict;
+        s._tries = s._tries || 0;
+        if (!s._best || verdict.score > s._best.score) s._best = {video: mp4, score: verdict.score};
+        if (verdict.action !== "accept" && s._tries < rvCfg().retry){
+          s._tries++;
+          mvStat(`段 ${i + 1}：審查未過（${verdict.score}/10：${(verdict.problems || []).join("；").slice(0, 70)}）→ `
+            + (verdict.action === "revise" ? "修劇情重跑" : "換 seed 重跑") + `（${s._tries}/${rvCfg().retry}）`);
+          if (verdict.action === "revise" && verdict.revise_instruction){
+            try{ await mvReviseSeg(i, verdict.revise_instruction); }
+            catch(e){ mvStat(`段 ${i + 1}：修劇情失敗（${e.message}），改換 seed`); }
+          }
+          return mvSubmitVideo(i);          // 用同一個 _inFile 重跑
+        }
+        if (verdict.action !== "accept" && s._best){
+          finalVideo = s._best.video;
+          mvStat(`段 ${i + 1}：重試達上限，保留評分最高（${s._best.score}/10）`);
+        }
+      }
+    }
+    s.video = finalVideo; s._dirty = false;
+    if (rvCfg().movieAuto){
+      // 完全自動化：直接鎖定並續跑（mvContinue 會接下一段或觸發合併）
+      MV.busy = false;
+      mvStat(`段 ${i + 1} 完成（自動模式${s.verdict ? "，審查 " + s.verdict.score + "/10" : ""}）— 繼續下一段`);
+      mvDraw(); mvSave(false);
+      mvContinue(i);
+      return;
+    }
+    s.vstate = "waiting"; MV.waiting = i;
+    mvStat(`段 ${i + 1} 影片完成${s.verdict ? `（審查 ${s.verdict.score}/10）` : ""} — 請按「可繼續」或「需調整」`);
     document.title = "⏸ 段 " + (i + 1) + " 等待指示 — H3 Storyboard";
   }catch(e){
     s.vstate = "adjust"; MV.waiting = -1;
     mvStat(`段 ${i + 1} ✘ ${e.message}`);
   }
   MV.busy = false; mvDraw(); mvSave(false);
+}
+
+/* 依審查意見修這一段的劇情（帶著意見做 corrective 重生成） */
+async function mvReviseSeg(i, instruction){
+  const s = MV.segs[i];
+  $("#mode").value = "fl2va";
+  const eA = s._encA || await encode(MV.slots[i].file);
+  const eB = s._encB || await encode(MV.slots[i + 1].file);
+  await gpuPrepare("llama", t => mvStat(`段 ${i + 1}：${t}`));
+  mvStat(`段 ${i + 1}：依審查意見修劇情…`);
+  const note = [s.hint, $("#mvHint").value.trim()].filter(Boolean).join("；");
+  const prev = {content: s.content, issues: ["[影片審查意見] " + instruction]};
+  const g = await genOnce([eA.b64, eB.b64], userNote({mode: "fl2va", note, w: eA.w, h: eA.h}), 20, 1, prev);
+  s.content = g.content; s.v = g.v;
+  s.state = g.v.E.length ? "fail" : (g.v.W.length ? "warn" : "ok");
+  if ($("#tr").value === "1"){
+    try{
+      const t = await chat([{role: "system", content: TR_SYS}, {role: "user", content: s.content}],
+                           {temp: 0.3, topp: 0.9, max: 1800});
+      s.zh = (t.choices[0].message.content || "").trim();
+    }catch(e){}
+  }
+  mvDraw(); mvSave(false);
 }
 async function mvVideoStep(i){
   const s = MV.segs[i];
@@ -3289,6 +3517,7 @@ window.mvContinue = i => {
   mvSave(false);
   const next = MV.segs.findIndex((x, k) => k > i && !(x.locked && x.video));
   if (next >= 0) mvVideoStep(next);
+  else if (rvCfg().movieAuto){ mvStat("全部片段完成（自動模式）— 自動合併中…"); mvDraw(); mvMerge(); }
   else { mvStat("全部片段已確認 — 可以按「合併片段並顯示」"); mvDraw(); }
 };
 window.mvAdjust = i => {
@@ -3302,7 +3531,8 @@ window.mvRegamble = i => { if (!MV.busy) mvSubmitVideo(i); };
 window.mvRerunVideo = i => { if (!MV.busy && MV.segs[i]._dirty) mvSubmitVideo(i); };
 
 /* ---- 第③階段：合併 ---- */
-$("#mvMergeBtn").onclick = async () => {
+$("#mvMergeBtn").onclick = () => mvMerge();
+async function mvMerge(){
   if (MV.busy) return;
   const files = MV.segs.map(s => s.video);
   if (files.some(v => !v)) return;

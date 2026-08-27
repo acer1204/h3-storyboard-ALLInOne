@@ -181,6 +181,61 @@ def find_ffmpeg():
     return None
 
 
+def review_scan(rel, scene_thr=0.30, max_frames=24):
+    """硬切檢測第一層：ffmpeg 場景偵測（候選切點）＋抽幀（等距＋切點附近密集＋最後一幀）。
+    回傳 {duration, cuts:[{t,score}], frames:[{t,b64}]}；b64 為 448px JPEG。"""
+    import subprocess as sp
+    import base64 as b64mod
+    ff = find_ffmpeg()
+    if not ff:
+        raise ValueError("找不到 ffmpeg")
+    ap = os.path.abspath(os.path.join(MEDIA_ROOT, rel.replace("\\", "/")))
+    if not ap.startswith(os.path.abspath(MEDIA_ROOT)) or not os.path.exists(ap):
+        raise ValueError("影片不存在或路徑不合法: %s" % rel)
+    # 1) 場景偵測 + 時長
+    r = sp.run([ff, "-i", ap, "-vf", "select='gt(scene,%s)',metadata=print:file=-" % scene_thr,
+                "-an", "-f", "null", "-"], capture_output=True, timeout=180)
+    out = r.stdout.decode("utf-8", "replace") + "\n" + r.stderr.decode("utf-8", "replace")
+    dur = 0.0
+    md = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.?\d*)", out)
+    if md:
+        dur = int(md.group(1)) * 3600 + int(md.group(2)) * 60 + float(md.group(3))
+    cuts, cur_t = [], None
+    for line in out.splitlines():
+        mt = re.search(r"pts_time:([0-9.]+)", line)
+        if mt:
+            cur_t = float(mt.group(1))
+        ms = re.search(r"lavfi\.scene_score=([0-9.]+)", line)
+        if ms and cur_t is not None:
+            cuts.append({"t": round(cur_t, 2), "score": round(float(ms.group(1)), 3)})
+            cur_t = None
+    cuts = cuts[:8]
+    # 2) 抽幀時間點：等距 10 張 + 每個切點 ±0.6/±0.2 秒 + 最後一幀
+    times = set()
+    n_even = 10
+    if dur > 0.5:
+        for k in range(n_even):
+            times.add(round(0.2 + (dur - 0.4) * k / max(1, n_even - 1), 2))
+        for c in cuts:
+            for dt in (-0.6, -0.2, 0.2, 0.6):
+                t = c["t"] + dt
+                if 0 <= t <= dur - 0.05:
+                    times.add(round(t, 2))
+        times.add(round(max(0.0, dur - 0.08), 2))
+    times = sorted(times)[:max_frames]
+    frames = []
+    for t in times:
+        try:
+            fr = sp.run([ff, "-ss", str(t), "-i", ap, "-frames:v", "1",
+                         "-vf", "scale=448:-2", "-q:v", "7", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
+                        capture_output=True, timeout=30)
+            if fr.stdout:
+                frames.append({"t": t, "b64": b64mod.b64encode(fr.stdout).decode()})
+        except Exception:
+            continue
+    return {"duration": round(dur, 2), "cuts": cuts, "frames": frames}
+
+
 def load_mindex():
     try:
         with open(MINDEX, encoding="utf-8") as f:
@@ -1636,6 +1691,20 @@ class H(SimpleHTTPRequestHandler):
             with LOCK:
                 save_config()
             return self.send_json(dict(info, current=name))
+
+        if p == "/api/review/scan":
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            try:
+                thr = float(body.get("threshold") or 0.30)
+                res = review_scan(str(body.get("video") or ""), scene_thr=max(0.1, min(0.9, thr)))
+            except ValueError as e:
+                return self.send_json({"error": str(e)}, 400)
+            except Exception as e:
+                return self.send_json({"error": "掃描失敗: %s" % e}, 500)
+            return self.send_json(res)
 
         if p == "/api/movies":
             # 建立/更新 FL2VA Movie 專案。images 只在建立時帶（dataURL 陣列，存成 {id}.imgN.jpg）
