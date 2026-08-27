@@ -620,6 +620,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <option value="l2va">l2va</option><option value="ref2va">ref2va</option></select>
     <p class="ph">llama-server 位址設定在伺服器端的 <code>config.json</code>（<code>llama_url</code>），改檔存檔即生效；網頁不顯示、也不需填寫。</p>
     <div class="grid">
+      <div><label>Language（介面語言）</label><select id="lang" class="no-i18n">
+        <option value="zh-TW">繁體中文</option><option value="zh-CN">简体中文</option><option value="en">English</option></select></div>
       <div><label>中文翻譯</label><select id="tr">
         <option value="1" selected>開啟</option><option value="0">關閉</option></select></div>
       <div><label>自動重試次數</label><input type="text" id="retry" value="3"></div>
@@ -3781,4 +3783,279 @@ $("#expt").onclick=()=>dl("h3-results.txt",modeItems().filter(i=>i.content)
   .map(i=>`########## ${i.name}\n${i.content}\n`+(i.zh?`\n--- 中文 ---\n${i.zh}\n`:"")).join("\n"),"text/plain");
 
 setView(store.get(VKEY) || "run");
+</script>
+<script>
+/* ================= i18n 多語系 =================
+   源語言＝繁體中文。zh-CN：詞級對照＋字級繁→簡自動轉換（動態訊息也全涵蓋）；
+   en：字典＋樣板規則，未收錄的字串維持原文；專有名詞（prompt/seed/workflow…）保留英文。
+   翻譯層不改動任何程式邏輯：MutationObserver 翻譯文字節點與 placeholder/title，
+   切換語言以原文快取即時還原重譯，不需重新整理頁面。 */
+(() => {
+const LKEY = "h3.lang.v1";
+let LANG = (() => { try{ return localStorage.getItem(LKEY) || "zh-TW"; }catch(e){ return "zh-TW"; } })();
+
+/* ---- zh-CN：詞級（用語差異）優先，再逐字轉換 ---- */
+const CN_WORDS = [["伺服器","服务器"],["資料夾","文件夹"],["影片","视频"],["檔案","文件"],
+  ["解析度","分辨率"],["預設","默认"],["支援","支持"],["搜尋","搜索"],["網路","网络"],["滑鼠","鼠标"]];
+const CN_PAIRS = "並并亂乱佇伫佈布併并來来個个們们側侧偵侦備备傳传僅仅價价優优儲储內内兩两別别刪删則则創创劃划劇剧動动務务匯汇區区協协卻却參参員员問问啟启單单嗎吗嘗尝嚴严圖图執执場场塗涂壓压夠够夾夹實实寧宁審审寫写寬宽將将專专尋寻對对導导層层屬属帶带幀帧幫帮幾几庫库廢废張张強强彙汇後后徑径從从復复徵征態态慣惯憑凭應应掃扫掛挂採采換换揮挥損损撿捡擇择擊击擋挡據据擴扩攝摄敗败數数斂敛斷断於于時时暫暂曬晒會会東东條条棄弃業业構构樂乐標标樣样機机橫横檔档檢检檻槛欄栏歷历歸归決决沒没洩泄測测準准滿满漸渐瀏浏灣湾為为無无燈灯爾尔狀状獨独現现環环產产畫画異异當当疊叠發发確确碼码種种稱称積积筆笔節节範范篩筛簽签籌筹籤签紀纪約约納纳純纯級级終终組组結结絕绝給给統统綁绑經经維维綱纲網网綴缀緊紧緒绪線线編编縮缩總总繞绕繪绘繼继續续義义習习聯联脫脱腳脚與与舊旧著着蓋盖處处虛虚號号衝冲補补裝装裡里製制複复見见規规視视覺觉覽览觀观觸触訂订計计訊讯記记設设許许評评詞词詢询試试話话該该認认語语誤误說说調调請请證证識识譯译議议讀读變变讓让讚赞貫贯資资質质賭赌軸轴較较載载輪轮輯辑輸输轉转辭辞迴回這这連连進进運运過过達达違违遠远選选還还邊边邏逻鄰邻釋释針针銜衔鋪铺錄录錨锚錯错鍵键鎖锁鏈链鏡镜鐘钟長长門门閉闭開开閒闲間间關关陣阵陳陈隊队階阶際际隨随隱隐隻只雙双韓韩響响頁页項项順顺須须預预頭头頻频題题額额類类顯显風风餘余饋馈驗验體体鵝鹅麼么點点齊齐佔占簡简輕轻顏颜聽听臉脸";
+const CN_MAP = {};
+for (let i = 0; i < CN_PAIRS.length; i += 2) CN_MAP[CN_PAIRS[i]] = CN_PAIRS[i + 1];
+function trCN(s){
+  for (const [a, b] of CN_WORDS) s = s.split(a).join(b);
+  let o = "";
+  for (const ch of s) o += CN_MAP[ch] || ch;
+  return o;
+}
+
+/* ---- en：字典（鍵＝壓縮空白後的繁中原文） ---- */
+const EN = {
+"H3 Prompt 批次產生器":"H3 Prompt Batch Generator",
+"MiniMax H3 劇情提示詞產生器":"MiniMax H3 story prompt generator",
+"歷史紀錄":"History","ComfyUI 媒體庫":"ComfyUI Media","ComfyUI 設定":"ComfyUI Settings","系統設定":"Settings",
+"尚未檢查":"not checked yet","收合 / 展開選單":"Collapse / expand menu",
+"I2VA — 圖生影音":"I2VA — Image to Video+Audio",
+"圖片＝影片第一幀。1 格；一次拖入多張會自動逐張各成一筆（批次）。":"The image is the video's first frame. 1 slot; dropping several images creates one batch item each.",
+"FL2VA — 首尾幀生影音":"FL2VA — First & Last Frame",
+"兩張圖＝首幀＋尾幀，模型編寫連貫過渡劇情。滿兩格按「加入生成清單」或直接按「開始」。":"Two images = first + last frame; the model writes one continuous transition. Fill both slots then press \"Add to list\" or \"Start\".",
+"L2VA — 末幀生影音":"L2VA — Last Frame",
+"圖片＝影片最後一幀（首幀鎖定，由模型自由鋪陳）。一次拖入多張會自動逐張各成一筆。":"The image is the video's LAST frame (first frame unconstrained). Dropping several images creates one item each.",
+"REF2VA — 參考圖生影音":"REF2VA — Reference Images",
+"參考圖＝角色/物件外觀依據（非影格），1～9 張組成一筆。輸出六欄位參考格式。":"Reference images define character/object appearance (not frames); 1–9 images form one item. Outputs the six-section reference format.",
+"拖圖到這裡，或點下方格子選圖":"Drop images here, or click a slot below",
+"多張＝批次，每張一筆":"multiple images = one batch item each",
+"起始幀、結束幀各一格":"one slot each for first and last frame",
+"只有「結束幀」一格可放圖":"only the \"last frame\" slot takes an image",
+"點第 N 格選多張圖＝從第 N 格開始依序填入；✕ 移除、再點一次換圖":"click slot N and pick multiple images to fill from N onward; ✕ removes, click again to replace",
+"圖片＝影片第一幀。拖入多張圖片可批次逐一生成，每張完成即自動存進歷史紀錄。":"The image is the first frame. Drop several images to batch-generate; each result is saved to History automatically.",
+"開始":"Start","停止":"Stop","生成勾選的":"Generate checked","🎬 勾選的送 ComfyUI":"🎬 Send checked to ComfyUI",
+"勾選全部":"Check all","匯出 JSON":"Export JSON","匯出 TXT":"Export TXT","清空清單":"Clear list",
+"把圖片拖進來，或點此選檔":"Drop images here or click to choose files","依檔名排序，一次跑一張":"sorted by filename, one at a time",
+"✚ 加入生成清單":"✚ Add to list","清空格子":"Clear slots","顯示":"Show","全選":"Select all","重跑顯示中的":"Re-run shown",
+"起始幀":"first frame","結束幀":"last frame","首幀（鎖定）":"first frame (locked)",
+"FL2VA Movie — 連續首尾幀長片":"FL2VA Movie — Chained Long Film",
+"① 上傳 2～12 張分鏡 → 下方出現各片段分頁，可各自加提示 → ②「片段劇情生成」先寫好全部劇情（可逐段重生成到滿意） → ③「劇情影片處理」逐段出片，每段完成後等你按「可繼續」或「需調整」 → ④ 全部確認後「合併片段並顯示」。":"① Upload 2–12 storyboard images → per-segment tabs appear, each accepts its own hint → ② \"Generate stories\" writes every segment first (regenerate any until satisfied) → ③ \"Render videos\" outputs one segment at a time, waiting for \"Continue\" or \"Adjust\" after each → ④ once all confirmed, \"Merge & show\".",
+"分鏡圖":"Storyboard","整體劇情提示（選填，作為整體劇情規劃的方向）":"Overall story hint (optional; guides the whole-film plan)",
+"整體劇情（自動規劃：模型先看完全部分鏡圖寫出貫穿全片的劇情，再分配給各片段；可編輯）":"Overall story (auto-planned: the model reads every storyboard image, writes one film-wide plot, then assigns each segment its beat; editable)",
+"🧠 整體劇情規劃":"🧠 Plan story","✍️ 片段劇情生成":"✍️ Generate stories","🎬 劇情影片處理":"🎬 Render videos","🧵 合併片段並顯示":"🧵 Merge & show",
+"輸出片段":"Output segments","片段劇情":"Segment stories","🎉 完成的長片":"🎉 Finished film",
+"FL2VA Movie 紀錄":"FL2VA Movie Projects",
+"保存的長片專案：分鏡圖、各片段劇情與影片、完成的長片。點「開啟」載回 Movie 頁查看或繼續。":"Saved film projects: storyboard, per-segment stories and videos, and the finished film. \"Open\" loads one back into the Movie page.",
+"存在伺服器的 history 資料夾，區網上任何裝置看到的都是同一份。點縮圖看當時的完整結果。":"Stored in the server's history folder — every device on your LAN sees the same list. Click a thumbnail for the full result.",
+"重新整理":"Refresh","取消選取":"Deselect","匯入到上傳並處理":"Import & process","全部清除":"Clear all","重新生成顯示中的":"Re-generate shown",
+"上傳媒體庫":"Uploads","全選顯示中的":"Select all shown","刪除選取的":"Delete selected",
+"你上傳過的每一張原圖（同一張圖只留一份）。點圖看原圖；勾選後可一鍵匯入「上傳並處理」；刪除會":"Every original image you've uploaded (deduplicated). Click to view; check items to import into processing; deleting can",
+"連同用過這張圖的歷史紀錄一起刪":"also delete history records that used the image",
+"ComfyUI 的輸出資料夾。點卡片放大預覽，可下載或刪除。":"ComfyUI's output folder. Click a card to preview, download or delete.",
+"連線位址、工作流選擇與送出時要覆寫的參數。沒填的欄位一律照模板原值。":"Connection, workflow selection and per-send parameter overrides. Empty fields keep the template's values.",
+"連線與資源":"Connection & resources",
+"ComfyUI／llama-server 位址設定在伺服器端的":"ComfyUI / llama-server addresses live in the server-side",
+"（與 h3-server.py 同資料夾）。改檔存檔即生效，不需重啟、也不會顯示在網頁上。":"(next to h3-server.py). Saving the file takes effect immediately — no restart, never shown in the browser.",
+"🧹 強制 Free ComfyUI（卸載模型釋放 VRAM）":"🧹 Force-free ComfyUI (unload models, release VRAM)",
+"GPU 目前用量：":"GPU usage: ","刷新":"Refresh","📁 工作流":"📁 Workflow","從工作流資料夾（":"Pick a .json from the workflow folder (",
+"的":"in","）選一個 .json 直接載入為模板（Export (API) 或 Save 格式都可）。":") to load as the template (Export (API) or Save format).",
+"（載入中…）":"(loading…)","使用此工作流":"Use this workflow","重新掃描":"Rescan","⬆ 上傳工作流檔":"⬆ Upload workflow",
+"上傳的 .json 會存進工作流資料夾並出現在下拉清單；Save 存檔或 Export (API) 格式都支援，選用時自動轉成可執行模板（不需要先在 ComfyUI 跑過）。":"Uploaded .json files land in the workflow folder and appear in the dropdown; both Save and Export (API) formats are converted to a runnable template automatically (no prior ComfyUI run needed).",
+"⚙️ 工作流預設參數":"⚙️ Workflow parameter overrides",
+"送 ComfyUI 生成時覆寫模板裡的對應節點。留空＝用模板原值（括號內顯示模板目前的值）。":"Overrides the matching nodes when sending to ComfyUI. Empty = template value (current template values shown in parentheses).",
+"解析度":"Resolution","（照模板）":"(template)","步數 steps":"steps","模板值":"template value",
+"改完即時保存，重新整理不會消失。":"Changes save instantly and survive reloads.",
+"連線與生成":"Connection & generation",
+"temperature / top_p 等取樣參數請在 llama-server 後台（.env / 啟動參數）設定，前端只需要位址。":"Set sampling parameters (temperature / top_p …) on the llama-server side (.env / launch args).",
+"llama-server 位址設定在伺服器端的":"The llama-server address lives in the server-side",
+"），改檔存檔即生效；網頁不顯示、也不需填寫。":"); saving the file takes effect immediately — never shown or entered in the browser.",
+"Language（介面語言）":"Language","中文翻譯":"Chinese translation","開啟":"On","關閉":"Off",
+"自動重試次數":"Auto retries","重試目標":"Retry target","完全通過（無警告）":"Fully clean (no warnings)","無錯誤即可":"No errors",
+"生成結果不符合重試目標時自動重新生成，直到符合或用完次數， 並保留其中最好的一次。設 0 關閉。":"Regenerates until the retry target is met or attempts run out, keeping the best one. 0 disables.",
+"測試連線":"Test connection","重設全部設定":"Reset all settings",
+"🎞️ 進階：硬切檢測與自動重試":"🎞️ Advanced: cut detection & auto-retry",
+"影片生成完後自動品質審查（混合架構：ffmpeg 場景偵測抓硬切候選 → 視覺模型看幀確認並判斷劇情符合度）。 不通過會自動「換 seed 重跑」或「修劇情重跑」，直到通過或用完重試次數（保留評分最高的一次）。 只有勾選的類型會啟用。":"Automatic quality review after each render (hybrid: ffmpeg scene detection proposes cut candidates → a vision model confirms them and judges story match). Failures reroll the seed or revise the story until passing or retries run out (best-scoring attempt kept). Only checked types are enabled.",
+"及格分數（AI 評分 ≥ 此值且無確認硬切＝通過，不重跑）":"Pass score (AI score ≥ this with no confirmed cut = pass, no rerun)",
+"每段自動重試上限":"Retry cap per segment","FL2VA Movie 執行模式":"FL2VA Movie mode",
+"手動（每段完成後等待指示）":"Manual (wait after each segment)","完全自動化（審查通過自動續跑到合併）":"Fully automatic (auto-continue through merge)",
+"📚 經驗庫（整理經驗）":"📚 Experience library",
+"你在歷史紀錄上的 👍👎／標籤／備註會累積在這裡。按「整理經驗」讓模型":"Your 👍👎 ratings, tags and notes accumulate here. \"Distill\" asks the model to",
+"一次歸納全部待整理的反饋":"summarize all pending feedback at once",
+"， 提出通用規則；你審核後入庫，之後每次生成都會注入（依模式）。建議累積約 5 筆再整理，規則會準得多。":", proposing reusable rules; once you approve them they're injected into every generation (per mode). Collect ~5 items before distilling for better rules.",
+"必要":"Required","結構門檻（永遠套用，不可刪除；留空＝不限）":"Hard gates (always applied; empty = unlimited)",
+"劇情文字數量（最少）":"Story word count (min)","對白語言鎖定":"Dialogue language","不鎖定":"Any","日文":"Japanese","英文":"English","中文":"Chinese","韓文":"Korean",
+"每句台詞字數（最少）":"Words per line (min)","每句台詞字數（最多）":"Words per line (max)",
+"整理經驗":"Distill","載入中…":"Loading…","通用":"General","新增":"Add","經驗庫是空的":"The library is empty",
+"生成影片 System Prompt（全部類型）":"Generation System Prompt (all types)",
+"I2VA / FL2VA / L2VA / REF2VA 四種模式":"All four modes (I2VA / FL2VA / L2VA / REF2VA)","共用同一份":"share one",
+"生成用 system prompt——內建版本已涵蓋四種模式的格式規則。 左邊勾選哪一組，產生時就用哪一組。編輯內容會自動保存到伺服器。":"generation system prompt — the built-in covers all four modes' format rules. The checked set is the one used; edits save to the server automatically.",
+"新增一組":"New set","複製目前這組":"Duplicate","從檔案匯入":"Import file","刪除這組":"Delete set",
+"評分審查影片 System Prompt":"Review System Prompt",
+"「硬切檢測與自動重試」的視覺審查員指令——審查影片時帶入，定義評分規則與 accept / reroll / revise 的決策。 修改時務必保留「只輸出 JSON」的要求與欄位格式，否則審查結果無法解析。編輯即自動保存（存於本機瀏覽器）。":"Instructions for the vision reviewer used by cut detection & auto-retry — defines scoring rules and the accept / reroll / revise decision. Keep the \"JSON only\" requirement and the field format, or verdicts can't be parsed. Edits save locally.",
+"↩ 還原預設":"↩ Reset to default",
+"刪除上傳圖片":"Delete uploaded image","只從庫移除（保留歷史）":"Remove from library only (keep history)","連同歷史一起刪":"Delete with history","取消":"Cancel",
+"「只從庫移除」不會動到任何歷史紀錄——每筆紀錄都保有自己的原圖，之後照樣能點開、重跑； 如果日後再上傳同一張圖，這些紀錄會自動重新掛回來。":"\"Remove from library only\" leaves history untouched — every record keeps its own copy and can still be opened or rerun; re-uploading the same image relinks those records automatically.",
+"下載":"Download","刪除":"Delete","複製":"Copy","內建":"built-in","模式":"Mode","匯入":"Import","選取":"Select",
+"（舊紀錄，未記錄）":"(old record, not recorded)","（舊紀錄，重跑不套用）":"(old record; rerun won't apply)","未套用":"not applied",
+"檢查詞":"Checked phrases","標記已整理":"Mark distilled","保留":"Keep","加入勾選的規則":"Add checked rules","全部放棄（反饋保留）":"Discard all (keep feedback)",
+"連線正常":"Connected","連不上":"Unreachable","llama-server 正常":"llama-server OK","llama-server 連不上":"llama-server unreachable","檢查中…":"Checking…",
+"整體":"Overall","運鏡分佈":"Camera-move mix",
+"不同的圖本該產生不同的運鏡。若某一種超過 50%，代表模型在套習慣而不是看畫面。":"Different images should yield different camera moves. If one exceeds 50%, the model is following habit instead of the image.",
+"原始輸出":"Raw output","重跑這張":"Re-run this","複製 prompt":"Copy prompt","🎬 送 ComfyUI":"🎬 Send to ComfyUI","無預覽":"No preview",
+"輸出比例（寬:高，預設依圖自動匹配）":"Aspect ratio (W:H, auto-matched to the image by default)","自訂":"Custom",
+"劇情提示（選填，中/英/日皆可）":"Story hint (optional; any language)",
+"（資料夾內沒有 .json）":"(no .json in the folder)","（讀取失敗）":"(failed to read)","還沒有紀錄":"No records yet","僅 1024px":"1024px only",
+"劇情提示（選填，重跑時會一起送給模型）":"Story hint (optional; sent along on rerun)",
+"重跑 Prompt":"Re-run prompt","🎬 送 ComfyUI 生成":"🎬 Send to ComfyUI","評價（看完影片後）":"Rating (after watching)",
+"👍 效果好":"👍 Good","👎 不好":"👎 Bad","儲存評價":"Save rating","🤖 AI 影片審查":"🤖 AI video review",
+"還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","▶ 看影片":"▶ Watch","▶ 成片":"▶ Film","讀取失敗":"Failed to load",
+"▶ 可繼續":"▶ Continue","🔧 需調整":"🔧 Adjust","🎲 再賭一次（同劇情換 seed）":"🎲 Roll again (same story, new seed)",
+"🎬 用新劇情重跑影片":"🎬 Re-render with new story","▶ 就用目前影片，繼續":"▶ Keep this video, continue","依據▾":"why ▾",
+"🧭 本段任務（整體劇情規劃分配；可編輯）":"🧭 Segment beat (assigned by the plan; editable)",
+"此片段的補充提示（選填）":"Extra hint for this segment (optional)",
+"♻️ 重新生成劇情":"♻️ Regenerate story","🔓 解鎖此段":"🔓 Unlock segment","🎬 重新生成影片":"🎬 Regenerate video",
+"🔒 取消解鎖（維持原影片）":"🔒 Cancel unlock (keep video)","尚未生成劇情":"No story yet","還沒有保存的 Movie 專案":"No saved projects yet",
+"（已確認，唯讀）":"(confirmed, read-only)","已排入佇列":"Queued","生成中…":"Rendering…","抽幀＋場景掃描…":"Extracting frames + scanning…","視覺審查中…":"Vision review…",
+"ffmpeg 串接中…":"Concatenating with ffmpeg…","只有一段，直接以該段作為成片":"Single segment — using it as the film",
+"🎉 完成！成片已顯示於下方，也在 ComfyUI 媒體庫 video/movies/":"🎉 Done! The film is shown below and in ComfyUI Media under video/movies/",
+"已載入專案（可繼續操作或查看）":"Project loaded (continue or review)","已重排順序":"Reordered",
+"整體劇情規劃中…（一次看完全部分鏡圖）":"Planning the whole story… (reading every storyboard image)",
+"設定已保存":"Settings saved","已保存":"Saved","已保存 ✔":"Saved ✔","已還原預設":"Reset to default","保存中…":"Saving…","釋放中…":"Freeing…",
+"待生成劇情":"story pending","劇情就緒":"story ready","劇情有錯誤":"story has errors","🎬 影片生成中…":"🎬 Rendering…","⏸ 等待指示中…":"⏸ Waiting for you…","🔧 調整中":"🔧 Adjusting","✅ 已確認":"✅ Confirmed",
+"開啟原圖":"Open original","送 ComfyUI 用全解析度原圖":"Full-resolution original is sent to ComfyUI","這筆只有 1024px 工作副本，送 ComfyUI 會用它":"Only a 1024px working copy exists; it will be sent",
+"以檔名篩選":"filter by filename","移除這張":"Remove","直式／橫式切換":"Portrait / landscape","比例寬":"ratio W","比例高":"ratio H",
+"留空＝自由創作。輸入提示＝以此為劇情核心，例如：她在雪地裡撿到一隻迷路的小企鵝":"Empty = free creation. A hint becomes the story core, e.g. she finds a lost penguin in the snow",
+"留空＝自由創作":"empty = free creation","勾選後可批次生成 / 批次送 ComfyUI":"check to batch-generate / batch-send",
+"從清單移除這張（不影響已存的歷史紀錄）":"Remove from the list (saved history unaffected)","勾選後可匯入到上傳並處理":"check to import into processing",
+"一句話備註（選填，之後「整理經驗」會用到）":"One-line note (optional; used by Distill later)",
+"手動新增規則（中文即可，會自動翻成英文注入）":"Add a rule by hand (Chinese is fine; injected in English automatically)",
+"這組的名稱":"Name of this set","停用後不再注入":"Disabled rules are not injected",
+"輸出出現這些片語會被判違規並強制重試":"Outputs containing these phrases are rejected and retried",
+"設定檢查詞：輸出出現這些英文片語＝違規，強制重試修正":"Set checked phrases: outputs containing them are rejected and retried",
+"檢查詞（選填，逗號分隔；輸出出現這些英文片語＝違規，會強制重試修正）":"Checked phrases (optional, comma-separated; outputs containing them are rejected and retried)",
+"L2VA：首幀由模型自由鋪陳，不放圖":"L2VA: the first frame is left to the model — no image",
+"例如：她從清晨出門到夜晚回家的一天":"e.g. her day from leaving at dawn to coming home at night",
+"尚未規劃 — 按「整體劇情規劃」單獨生成，或按「片段劇情生成」時自動先規劃":"Not planned yet — press \"Plan story\", or it runs automatically before \"Generate stories\"",
+"整體劇情規劃後自動填入；也可自己指定這一段要演什麼、說什麼":"Filled by the story plan; you can also specify what this segment shows and says",
+"例如：這一段她坐下來開始塗防曬":"e.g. in this segment she sits down and applies sunscreen",
+"改劇情重生成後才可用":"available after regenerating the story","不限":"unlimited"
+};
+/* ---- en：樣板規則（動態字串） ---- */
+const T = s => trEN(s);
+const EN_T = [
+[/^已放 (\d+) 張（此模式至少需要 (\d+) 張）$/, m => `${m[1]} placed (this mode needs at least ${m[2]})`],
+[/^已放 (\d+) 張 → (\d+) 個片段$/, m => `${m[1]} images → ${m[2]} segments`],
+[/^已放 (\d+) 張$/, m => `${m[1]} placed`],
+[/^紀錄 (\d+) 筆$/, m => `${m[1]} records`],
+[/^(\d+) 張圖 · (\d+) \/ (\d+) 筆$/, m => `${m[1]} images · ${m[2]} / ${m[3]} records`],
+[/^重新生成顯示中的 (\d+) 張圖$/, m => `Re-generate the ${m[1]} shown`],
+[/^段 (\d+)（(\d+)→(\d+)）$/, m => `Seg ${m[1]} (${m[2]}→${m[3]})`],
+[/^段 (\d+)$/, m => `Seg ${m[1]}`],
+[/^分鏡 (\d+)$/, m => `Frame ${m[1]}`],
+[/^圖 (\d+)$/, m => `Ref ${m[1]}`],
+[/^附加圖 (\d+)$/, m => `Extra ${m[1]}`],
+[/^排隊中（第 (\d+) 位）$/, m => `Queued (#${m[1]})`],
+[/^完成 ✓ ?(.*)$/, m => `Done ✓ ${m[1]}`],
+[/^段 (\d+)：(.*)$/, m => `Seg ${m[1]}: ${T(m[2])}`],
+[/^GPU 協調：(.*)$/, m => `GPU coordination: ${T(m[1])}`],
+[/^整體規劃：(.*)$/, m => `Planning: ${T(m[1])}`],
+[/^(\d+) 次嘗試$/, m => `${m[1]} attempts`],
+[/^(\d+) 個版本$/, m => `${m[1]} versions`],
+[/^被 (\d+) 筆歷史紀錄使用$/, m => `used by ${m[1]} history records`],
+[/^(\d+) 圖 (\d+) 段$/, m => `${m[1]} images, ${m[2]} segments`],
+[/^錯誤 (\d+)$/, m => `${m[1]} errors`],
+[/^警告 (\d+)$/, m => `${m[1]} warnings`],
+[/^等待 ComfyUI 生成完成…（VRAM (.*)）$/, m => `waiting for ComfyUI to finish… (VRAM ${m[1]})`],
+[/^釋放 ComfyUI(.*)$/, m => `freeing ComfyUI VRAM…`],
+[/^等待 VRAM 釋放(.*)$/, m => `waiting for VRAM to drop…`],
+[/^等待 llama(.*)$/, m => `waiting for llama to unload…`],
+[/^失敗：(.*)$/, m => `Failed: ${T(m[1])}`],
+[/^✘ (.*)$/, m => `✘ ${T(m[1])}`],
+[/^全部片段已確認 — 可以按「合併片段並顯示」(.*)$/, m => `All segments confirmed — press "Merge & show"${m[1] ? " (manual merge only after manual edits)" : ""}`],
+[/^段 (\d+) 已解鎖(.*)$/, m => `Seg ${m[1]} unlocked — regenerate the story or the video; it relocks when done and never auto-merges`],
+[/^段 (\d+) 已重新鎖定(.*)$/, m => `Seg ${m[1]} relocked${m[2].includes("維持") ? " (original video kept)" : ""}`],
+[/^段 (\d+) 重新生成完成(.*)$/, m => `Seg ${m[1]} re-rendered and relocked — merge manually when ready`],
+[/^段 (\d+) 完成(.*)$/, m => `Seg ${m[1]} done${m[2] ? " " + T(m[2]) : ""}`],
+[/^段 (\d+) 影片完成(.*)$/, m => `Seg ${m[1]} video done — press "Continue" or "Adjust"`],
+[/^⏸ 段 (\d+) 等待指示 — H3 Storyboard$/, m => `⏸ Seg ${m[1]} waiting — H3 Storyboard`],
+];
+function trEN(s){
+  const k = s.replace(/\s+/g, " ").trim();
+  if (!k || !/[一-鿿]/.test(k)) return s;
+  if (EN[k] != null) return EN[k];
+  for (const [re, fn] of EN_T){ const m = k.match(re); if (m) return fn(m); }
+  return s;
+}
+
+function translate(s){
+  if (LANG === "zh-CN") return trCN(s);
+  if (LANG === "en") return trEN(s);
+  return s;
+}
+
+/* ---- DOM 翻譯層 ---- */
+const ORIG = new WeakMap();      // Text -> 原文
+const AORIG = new WeakMap();     // Element -> {attr: 原文}
+const MARK = new WeakSet();      // 自己寫入的節點（觀察器略過一次）
+const SKIP = {SCRIPT: 1, STYLE: 1, TEXTAREA: 1, INPUT: 1, CODE: 1};
+function skip(el){
+  for (let e = el; e; e = e.parentElement){
+    if (SKIP[e.tagName] || (e.classList && e.classList.contains("no-i18n"))) return true;
+  }
+  return false;
+}
+function txText(n){
+  const p = n.parentElement;
+  if (!p || skip(p)) return;
+  let base = ORIG.get(n);
+  if (base == null){ base = n.nodeValue; ORIG.set(n, base); }
+  const out = translate(base);
+  if (out !== n.nodeValue){ MARK.add(n); n.nodeValue = out; }
+}
+function txAttrs(el){
+  if (skip(el) && el.tagName !== "INPUT" && el.tagName !== "TEXTAREA") return;   // 輸入框的 placeholder 仍翻
+  for (const a of ("placeholder" in el ? ["placeholder", "title"] : ["title"])){
+    const cur = el.getAttribute && el.getAttribute(a);
+    if (!cur) continue;
+    let rec = AORIG.get(el);
+    if (!rec) AORIG.set(el, rec = {});
+    if (rec[a] == null) rec[a] = cur;
+    const out = translate(rec[a]);
+    if (out !== cur) el.setAttribute(a, out);
+  }
+}
+function walk(root){
+  if (root.nodeType === 3){ txText(root); return; }
+  if (root.nodeType !== 1) return;
+  txAttrs(root);
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let n;
+  while ((n = w.nextNode())){
+    if (n.nodeType === 3) txText(n);
+    else txAttrs(n);
+  }
+}
+new MutationObserver(muts => {
+  for (const m of muts){
+    if (m.type === "characterData"){
+      if (MARK.has(m.target)){ MARK.delete(m.target); continue; }
+      ORIG.delete(m.target);          // app 寫了新內容 → 以新值為原文
+      txText(m.target);
+    } else if (m.type === "childList"){
+      m.addedNodes.forEach(walk);
+    } else if (m.type === "attributes"){
+      const rec = AORIG.get(m.target);
+      const cur = m.target.getAttribute(m.attributeName);
+      if (rec && rec[m.attributeName] != null && translate(rec[m.attributeName]) === cur) continue;   // 自己寫的
+      if (rec) delete rec[m.attributeName];
+      txAttrs(m.target);
+    }
+  }
+}).observe(document.documentElement, {subtree: true, childList: true, characterData: true,
+                                      attributes: true, attributeFilter: ["placeholder", "title"]});
+
+function applyLang(l){
+  LANG = l;
+  try{ localStorage.setItem(LKEY, l); }catch(e){}
+  document.documentElement.lang = l === "en" ? "en" : (l === "zh-CN" ? "zh-CN" : "zh-TW");
+  walk(document.documentElement);
+}
+const sel = document.getElementById("lang");
+if (sel){ sel.value = LANG; sel.onchange = () => applyLang(sel.value); }
+if (LANG !== "zh-TW") applyLang(LANG);
+})();
 </script>
