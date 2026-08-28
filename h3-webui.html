@@ -677,6 +677,14 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div><label>自動重試上限</label><input type="number" id="t2vaRetry" min="0" max="10" value="5"></div>
     </div>
     <p class="hint" style="margin-top:6px">影片審查需在下方「硬切檢測與自動重試」勾選 T2VA 才會啟用。</p>
+    <div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <label>潤飾劇本 System Prompt（「✨ 潤飾劇情」與全自動的潤飾階段用；<code>{DUR}</code> 會代入影片秒數）</label>
+      <textarea id="t2Sp" rows="10" style="width:100%;margin-top:6px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px"></textarea>
+      <div class="row" style="margin-top:6px">
+        <button class="ghost mini" id="t2SpReset">↩ 還原預設</button>
+        <span class="status" id="t2SpStat" style="margin:0"></span>
+      </div>
+    </div>
   </div>
 
   <div class="panel">
@@ -1929,7 +1937,31 @@ const T2VA_POLISH_SYS = `你是影視編劇兼分鏡師。把使用者的「原�
 【收尾】最後 2-3 秒如何在畫面內自然收束（不能靠切黑或換場景）
 
 動作要符合真實人體與物理規律；避免 AI 生成感、人物變形、手部異常。只輸出劇本，不要任何說明或前言。`;
-function t2vaPolishSys(){ return T2VA_POLISH_SYS.replace("{DUR}", effDur()); }
+/* 潤飾 system prompt：可在系統設定編輯，存於本機；空/未存 → 用內建 */
+const T2SP_KEY = "h3.t2vasp.v1";
+function getT2Sp(){ return store.get(T2SP_KEY) || T2VA_POLISH_SYS; }
+function t2vaPolishSys(){ return getT2Sp().split("{DUR}").join(effDur()); }
+(function t2SpInit(){
+  const ta = $("#t2Sp");
+  if (!ta) return;
+  ta.value = getT2Sp();
+  let t;
+  ta.addEventListener("input", () => {
+    clearTimeout(t);
+    t = setTimeout(() => {
+      const v = ta.value.trim();
+      if (v && v !== T2VA_POLISH_SYS) store.set(T2SP_KEY, v);
+      else store.del(T2SP_KEY);
+      $("#t2SpStat").textContent = "已保存";
+      setTimeout(() => $("#t2SpStat").textContent = "", 1200);
+    }, 600);
+  });
+  $("#t2SpReset").onclick = () => {
+    store.del(T2SP_KEY); ta.value = T2VA_POLISH_SYS;
+    $("#t2SpStat").textContent = "已還原預設";
+    setTimeout(() => $("#t2SpStat").textContent = "", 1500);
+  };
+})();
 
 $("#t2vaAdd").onclick = () => {
   const txt = $("#t2vaInput").value.trim();
@@ -4206,7 +4238,9 @@ const EN = {
 "影片秒數":"Duration (s)",
 "📝 原始輸入劇情":"📝 Raw story","✨ AI 潤飾後劇本":"✨ Polished script","（未記錄）":"(not recorded)",
 "無輸入圖（純文字劇本）":"no input image (text-only script)",
-"🎞 產出紀錄 — 選一支作為此段影片":"🎞 Takes — pick one for this segment"
+"🎞 產出紀錄 — 選一支作為此段影片":"🎞 Takes — pick one for this segment",
+"潤飾劇本 System Prompt（「✨ 潤飾劇情」與全自動的潤飾階段用；":"Polish System Prompt (used by \"✨ Polish story\" and the automatic polish stage; ",
+"會代入影片秒數）":"is replaced with the video duration)"
 };
 /* ---- en：樣板規則（動態字串） ---- */
 const T = s => trEN(s);
