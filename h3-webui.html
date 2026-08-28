@@ -1775,6 +1775,7 @@ async function gpuPrepare(target, onStep){
     if (onStep) onStep(
       j.state === "comfy_busy"           ? `GPU 協調：等待 ComfyUI 生成完成…（VRAM ${used}）` :
       j.state === "waiting_llama_unload" ? `GPU 協調：等待 llama 閒置卸載…（VRAM ${used}）` :
+      j.state === "llama_in_use"         ? `GPU 協調：llama 正在生成中，等它完成…（VRAM ${used}）` :
                                            `GPU 協調：釋放 VRAM 中…（${used}）`);
     await new Promise(r => setTimeout(r, 3000));
   }

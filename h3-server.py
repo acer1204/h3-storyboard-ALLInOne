@@ -113,6 +113,11 @@ COMFY_URL = CONFIG["comfy_url"].rstrip("/")
 
 _CFG_MTIME = [os.path.getmtime(CONFIG_PATH) if os.path.exists(CONFIG_PATH) else 0]
 
+# llama 使用追蹤（GPU 協調用）：所有 llama 呼叫都走 /api/llama/chat 代理，
+# 所以伺服器能精確知道「誰在用 GPU」——in-flight 計數＋最後一次完成時間
+LLAMA_INFLIGHT = [0]
+LLAMA_LAST = [0.0]
+
 
 def maybe_reload_config():
     """config.json 被手動編輯後自動重讀（以 mtime 判斷），改位址不需要重啟伺服器。"""
@@ -1752,10 +1757,14 @@ class H(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "bad json: %s" % e}, 400)
             if not isinstance(body, dict):
                 return self.send_json({"error": "empty body"}, 400)
+            LLAMA_INFLIGHT[0] += 1
             try:
                 return self.send_json(llama_api("/v1/chat/completions", body, timeout=600))
             except Exception as e:
                 return self.send_json({"error": "llama-server: %s" % e}, 502)
+            finally:
+                LLAMA_INFLIGHT[0] -= 1
+                LLAMA_LAST[0] = time.time()
 
         if p == "/api/config":
             try:
@@ -1927,9 +1936,11 @@ class H(SimpleHTTPRequestHandler):
             return self.send_json({"ok": True, "gpu": gpu_mem()})
 
         if p == "/api/gpu/prepare":
-            # One nonblocking coordination step; the frontend polls until ready.
-            # target=llama: comfy idle -> free comfy -> ready when VRAM below threshold
-            # target=comfy: ready when VRAM below threshold (llama auto-unloads when idle)
+            # 身分感知協調：VRAM 數字分不出持有者，改用可靠訊號 ——
+            #   llama 使用中/剛用完：由 /api/llama/chat 代理精確追蹤（in-flight 計數＋最後完成時間）
+            #   ComfyUI 忙碌：問它的 /queue
+            # 規則：同對象連續使用直接放行（ComfyUI 自己會排佇列、llama 權重還駐留），
+            #       只有 llama <-> ComfyUI「交接」才需要等待/釋放。
             try:
                 body = self.read_json()
             except Exception:
@@ -1940,7 +1951,12 @@ class H(SimpleHTTPRequestHandler):
             used = mem.get("used_mb")
             if used is None:
                 return self.send_json({"ready": True, "state": "no_gpu_info", "gpu": mem})
+            in_flight = LLAMA_INFLIGHT[0] > 0
+            since_llama = (time.time() - LLAMA_LAST[0]) if LLAMA_LAST[0] else 1e9
             if target == "llama":
+                if in_flight or since_llama < 8:
+                    # llama 正在用或權重還在卡上（idle 卸載前）：連續呼叫不用等
+                    return self.send_json({"ready": True, "state": "llama_resident", "gpu": mem})
                 if used <= thr:
                     return self.send_json({"ready": True, "state": "gpu_free", "gpu": mem})
                 busy = comfy_busy()
@@ -1955,9 +1971,17 @@ class H(SimpleHTTPRequestHandler):
                 mem = gpu_mem()
                 return self.send_json({"ready": (mem.get("used_mb") or 0) <= thr, "state": state, "gpu": mem})
             if target == "comfy":
+                if in_flight:
+                    return self.send_json({"ready": False, "state": "llama_in_use", "gpu": mem})
                 if used <= thr:
                     return self.send_json({"ready": True, "state": "gpu_free", "gpu": mem})
-                return self.send_json({"ready": False, "state": "waiting_llama_unload", "gpu": mem})
+                if comfy_busy():
+                    # 高 VRAM 是 ComfyUI 自己在用：直接排進它的佇列即可
+                    return self.send_json({"ready": True, "state": "comfy_owns_gpu", "gpu": mem})
+                if since_llama < 90:
+                    return self.send_json({"ready": False, "state": "waiting_llama_unload", "gpu": mem})
+                # 沒人聲稱佔用：多半是 ComfyUI 閒置駐留的模型，送單無妨
+                return self.send_json({"ready": True, "state": "assume_comfy_resident", "gpu": mem})
             return self.send_json({"error": "target 必須是 llama 或 comfy"}, 400)
 
         if p == "/api/history/clear":
