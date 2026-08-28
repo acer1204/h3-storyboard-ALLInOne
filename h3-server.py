@@ -1874,6 +1874,9 @@ class H(SimpleHTTPRequestHandler):
                        "video": str(s.get("video") or "")[:300],
                        "ai_score": s.get("ai_score"),
                        "ai_problems": [str(x)[:300] for x in (s.get("ai_problems") or [])][:8],
+                       # 每次產出的影片（自動重試/再賭/重跑都留下來，可回頭選用）
+                       "takes": [{"video": str(t.get("video") or "")[:300], "score": t.get("score")}
+                                 for t in (s.get("takes") or []) if isinstance(t, dict)][:20],
                    } for s in segs[:12]]}
             with LOCK:
                 old = {}
