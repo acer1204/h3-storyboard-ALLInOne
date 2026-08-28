@@ -2028,6 +2028,13 @@ async function runOneT2VA(it){
   const auto = rvCfg().t2vaAuto;
   if (!it.polished) await t2vaPolish(it);
   if (auto){
+    if (it.direct){
+      // 直接使用潤飾劇本：跳過生成 Prompt 與翻譯
+      it.state = "ok"; render();
+      const k = items.indexOf(it);
+      if (k >= 0 && onServer) t2DirectSend(k);
+      return;
+    }
     await t2vaGen(it);
     if (it.content && onServer){
       const k = items.indexOf(it);
@@ -2037,6 +2044,32 @@ async function runOneT2VA(it){
     it.state = "pending";                    // 半自動：停在潤飾完成，之後用卡片上的按鈕逐步進行
   }
 }
+/* 直接使用潤飾劇本送 ComfyUI（中文劇本＝最終 prompt；審查修劇情＝重寫劇本） */
+window.t2DirectSend = async k => {
+  const it = items[k];
+  if (!it || !it.polished || !onServer) return;
+  if (it.state === "pending") { it.state = "ok"; render(); }
+  // 先存歷史（沒有生成 prompt 的紀錄：content＝潤飾劇本，審查結果才有地方掛）
+  if (!it.rec_id){
+    const w = {...it, content: it.polished, raw: it.polished, zh: "", elapsed: it.elapsed || 0};
+    try{ await record(w); it.rec_id = w.rec_id; }catch(e){}
+  }
+  const stat = document.querySelector(`[data-cstat="${k}"]`);
+  const payload = {dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
+                   mode: "t2va", content: it.polished, ...comfyFields(it.polished, "t2va")};
+  if (!rvEnabled("t2va")){ comfySend(payload, stat, null); return; }
+  comfyRunReviewed(payload, {mode: "t2va", content: it.polished, inputs: [], recId: it.rec_id,
+    inputLabel: "無輸入圖（直接使用潤飾劇本）",
+    reviseFn: async (instruction) => {
+      await gpuPrepare("llama", () => {});
+      const j = await chat([{role: "system", content: t2vaPolishSys()},
+        {role: "user", content: it.rawStory + "\n\n[影片審查意見，修正劇本時務必處理] " + instruction}],
+        {temp: 0.8, max: 1600});
+      const np = (j.choices[0].message.content || "").trim();
+      if (np){ it.polished = np; render(); }
+      return it.polished;
+    }}, stat, null);
+};
 window.t2Tab = (k, t) => { if (items[k]){ items[k].t2vaTab = t; render(); } };
 window.setT2 = (k, f, v) => { const it = items[k]; if (!it) return;
   it[f] = v;
@@ -2257,9 +2290,14 @@ function render(){
         <div class="note-wrap" style="margin:0 0 6px">${it.t2vaTab
           ? `<textarea class="note" data-note="${k}" rows="6" placeholder="尚未潤飾 — 按下方「✨ 潤飾劇情」，或切全自動後按「開始」" oninput="setT2(${k},'polished',this.value); agrow(this)">${esc(it.polished||"")}</textarea>`
           : `<textarea class="note" data-note="${k}" rows="6" oninput="setT2(${k},'rawStory',this.value); agrow(this)">${esc(it.rawStory||"")}</textarea>`}</div>
+        ${it.t2vaTab ? `<label class="small" style="display:flex;gap:6px;align-items:center;margin:0 0 6px">
+          <input type="checkbox" ${it.direct?"checked":""} onchange="setT2(${k},'direct',this.checked); render()">
+          直接使用此劇本（跳過生成 Prompt 與翻譯，中文劇本直接送 ComfyUI）</label>` : ""}
         <div class="row" style="margin:0 0 8px">
           <button class="ghost mini" onclick="t2DoPolish(${k})" ${it.state==="running"?"disabled":""}>✨ 潤飾劇情</button>
-          <button class="ghost mini" onclick="t2DoGen(${k})" ${(!it.polished || it.state==="running")?"disabled":""}>📝 生成 Prompt${it.content?"（重新生成）":""}</button>
+          <button class="ghost mini" onclick="t2DoGen(${k})" ${(!it.polished || it.state==="running" || it.direct)?"disabled":""}>📝 生成 Prompt${it.content?"（重新生成）":""}</button>
+          ${it.direct ? `<button class="ghost mini" onclick="t2DirectSend(${k})" ${(!it.polished || it.state==="running")?"disabled":""}>🎬 直接送 ComfyUI</button>` : ""}
+          ${it.direct && !it.content ? `<span class="hint" data-cstat="${k}"></span>` : ""}
         </div>` : `
         <div class="note-wrap" style="margin:0 0 8px"><label>劇情提示（選填，中/英/日皆可）</label>
           <textarea class="note" data-note="${k}" rows="3" placeholder="留空＝自由創作。輸入提示＝以此為劇情核心，例如：她在雪地裡撿到一隻迷路的小企鵝"
@@ -4239,7 +4277,10 @@ const EN = {
 "無輸入圖（純文字劇本）":"no input image (text-only script)",
 "🎞 產出紀錄 — 選一支作為此段影片":"🎞 Takes — pick one for this segment",
 "潤飾劇本 System Prompt（「✨ 潤飾劇情」與全自動的潤飾階段用；":"Polish System Prompt (used by \"✨ Polish story\" and the automatic polish stage; ",
-"會代入影片秒數）":"is replaced with the video duration)"
+"會代入影片秒數）":"is replaced with the video duration)",
+"直接使用此劇本（跳過生成 Prompt 與翻譯，中文劇本直接送 ComfyUI）":"Use this script directly (skip prompt generation & translation; the Chinese script goes straight to ComfyUI)",
+"🎬 直接送 ComfyUI":"🎬 Send script to ComfyUI",
+"無輸入圖（直接使用潤飾劇本）":"no input image (polished script used directly)"
 };
 /* ---- en：樣板規則（動態字串） ---- */
 const T = s => trEN(s);
