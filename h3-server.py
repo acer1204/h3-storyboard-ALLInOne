@@ -72,7 +72,7 @@ LESSONS_FILE = os.path.join(LESSONS_DIR, "lessons.json")
 REQUIRED_FILE = os.path.join(LESSONS_DIR, "required.json")
 os.makedirs(LESSONS_DIR, exist_ok=True)
 PAGE = "h3-webui.html"
-MODES = ("i2va", "fl2va", "l2va", "ref2va")   # generation task modes
+MODES = ("t2va", "i2va", "fl2va", "l2va", "ref2va")   # generation task modes
 # ---------------------------------------------------------------- config
 # Personal hosts/paths live in config.json (git-ignored). config.example.json documents the keys.
 # Priority: CLI flag > env var H3_* > config.json > built-in default.
@@ -1130,7 +1130,7 @@ def apply_wf_params(g, wf, aspect):
                     ins["aspect_preset_when_not_image"] = aspect["preset"]
 
 
-MODE_TO_DIRECTOR = {"i2va": "I2VA", "fl2va": "FL2VA", "l2va": "L2VA", "ref2va": "REF2VA"}
+MODE_TO_DIRECTOR = {"t2va": "T2VA", "i2va": "I2VA", "fl2va": "FL2VA", "l2va": "L2VA", "ref2va": "REF2VA"}
 
 
 def split_fields(content, mode=""):
@@ -1196,8 +1196,12 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
         bs["mode"] = dmode
     ins["builder_state"] = json.dumps(bs, ensure_ascii=False)
     tl = json.loads(old_tl_str)
-    names = [image_name] + [n for n in (extra_names or []) if n]
-    if dmode:
+    names = [n for n in ([image_name] + list(extra_names or [])) if n]
+    if dmode == "T2VA":
+        # 純文字模式：移除圖片項目，其餘（音訊參考等）保留
+        tl["items"] = [it for it in tl.get("items", []) if it.get("type") != "image"]
+        done = True
+    elif dmode:
         # 重建圖片清單：非圖片項目（音訊參考等）保留原樣
         keep = [it for it in tl.get("items", []) if it.get("type") != "image"]
         img_items = []
@@ -2200,16 +2204,19 @@ class H(SimpleHTTPRequestHandler):
                 mb, _ = parse_data_image(durl)
                 if mb:
                     extra_blobs.append(mb)
-            if blob is None:
+            if blob is None and run_mode != "t2va":
                 return self.send_json({"error": "沒有可用的圖片（rec_id 找不到原圖，也沒帶 image）"}, 400)
             # 影片秒數："15 seconds" / "15" / 15 -> 15
             dur = None
             md = re.search(r"\d+", str(body.get("dur") or ""))
             if md:
                 dur = int(md.group(0))
-            name = "h3webui_%s.%s" % (new_id(), ext)
             try:
-                up = comfy_upload(name, blob)
+                up_name = None
+                if blob is not None:
+                    name = "h3webui_%s.%s" % (new_id(), ext)
+                    up = comfy_upload(name, blob)
+                    up_name = up.get("name", name)
                 extra_names = []
                 for k2, mb in enumerate(extra_blobs):
                     nm2 = "h3webui_%s_x%d.jpg" % (new_id(), k2 + 1)
@@ -2219,7 +2226,7 @@ class H(SimpleHTTPRequestHandler):
                 graph, extra = comfy_build(str(body.get("imd") or flds["imd"]),
                                            str(body.get("soundscape") or flds["soundscape"]),
                                            str(body.get("music") or flds["music"]),
-                                           up.get("name", name), dur,
+                                           up_name, dur,
                                            body.get("wf"), body.get("aspect"), blob,
                                            mode=run_mode, extra_names=extra_names, full_prompt=full_prompt)
                 payload = {"prompt": graph, "client_id": "h3-webui"}
@@ -2379,6 +2386,9 @@ class H(SimpleHTTPRequestHandler):
             "attempts": max(1, int(body.get("attempts") or 1)) if str(body.get("attempts") or "1").isdigit() else 1,
             "shots": int(body.get("shots") or 0) if str(body.get("shots") or "0").isdigit() else 0,
             "sp_hash": str(body.get("sp_hash", ""))[:16],
+            # T2VA：原始輸入劇情與 AI 潤飾後劇本
+            "story_raw": str(body.get("story_raw", "") or "")[:8000],
+            "story_polished": str(body.get("story_polished", "") or "")[:12000],
             # ---- generation context, so a record can be re-run exactly as it was made ----
             "mode": (str(body.get("mode", "i2va")) if str(body.get("mode", "i2va")) in MODES else "i2va"),
             "prompt_id": str(body.get("prompt_id", "") or "")[:64],

@@ -361,6 +361,10 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div class="brand" style="padding:0">H3 Storyboard<small>MiniMax H3 劇情提示詞產生器</small></div>
   </div>
 
+  <button class="nav" data-view="run" data-mode="t2va" data-tip="T2VA 文字生影音">
+    <svg viewBox="0 0 24 24"><path d="M4 6h16M4 6v2m16-2v2M12 6v14m-3 0h6"/></svg>
+    <span>T2VA</span><span class="cnt"></span></button>
+
   <button class="nav on" data-view="run" data-mode="i2va" data-tip="I2VA 圖生影音">
     <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-8 8"/></svg>
     <span>I2VA</span><span class="cnt" id="navRun"></span></button><!-- navRun kept for compat; per-mode counts use .cnt below -->
@@ -383,6 +387,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <svg viewBox="0 0 24 24"><path d="M3 3v6h6"/><path d="M3.5 13a9 9 0 1 0 2-5.5L3 9"/><path d="M12 8v5l3 2"/></svg>
     <span>歷史紀錄</span><span class="cnt" id="navHist"></span></button>
   <div id="histsub">
+    <button class="nav sub" data-view="hist" data-hmode="t2va"><span>· T2VA</span></button>
     <button class="nav sub" data-view="hist" data-hmode="i2va"><span>· I2VA</span></button>
     <button class="nav sub" data-view="hist" data-hmode="fl2va"><span>· FL2VA</span></button>
     <button class="nav sub" data-view="hist" data-hmode="l2va"><span>· L2VA</span></button>
@@ -429,6 +434,25 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
   <div id="drop"><b id="dropB">把圖片拖進來，或點此選檔</b><span id="dropS">依檔名排序，一次跑一張</span></div>
   <input type="file" id="files" multiple accept="image/*" hidden>
+
+  <div id="t2vaZone" style="display:none">
+    <div class="note-wrap"><label>📝 原始劇情（任何語言；一筆＝一支影片）</label>
+      <textarea class="note" id="t2vaInput" rows="5"
+        placeholder="輸入你想要的劇情，例如：一位女僕在聖誕夜的咖啡廳裡偷偷佈置驚喜派對，最後被店長發現，兩人一起舉杯。"></textarea></div>
+    <div class="row" style="margin:8px 0 0;align-items:center;gap:10px">
+      <button class="mini" id="t2vaAdd">✚ 加入生成清單</button>
+      <label class="small" style="display:flex;align-items:center;gap:6px">輸出比例
+        <select id="t2vaAR">
+          <option value="1:1">1:1</option><option value="2:3">2:3</option><option value="3:4">3:4</option>
+          <option value="5:8">5:8</option><option value="9:16" selected>9:16</option><option value="9:21">9:21</option>
+        </select></label>
+      <label class="small" style="display:flex;align-items:center;gap:6px">方向
+        <select id="t2vaSwap">
+          <option value="0" selected>直式</option><option value="1">橫式</option>
+        </select></label>
+      <span class="hint" id="t2vaModeHint"></span>
+    </div>
+  </div>
 
   <div id="slotzone" class="hide">
     <div class="slotgrid" id="slotgrid"></div>
@@ -598,6 +622,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <h3>⚙️ 工作流預設參數</h3>
     <p class="ph">送 ComfyUI 生成時覆寫模板裡的對應節點。留空＝用模板原值（括號內顯示模板目前的值）。</p>
     <div class="grid">
+      <div><label>影片秒數</label><input type="number" id="wdur" min="1" max="30" step="1" value="10"></div>
       <div><label>FPS</label><input type="number" id="wfps" min="1" max="120" step="1" placeholder="模板值"></div>
       <div><label>解析度</label><select id="wres"><option value="">（照模板）</option></select></div>
       <div><label>步數 steps</label><input type="number" id="wsteps" min="1" max="100" step="1" placeholder="模板值"></div>
@@ -616,6 +641,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <h3>連線與生成</h3>
     <p class="ph">temperature / top_p 等取樣參數請在 llama-server 後台（.env / 啟動參數）設定，前端只需要位址。</p>
     <select id="mode" style="display:none">
+      <option value="t2va">t2va</option>
       <option value="i2va">i2va</option><option value="fl2va">fl2va</option>
       <option value="l2va">l2va</option><option value="ref2va">ref2va</option></select>
     <p class="ph">llama-server 位址設定在伺服器端的 <code>config.json</code>（<code>llama_url</code>），改檔存檔即生效；網頁不顯示、也不需填寫。</p>
@@ -640,11 +666,26 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   </div>
 
   <div class="panel">
+    <h3>📝 T2VA（文字生影音）</h3>
+    <p class="ph">T2VA 的流程控制與審查門檻，獨立於其他模式。全自動＝輸入劇情後自動「潤飾 → 生成 Prompt → 翻譯 → 送 ComfyUI（含審查重試）」一路跑完；半自動＝每一步自己按按鈕。</p>
+    <div class="grid">
+      <div><label>執行模式</label><select id="t2vaAuto">
+        <option value="0" selected>半自動（潤飾／生成／送出都手動按）</option>
+        <option value="1">全自動（加入清單按開始後一路跑完）</option></select></div>
+      <div><label>及格分數（審查 AI 評分 ≥ 此值＝通過）</label>
+        <input type="number" id="t2vaPass" min="0" max="10" step="0.5" value="7"></div>
+      <div><label>自動重試上限</label><input type="number" id="t2vaRetry" min="0" max="10" value="5"></div>
+    </div>
+    <p class="hint" style="margin-top:6px">影片審查需在下方「硬切檢測與自動重試」勾選 T2VA 才會啟用。</p>
+  </div>
+
+  <div class="panel">
     <h3>🎞️ 進階：硬切檢測與自動重試</h3>
     <p class="ph">影片生成完後自動品質審查（混合架構：ffmpeg 場景偵測抓硬切候選 → 視覺模型看幀確認並判斷劇情符合度）。
       不通過會自動「換 seed 重跑」或「修劇情重跑」，直到通過或用完重試次數（保留評分最高的一次）。
       只有勾選的類型會啟用。</p>
     <div class="row" style="gap:16px;flex-wrap:wrap">
+      <label class="small"><input type="checkbox" id="rvT2va"> T2VA</label>
       <label class="small"><input type="checkbox" id="rvI2va"> I2VA</label>
       <label class="small"><input type="checkbox" id="rvFl2va"> FL2VA</label>
       <label class="small"><input type="checkbox" id="rvL2va"> L2VA</label>
@@ -792,7 +833,7 @@ const onServer = location.protocol.startsWith("http");
 const SKEY="h3.settings.v1", SPKEY="h3.sp.v1", VKEY="h3.view.v1";
 const FIELDS={tr:"#tr",
               retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
-              wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa"};
+              wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur"};
 const store={
   get(k){try{return localStorage.getItem(k)}catch(e){return null}},
   set(k,v){try{localStorage.setItem(k,v);return true}catch(e){return false}},
@@ -826,8 +867,10 @@ $("#sreset").onclick = () => {
 
 /* ================= system prompt 庫（四模式共用一份） ================= */
 const PAPI = "/api/prompts";
-const MODES = {i2va:"I2VA", fl2va:"FL2VA", l2va:"L2VA", ref2va:"REF2VA"};
+const MODES = {t2va:"T2VA", i2va:"I2VA", fl2va:"FL2VA", l2va:"L2VA", ref2va:"REF2VA"};
 const MODE_INFO = {
+  t2va:  {title:"T2VA — 文字生影音", sub:"輸入原始劇情 → AI 潤飾成分鏡劇本 → 生成 H3 Prompt（含翻譯）→ 送 ComfyUI。可輸入多筆加入清單批次處理；全自動/半自動在系統設定的 T2VA 區塊切換。",
+          drop:"", dropS:"", min:0, max:0, text:true},
   i2va:  {title:"I2VA — 圖生影音", sub:"圖片＝影片第一幀。1 格；一次拖入多張會自動逐張各成一筆（批次）。",
           drop:"拖圖到這裡，或點下方格子選圖", dropS:"多張＝批次，每張一筆", min:1, max:1},
   fl2va: {title:"FL2VA — 首尾幀生影音", sub:"兩張圖＝首幀＋尾幀，模型編寫連貫過渡劇情。滿兩格按「加入生成清單」或直接按「開始」。",
@@ -857,6 +900,12 @@ window.setMode = m => {
   $("#dropB").textContent = inf.drop;
   $("#dropS").textContent = inf.dropS;
   $("#drop").classList.add("slim");
+  // T2VA：純文字輸入，隱藏拖圖區與格子
+  const isText = !!inf.text;
+  $("#drop").style.display = isText ? "none" : "";
+  $("#slotzone").style.display = isText ? "none" : "";
+  const tz = $("#t2vaZone");
+  if (tz) tz.style.display = isText ? "" : "none";
   $("#spmodetag").textContent = MODES[m];
   document.querySelectorAll('.nav[data-mode]').forEach(b =>
     b.classList.toggle("on", b.dataset.mode === m && $("#v-run").classList.contains("on")));
@@ -1746,9 +1795,10 @@ function userNote(it){
   it.angle = angle;
   let t = `Task mode: ${mode}. Creative angle for this run: ${angle}. `
         + `Analyze the image(s) and write the story prompt in the strict format for this mode.`;
-  if ((WF_DUR || 20) !== 20)
-    t += ` IMPORTANT — target video duration is ${WF_DUR} seconds (NOT 20): scale ALL story timing to ${WF_DUR}s`
-       + ` (phase boundaries, second marks, pacing, beat count) and aim for at least ${Math.max(120, Math.round(WF_DUR * 15))} words in the main narrative,`
+  const D = effDur();
+  if (D !== 20)
+    t += ` IMPORTANT — target video duration is ${D} seconds (NOT 20): scale ALL story timing to ${D}s`
+       + ` (phase boundaries, second marks, pacing, beat count) and aim for at least ${Math.max(120, Math.round(D * 15))} words in the main narrative,`
        + ` overriding any 20-second or word-count assumption in the format rules.`;
   const fl = frameLine(it.w, it.h);
   if (fl) t += "\n" + fl;
@@ -1819,6 +1869,7 @@ async function genWithRetry(imgUrl, utext, target, wantShots, onStep){
   return best;
 }
 async function runOne(it){
+  if ((it.mode || curMode()) === "t2va") return runOneT2VA(it);
   const inf = MODE_INFO[it.mode || curMode()];
   if ((it.files || []).length < inf.min) throw new Error(`此模式需要 ${inf.min} 張圖（目前 ${(it.files||[]).length} 張）`);
   const encs = [];
@@ -1864,6 +1915,111 @@ async function runOne(it){
   }
   render(); record(it);
 }
+
+/* ================= T2VA：文字生影音 ================= */
+const T2VA_POLISH_SYS = `你是影視編劇。把使用者的「原始劇情」潤飾成適合 MiniMax H3 影音生成的單鏡頭分鏡劇本，時長 {DUR} 秒：
+- 保持使用者的劇情意圖與元素，不新增他沒有暗示的角色或場景
+- 具體化：場景與光線、每位角色的外觀服裝、2~4 個動作節拍（標大約秒數）、鏡頭運動建議（一鏡到底、平滑運鏡）
+- 台詞：至少 2 句日文對白（各附中文意思），安排在合理的節拍上
+- 結尾要在畫面內自然收束，不能靠切換場景
+只輸出繁體中文劇本，不要任何說明或前言。`;
+function t2vaPolishSys(){ return T2VA_POLISH_SYS.replace("{DUR}", effDur()); }
+
+$("#t2vaAdd").onclick = () => {
+  const txt = $("#t2vaInput").value.trim();
+  if (!txt){ $("#t2vaModeHint").textContent = "先輸入劇情"; return; }
+  const arv = $("#t2vaAR").value;
+  const a = AR_LIST.find(x => x[0] === arv) || ["9:16", 9, 16];
+  items.push({mode: "t2va", rawStory: txt, polished: "", t2vaTab: 0,
+              name: txt.replace(/\s+/g, " ").slice(0, 28) + (txt.length > 28 ? "…" : ""),
+              state: "pending", files: [], previews: [],
+              ar: {preset: arv, w: a[1], h: a[2], swap: $("#t2vaSwap").value === "1"}, arTouched: true});
+  $("#t2vaInput").value = "";
+  $("#t2vaModeHint").textContent = "";
+  render(); $("#run").disabled = !modeItems().length;
+  $("#prog").textContent = `${modeItems().length} 筆待處理`;
+  updateNavCounts();
+};
+
+function t2vaNote(it){
+  const D = effDur();
+  let t = `Task mode: T2VA (text-to-video — there is NO input image; invent all visuals from the script below). `
+    + `Write the story prompt in the strict three-field format (integrated_multimodal_description / overall_soundscape / non_diegetic_music). `
+    + `Base the ENTIRE story strictly on this script — keep its scenes, characters, actions, dialogue plan and ending:\n${(it.polished || it.rawStory).trim()}\n`
+    + `Open the description with a full visual definition of the scene and every character (appearance, outfit, lighting) since there is no reference image.`;
+  if (D !== 20)
+    t += ` IMPORTANT — target video duration is ${D} seconds (NOT 20): scale ALL story timing to ${D}s`
+       + ` and aim for at least ${Math.max(120, Math.round(D * 15))} words in the main narrative.`;
+  return t;
+}
+
+async function t2vaPolish(it){
+  await gpuPrepare("llama", t => { it.state2 = t; render(); });
+  it.state2 = "潤飾劇情中…"; render();
+  try{
+    const j = await chat([{role: "system", content: t2vaPolishSys()},
+                          {role: "user", content: it.rawStory}], {temp: 0.8, max: 1600});
+    it.polished = (j.choices[0].message.content || "").trim();
+    it.t2vaTab = 1;
+  } finally { it.state2 = null; }
+  render();
+}
+
+async function t2vaGen(it){
+  await gpuPrepare("llama", t => { it.state2 = t; render(); });
+  const t0 = performance.now();
+  const best = await genWithRetry([], t2vaNote(it), 20, 1, t => { it.state2 = t; render(); });
+  it.elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+  it.usage = best.j.usage || {}; it.timings = best.j.timings || {};
+  it.raw = best.raw; it.content = best.content;
+  it.ctx = genContext(); it.ctx.mode = "t2va";
+  it.v = best.v; it.attempts = best.attempts;
+  it.state = it.v.E.length ? "fail" : (it.v.W.length ? "warn" : "ok");
+  it.state2 = null; render();
+  if ($("#tr").value === "1"){
+    it.state2 = "翻譯中"; render();
+    try{
+      const t = await chat([{role: "system", content: TR_SYS}, {role: "user", content: it.content}],
+                           {temp: 0.3, topp: 0.9, max: 1800});
+      it.zh = (t.choices[0].message.content || "").trim();
+    }catch(e){ it.zh = "（翻譯失敗：" + e.message + "）"; }
+    it.state2 = null;
+  }
+  render(); record(it);
+}
+
+async function runOneT2VA(it){
+  const auto = rvCfg().t2vaAuto;
+  if (!it.polished) await t2vaPolish(it);
+  if (auto){
+    await t2vaGen(it);
+    if (it.content && onServer){
+      const k = items.indexOf(it);
+      if (k >= 0) comfyFromItem(k, null);   // 全自動：接著送 ComfyUI（含審查重試，卡片顯示進度）
+    }
+  } else if (!it.content){
+    it.state = "pending";                    // 半自動：停在潤飾完成，之後用卡片上的按鈕逐步進行
+  }
+}
+window.t2Tab = (k, t) => { if (items[k]){ items[k].t2vaTab = t; render(); } };
+window.setT2 = (k, f, v) => { const it = items[k]; if (!it) return;
+  it[f] = v;
+  if (f === "rawStory") it.name = v.replace(/\s+/g, " ").slice(0, 28) + (v.length > 28 ? "…" : ""); };
+window.t2DoPolish = async k => {
+  const it = items[k]; if (!it || it.state === "running") return;
+  const ps = it.content ? it.state : "pending";
+  it.state = "running"; it.keep = true; render();
+  try{ await t2vaPolish(it); it.state = ps; }
+  catch(e){ it.state = "error"; it.err = e.message; }
+  render();
+};
+window.t2DoGen = async k => {
+  const it = items[k]; if (!it || !it.polished || it.state === "running") return;
+  it.state = "running"; it.keep = true; it.zh = null; render();
+  try{ await t2vaGen(it); }
+  catch(e){ it.state = "error"; it.err = e.message; }
+  render(); convergence();
+};
 
 /* ---- 狀態篩選 ---- */
 const STATES=[["ok","通過","f-ok"],["warn","警告","f-warn"],["fail","錯誤","f-fail"],
@@ -1931,8 +2087,10 @@ async function runQueue(list, label){
   convergence(); updateFilterBar();
 }
 $("#run").onclick = () => {
+  // T2VA：輸入框有內容但還沒按「加入清單」→ 自動加入再跑
+  if (curMode() === "t2va" && $("#t2vaInput").value.trim()) $("#t2vaAdd").onclick();
   // 格子模式：格子裡有圖但還沒按「加入清單」→ 自動組成一筆再跑
-  if (slotsArr().some(Boolean)){
+  if (curMode() !== "t2va" && slotsArr().some(Boolean)){
     if (!composeSlots()) return;
   }
   runQueue(modeItems().filter(i=>i.state==="pending"||i.state==="error"), "處理中");
@@ -2026,8 +2184,11 @@ function render(){
                     : (it.imgs && it.imgs.length ? it.imgs
                     : [it.thumb || it.preview].filter(Boolean)));
     const modeTag = `<span class="modetag">${MODES[it.mode] || MODES[curMode()]}</span>`;
+    const isT2 = it.mode === "t2va";
     return `<div class="card" data-st="${it.state}" data-keep="${it.keep?1:0}">
-      <div class="thumb">${thumbs.length
+      <div class="thumb">${isT2
+          ? `<div class="ph" style="padding:26px 8px;text-align:center;border:1px dashed var(--line);border-radius:9px;font-size:20px">📝<div style="font-size:12px;margin-top:4px">文字生影音</div></div>`
+          : thumbs.length
           ? (thumbs.length === 1 ? `<img src="${thumbs[0]}">`
              : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">${thumbs.map((u,i) =>
                  `<img src="${u}" title="圖 ${i+1}" style="aspect-ratio:1;object-fit:cover">`).join("")}</div>`)
@@ -2052,9 +2213,21 @@ function render(){
           </div></div>
       </div>
       <div>
+        ${isT2 ? `
+        <div class="row" style="gap:6px;margin:0 0 6px">
+          <button class="ghost mini ${it.t2vaTab ? "" : "on"}" style="${it.t2vaTab ? "" : "border-color:var(--acc);color:var(--acc)"}" onclick="t2Tab(${k},0)">原始輸入劇情</button>
+          <button class="ghost mini ${it.t2vaTab ? "on" : ""}" style="${it.t2vaTab ? "border-color:var(--acc);color:var(--acc)" : ""}" onclick="t2Tab(${k},1)">AI 潤飾後劇本</button>
+        </div>
+        <div class="note-wrap" style="margin:0 0 6px">${it.t2vaTab
+          ? `<textarea class="note" data-note="${k}" rows="6" placeholder="尚未潤飾 — 按下方「✨ 潤飾劇情」，或切全自動後按「開始」" oninput="setT2(${k},'polished',this.value); agrow(this)">${esc(it.polished||"")}</textarea>`
+          : `<textarea class="note" data-note="${k}" rows="6" oninput="setT2(${k},'rawStory',this.value); agrow(this)">${esc(it.rawStory||"")}</textarea>`}</div>
+        <div class="row" style="margin:0 0 8px">
+          <button class="ghost mini" onclick="t2DoPolish(${k})" ${it.state==="running"?"disabled":""}>✨ 潤飾劇情</button>
+          <button class="ghost mini" onclick="t2DoGen(${k})" ${(!it.polished || it.state==="running")?"disabled":""}>📝 生成 Prompt${it.content?"（重新生成）":""}</button>
+        </div>` : `
         <div class="note-wrap" style="margin:0 0 8px"><label>劇情提示（選填，中/英/日皆可）</label>
           <textarea class="note" data-note="${k}" rows="3" placeholder="留空＝自由創作。輸入提示＝以此為劇情核心，例如：她在雪地裡撿到一隻迷路的小企鵝"
-            oninput="setNote(${k}, this.value); agrow(this)">${esc(it.note||"")}</textarea></div>
+            oninput="setNote(${k}, this.value); agrow(this)">${esc(it.note||"")}</textarea></div>`}
         <div class="hd"><input type="checkbox" class="selck" ${it.sel?"checked":""} onclick="toggleSel(${k}, this.checked)" title="勾選後可批次生成 / 批次送 ComfyUI"><span class="badge ${b[0]}">${b[1]}</span><span class="name">${esc(it.name)}</span>${it.state2?`<span class="meta" style="margin:0;color:var(--warn)">${esc(it.state2)}</span>`:""}<button class="xdel" onclick="removeItem(${k})" ${it.state==="running"?"disabled":""} title="從清單移除這張（不影響已存的歷史紀錄）">✕</button></div>
       ${it.elapsed?`<div class="meta"><span>${it.elapsed}s</span>
         <span>${it.usage.completion_tokens||0} tokens</span>
@@ -2147,7 +2320,13 @@ function arPayload(it){
 /* ---- 工作流預設參數（ComfyUI 設定頁） ---- */
 /* 影片時長跟隨目前模板（Director 的 duration）；劇情長度/時間軸與送單都用它 */
 let WF_DUR = 20;
-const durStr = () => (WF_DUR || 20) + " seconds";
+/* 影片秒數：工作流預設參數的「影片秒數」欄（預設 10）優先；清空則照模板 */
+function effDur(){
+  const el = $("#wdur");
+  const v = el ? parseInt(el.value) : NaN;
+  return (v >= 1 && v <= 120) ? v : (WF_DUR || 10);
+}
+const durStr = () => effDur() + " seconds";
 async function loadWfParams(){
   if (!onServer) return;
   try{
@@ -2157,6 +2336,7 @@ async function loadWfParams(){
     const cur = sel.value;
     sel.innerHTML = `<option value="">（照模板：${esc(j.resolution_preset||"?")}）</option>`
       + (j.presets||[]).map(x => `<option value="${esc(x)}" ${x===cur?"selected":""}>${esc(x)}</option>`).join("");
+    if ($("#wdur") && !$("#wdur").value) $("#wdur").value = "10";
     $("#wfps").placeholder = j.fps != null ? `模板 ${j.fps}` : "模板值";
     $("#wsteps").placeholder = j.steps != null ? `模板 ${j.steps}` : "模板值";
     $("#wsv").placeholder = j.shift_video != null ? `模板 ${j.shift_video}` : "模板值";
@@ -2251,6 +2431,7 @@ async function record(it){
         errors:it.v?it.v.E:[],warnings:it.v?it.v.W:[],
         content:it.content,raw:it.raw,zh:it.zh||"",note:it.note||"",thumb:it.thumb,full:it.full||"",
         orig:it.orig||"", more:it.more||[],
+        story_raw:it.rawStory||"", story_polished:it.polished||"",
         attempts:it.attempts||1,shots:it.shots||1,
         ...(() => { const c = it.ctx || genContext(); return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
                      lora: c.lora ? {...c.lora, report:(it.lora||{}).report||null, issues:(it.lora||{}).issues||[]} : null}; })()})});
@@ -2368,12 +2549,17 @@ window.openRec = async id => {
       + Array.from({length: r.nmore}, (_, i) =>
           `<img src="/api/extra/${r.id}/${i+1}.jpg" style="height:84px;border-radius:6px;border:1px solid var(--line)" title="附加圖 ${i+1}">`).join("")
       + `</div>` : "";
+  const isT2rec = hMode(r) === "t2va";
   $("#mbody").innerHTML = `
     ${vbar}
     <div class="mtop">
-      <div><a href="${imgSrc}" target="_blank" rel="noopener" title="開啟原圖">
+      <div>${isT2rec
+        ? `<div class="panel" style="margin:0;padding:12px">
+             <p class="lab">📝 原始輸入劇情</p><pre style="white-space:pre-wrap;margin:4px 0 10px">${esc(r.story_raw || "（未記錄）")}</pre>
+             <p class="lab">✨ AI 潤飾後劇本</p><pre style="white-space:pre-wrap;margin:4px 0 0">${esc(r.story_polished || "（未記錄）")}</pre></div>`
+        : `<a href="${imgSrc}" target="_blank" rel="noopener" title="開啟原圖">
         <img class="mimg" src="${imgSrc}"
-          onerror="this.onerror=null;this.src='/api/thumb/${r.id}.jpg'"></a>${moreImgs}</div>
+          onerror="this.onerror=null;this.src='/api/thumb/${r.id}.jpg'"></a>${moreImgs}`}</div>
       <div class="panel" style="margin:0;padding:16px">
         <div class="note-wrap" style="margin:0">
           <label>劇情提示（選填，重跑時會一起送給模型）</label>
@@ -2467,25 +2653,30 @@ window.openRec = async id => {
   $("#modal").classList.add("on");
 };
 
-/* 依 id 取回原圖重跑一次，結果另存為新的一筆，回傳新 id */
+/* 依 id 取回原圖重跑一次，結果另存為新的一筆，回傳新 id（T2VA 用潤飾劇本重跑，無圖） */
 async function regenerate(rec, note, shots, onStep){
   const step = onStep || (() => {});
-  step("取回圖片…");
-  const full = await urlToDataURL("/api/full/" + rec.id + ".jpg");
-  const thumb = await urlToDataURL("/api/thumb/" + rec.id + ".jpg").catch(() => "");
-  const more = [];
-  for (let i = 1; i <= (rec.nmore || 0); i++)
-    more.push(await urlToDataURL("/api/extra/" + rec.id + "/" + i + ".jpg").catch(() => null));
-  const imgs = [full, ...more.filter(Boolean)];
+  const isT2 = hMode(rec) === "t2va";
+  let imgs = [], full = "", thumb = "", utext;
+  if (isT2){
+    utext = t2vaNote({polished: rec.story_polished || "", rawStory: rec.story_raw || rec.content || ""});
+  } else {
+    step("取回圖片…");
+    full = await urlToDataURL("/api/full/" + rec.id + ".jpg");
+    thumb = await urlToDataURL("/api/thumb/" + rec.id + ".jpg").catch(() => "");
+    const more = [];
+    for (let i = 1; i <= (rec.nmore || 0); i++)
+      more.push(await urlToDataURL("/api/extra/" + rec.id + "/" + i + ".jpg").catch(() => null));
+    imgs = [full, ...more.filter(Boolean)];
+    const dim = await new Promise(res => {
+      const im = new Image();
+      im.onload = () => res({w: im.naturalWidth, h: im.naturalHeight});
+      im.onerror = () => res({w: 0, h: 0});
+      im.src = full;
+    });
+    utext = userNote({mode: hMode(rec), note: note || "", w: dim.w, h: dim.h});
+  }
   const target = 20;
-  const dim = await new Promise(res => {
-    const im = new Image();
-    im.onload = () => res({w: im.naturalWidth, h: im.naturalHeight});
-    im.onerror = () => res({w: 0, h: 0});
-    im.src = full;
-  });
-  const fake = {mode: hMode(rec), note: note || "", w: dim.w, h: dim.h};
-  const utext = userNote(fake);
 
   await gpuPrepare("llama", step);
   step("產生中…");
@@ -2515,6 +2706,7 @@ async function regenerate(rec, note, shots, onStep){
   const saved = await (await fetch(API, {method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({image:rec.image, dur:durStr(), state, elapsed_s:+elapsed,
       usage:j.usage||{}, errors:v.E, warnings:v.W, content, raw, zh, note, thumb, full,
+      story_raw: rec.story_raw || "", story_polished: rec.story_polished || "",
       orig_from: rec.id, more: imgs.slice(1),
       attempts:best.attempts, shots:1,
       ...(() => { const c = ctxSnap; return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
@@ -2717,25 +2909,30 @@ window.comfyFromRec = (id, btnEl) => {
       try{ inputs.push(await urlToDataURL("/api/extra/" + id + "/" + n + ".jpg")); }catch(e){}
     }
     comfyRunReviewed(payload, {mode, content: rec.content, inputs, recId: id,
-      inputLabel: mode === "ref2va" ? "參考圖" : "首幀/尾幀"}, stat, btnEl);
+      inputLabel: mode === "t2va" ? "無輸入圖（純文字劇本）" : mode === "ref2va" ? "參考圖" : "首幀/尾幀"}, stat, btnEl);
   });
 };
 window.comfyFromItem = (k, btnEl) => {
   const it = items[k]; if (!it || !it.content) return;
   const stat = document.querySelector(`[data-cstat="${k}"]`);
   const mode = it.mode || curMode();
-  const payload = {image: it.orig || it.full, dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
-                   mode, content: it.content, more: it.more || [],
-                   ...comfyFields(it.content, mode)};
+  const isT2 = mode === "t2va";
+  const payload = {dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
+                   mode, content: it.content, ...comfyFields(it.content, mode)};
+  if (!isT2){ payload.image = it.orig || it.full; payload.more = it.more || []; }
   if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
-  comfyRunReviewed(payload, {mode, content: it.content, inputs: it.imgs || [it.full], recId: it.rec_id,
-    inputLabel: mode === "ref2va" ? "參考圖" : (mode === "fl2va" ? "首幀、尾幀" : mode === "l2va" ? "目標尾幀" : "首幀"),
+  comfyRunReviewed(payload, {mode, content: it.content,
+    inputs: isT2 ? [] : (it.imgs || [it.full]), recId: it.rec_id,
+    inputLabel: isT2 ? "無輸入圖（純文字劇本）"
+      : mode === "ref2va" ? "參考圖" : (mode === "fl2va" ? "首幀、尾幀" : mode === "l2va" ? "目標尾幀" : "首幀"),
     reviseFn: async (instruction) => {
       $("#mode").value = mode;
       await gpuPrepare("llama", () => {});
       const prev = {content: it.content, issues: ["[影片審查意見] " + instruction]};
-      const g = await genOnce(it.imgs || [it.full],
-        userNote({mode, note: (it.note || "").trim(), w: it.w, h: it.h}), 20, 1, prev);
+      const g = isT2
+        ? await genOnce([], t2vaNote(it), 20, 1, prev)
+        : await genOnce(it.imgs || [it.full],
+            userNote({mode, note: (it.note || "").trim(), w: it.w, h: it.h}), 20, 1, prev);
       it.content = g.content; it.v = g.v;
       it.state = g.v.E.length ? "fail" : (g.v.W.length ? "warn" : "ok");
       render();
@@ -3045,32 +3242,49 @@ const RV_KEY = "h3.review.v1";
 function rvCfg(){
   let c = {};
   try{ c = JSON.parse(store.get(RV_KEY) || "{}"); }catch(e){}
-  const out = Object.assign({modes: {}, retry: 5, passScore: 7, movieAuto: false}, c);
+  const out = Object.assign({modes: {}, retry: 5, passScore: 7, movieAuto: false,
+                             t2vaAuto: false, t2vaPass: 7, t2vaRetry: 5}, c);
   out.modes = out.modes || {};
   return out;
 }
 function rvPersist(){
-  const c = {modes: {i2va: $("#rvI2va").checked, fl2va: $("#rvFl2va").checked, l2va: $("#rvL2va").checked,
-                     ref2va: $("#rvRef2va").checked, movie: $("#rvMovie").checked},
+  const c = {modes: {t2va: $("#rvT2va").checked, i2va: $("#rvI2va").checked, fl2va: $("#rvFl2va").checked,
+                     l2va: $("#rvL2va").checked, ref2va: $("#rvRef2va").checked, movie: $("#rvMovie").checked},
              retry: Math.max(0, Math.min(10, parseInt($("#rvRetry").value) || 5)),
              passScore: Math.max(0, Math.min(10, parseFloat($("#rvPass").value) || 7)),
-             movieAuto: $("#rvMovieAuto").value === "1"};
+             movieAuto: $("#rvMovieAuto").value === "1",
+             t2vaAuto: $("#t2vaAuto").value === "1",
+             t2vaPass: Math.max(0, Math.min(10, parseFloat($("#t2vaPass").value) || 7)),
+             t2vaRetry: Math.max(0, Math.min(10, parseInt($("#t2vaRetry").value) || 5))};
   store.set(RV_KEY, JSON.stringify(c));
   $("#rvStat").textContent = "已保存";
   clearTimeout(rvPersist.t); rvPersist.t = setTimeout(() => $("#rvStat").textContent = "", 1500);
 }
 (function rvInit(){
   const c = rvCfg();
+  $("#rvT2va").checked = !!c.modes.t2va;
   $("#rvI2va").checked = !!c.modes.i2va; $("#rvFl2va").checked = !!c.modes.fl2va;
   $("#rvL2va").checked = !!c.modes.l2va; $("#rvRef2va").checked = !!c.modes.ref2va;
   $("#rvMovie").checked = !!c.modes.movie;
   $("#rvRetry").value = c.retry;
   $("#rvPass").value = c.passScore;
   $("#rvMovieAuto").value = c.movieAuto ? "1" : "0";
-  ["rvI2va","rvFl2va","rvL2va","rvRef2va","rvMovie","rvRetry","rvPass","rvMovieAuto"].forEach(id => {
+  $("#t2vaAuto").value = c.t2vaAuto ? "1" : "0";
+  $("#t2vaPass").value = c.t2vaPass != null ? c.t2vaPass : 7;
+  $("#t2vaRetry").value = c.t2vaRetry != null ? c.t2vaRetry : 5;
+  ["rvT2va","rvI2va","rvFl2va","rvL2va","rvRef2va","rvMovie","rvRetry","rvPass","rvMovieAuto",
+   "t2vaAuto","t2vaPass","t2vaRetry"].forEach(id => {
     $("#" + id).addEventListener("change", rvPersist);
   });
 })();
+/* T2VA 專屬審查門檻：reviewVideo / comfyRunReviewed 依 ctx.mode 取用 */
+function rvCfgFor(mode){
+  const c = rvCfg();
+  if (mode === "t2va")
+    return {...c, passScore: c.t2vaPass != null ? c.t2vaPass : c.passScore,
+                  retry: c.t2vaRetry != null ? c.t2vaRetry : c.retry};
+  return c;
+}
 function rvEnabled(kind){ return !!rvCfg().modes[kind]; }
 
 const REVIEW_SYS = `你是影片生成品質審查員。你會看到：任務模式、劇情 prompt、輸入圖（首/尾幀或參考圖）、從生成影片抽出的幀（各標時間戳）、以及演算法偵測到的轉場候選點（type=cut 瞬間硬切、type=wipe 劃像轉場、type=transition 漸進轉場）。
@@ -3153,8 +3367,8 @@ async function reviewVideo(videoRel, ctx, onStep){
   if (!["accept", "reroll", "revise"].includes(v.action)) v.action = "accept";
   v.score = typeof v.score === "number" ? v.score : 5;
   if (v.hard_cut && v.score > 5) v.score = 5;          // 一致性：有硬切不可能高分（避免 8/10＋硬切的矛盾輸出）
-  // 及格分數門檻：分數達標且無確認硬切＝通過（不重跑）；反之未達標一定不通過
-  const pass = rvCfg().passScore;
+  // 及格分數門檻：分數達標且無確認硬切＝通過（不重跑）；反之未達標一定不通過（T2VA 用自己的門檻）
+  const pass = rvCfgFor(ctx.mode).passScore;
   if (!v.hard_cut && v.score >= pass) v.action = "accept";
   else if (v.action === "accept") v.action = "reroll";
   v.scan = {cuts: scan.cuts, duration: scan.duration};
@@ -3178,6 +3392,7 @@ async function rvPersistToRec(recId, v, tries){
 async function comfyRunReviewed(payload, ctx, statusEl, btn){
   if (btn) btn.disabled = true;
   const set = t => { if (statusEl && statusEl.isConnected) statusEl.textContent = t; };
+  const rc = rvCfgFor(ctx.mode);          // T2VA 有獨立的及格分數與重試上限
   let tries = 0, best = null;
   for (;;){
     await gpuPrepare("comfy", set);
@@ -3199,18 +3414,18 @@ async function comfyRunReviewed(payload, ctx, statusEl, btn){
     v._video = mp4;
     if (!best || v.score > best.score) best = {video: mp4, score: v.score, v};
     if (v.action === "accept"){
-      set("完成 ✔ 審查 " + v.score + "/10（及格線 " + rvCfg().passScore + "）· " + mp4);
+      set("完成 ✔ 審查 " + v.score + "/10（及格線 " + rc.passScore + "）· " + mp4);
       rvPersistToRec(ctx.recId, v, tries);
       break;
     }
-    if (tries >= rvCfg().retry){
+    if (tries >= rc.retry){
       set("重試達上限，保留最佳（" + best.score + "/10）：" + best.video);
       rvPersistToRec(ctx.recId, best.v, tries);
       break;
     }
     tries++;
     set("審查未過（" + v.score + "/10）→ " + (v.action === "revise" ? "修劇情" : "換 seed")
-        + " 重跑（" + tries + "/" + rvCfg().retry + "）");
+        + " 重跑（" + tries + "/" + rc.retry + "）");
     if (v.action === "revise" && v.revise_instruction && ctx.reviseFn){
       try{
         const nc = await ctx.reviseFn(v.revise_instruction, set);
@@ -3932,7 +4147,25 @@ const EN = {
 "尚未規劃 — 按「整體劇情規劃」單獨生成，或按「片段劇情生成」時自動先規劃":"Not planned yet — press \"Plan story\", or it runs automatically before \"Generate stories\"",
 "整體劇情規劃後自動填入；也可自己指定這一段要演什麼、說什麼":"Filled by the story plan; you can also specify what this segment shows and says",
 "例如：這一段她坐下來開始塗防曬":"e.g. in this segment she sits down and applies sunscreen",
-"改劇情重生成後才可用":"available after regenerating the story","不限":"unlimited"
+"改劇情重生成後才可用":"available after regenerating the story","不限":"unlimited",
+"T2VA — 文字生影音":"T2VA — Text to Video+Audio",
+"輸入原始劇情 → AI 潤飾成分鏡劇本 → 生成 H3 Prompt（含翻譯）→ 送 ComfyUI。可輸入多筆加入清單批次處理；全自動/半自動在系統設定的 T2VA 區塊切換。":"Type a raw story → the model polishes it into a storyboard script → generates the H3 prompt (with translation) → sends to ComfyUI. Add multiple stories to the list for batching; switch full/semi-automatic in Settings under T2VA.",
+"📝 原始劇情（任何語言；一筆＝一支影片）":"📝 Raw story (any language; one entry = one video)",
+"輸入你想要的劇情，例如：一位女僕在聖誕夜的咖啡廳裡偷偷佈置驚喜派對，最後被店長發現，兩人一起舉杯。":"Type the story you want, e.g. a maid secretly sets up a surprise party in the cafe on Christmas Eve; the owner finds out and they toast together.",
+"輸出比例":"Aspect","方向":"Orientation","直式":"Portrait","橫式":"Landscape",
+"原始輸入劇情":"Raw story","AI 潤飾後劇本":"Polished script","✨ 潤飾劇情":"✨ Polish story",
+"📝 生成 Prompt":"📝 Generate prompt","📝 生成 Prompt（重新生成）":"📝 Generate prompt (again)",
+"文字生影音":"text to video","潤飾劇情中…":"Polishing story…","先輸入劇情":"Enter a story first",
+"尚未潤飾 — 按下方「✨ 潤飾劇情」，或切全自動後按「開始」":"Not polished yet — press \"✨ Polish story\" below, or switch to fully-automatic and press Start",
+"📝 T2VA（文字生影音）":"📝 T2VA (text to video)",
+"T2VA 的流程控制與審查門檻，獨立於其他模式。全自動＝輸入劇情後自動「潤飾 → 生成 Prompt → 翻譯 → 送 ComfyUI（含審查重試）」一路跑完；半自動＝每一步自己按按鈕。":"T2VA's flow control and review thresholds, independent from other modes. Fully automatic = polish → generate prompt → translate → send to ComfyUI (with review retries) in one go; semi-automatic = press each step yourself.",
+"執行模式":"Mode","半自動（潤飾／生成／送出都手動按）":"Semi-automatic (polish / generate / send are manual)",
+"全自動（加入清單按開始後一路跑完）":"Fully automatic (Start runs everything)",
+"及格分數（審查 AI 評分 ≥ 此值＝通過）":"Pass score (review score ≥ this = pass)","自動重試上限":"Retry cap",
+"影片審查需在下方「硬切檢測與自動重試」勾選 T2VA 才會啟用。":"Video review runs only when T2VA is checked under \"cut detection & auto-retry\" below.",
+"影片秒數":"Duration (s)",
+"📝 原始輸入劇情":"📝 Raw story","✨ AI 潤飾後劇本":"✨ Polished script","（未記錄）":"(not recorded)",
+"無輸入圖（純文字劇本）":"no input image (text-only script)"
 };
 /* ---- en：樣板規則（動態字串） ---- */
 const T = s => trEN(s);
