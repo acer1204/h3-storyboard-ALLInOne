@@ -1764,7 +1764,7 @@ async function chat(messages, opts={}){
    target=comfy：等 llama 閒置自動卸載（伺服器端 .env 設 10 秒）後才送 ComfyUI */
 async function gpuPrepare(target, onStep){
   if (!onServer) return;
-  for (let i = 0; i < 60; i++){          // 最多等 ~3 分鐘
+  for (let i = 0; i < 400; i++){         // 最多等 ~20 分鐘（等一支影片算完的量級；超時放行）
     let j;
     try {
       j = await (await fetch("/api/gpu/prepare", {method:"POST",
@@ -2029,21 +2029,37 @@ async function runOneT2VA(it){
   const auto = rvCfg().t2vaAuto;
   if (!it.polished) await t2vaPolish(it);
   if (auto){
+    // 兩階段：佇列先把所有項目的 llama 工作（潤飾＋Prompt）跑完，影片送出集中到
+    // t2vaDrainSends() 逐支序列處理 —— 避免 llama 與 ComfyUI 同時上卡互搶 VRAM
     if (it.direct){
-      // 直接使用潤飾劇本：跳過生成 Prompt 與翻譯
-      it.state = "ok"; render();
-      const k = items.indexOf(it);
-      if (k >= 0 && onServer) t2DirectSend(k);
+      it.state = "ok"; it._autoSend = !!onServer; render();
       return;
     }
     await t2vaGen(it);
-    if (it.content && onServer){
-      const k = items.indexOf(it);
-      if (k >= 0) comfyFromItem(k, null);   // 全自動：接著送 ComfyUI（含審查重試，卡片顯示進度）
-    }
+    if (it.content && onServer) it._autoSend = true;
   } else if (!it.content){
     it.state = "pending";                    // 半自動：停在潤飾完成，之後用卡片上的按鈕逐步進行
   }
+}
+/* 全自動的影片階段：等佇列的 llama 工作全部完成後，逐支送 ComfyUI（含審查重試）。
+   一次只跑一支：算圖中不佔 llama、審查需要 llama 時走正常交接。 */
+async function t2vaDrainSends(){
+  if (t2vaDrainSends.busy) return;
+  t2vaDrainSends.busy = true;
+  try{
+    for (;;){
+      const k = items.findIndex(x => x._autoSend && (x.content || (x.direct && x.polished)));
+      if (k < 0) break;
+      const it = items[k];
+      it._autoSend = false;
+      $("#prog").textContent = `T2VA 影片階段 — ${it.name}`;
+      try{
+        if (it.direct) await t2DirectSend(k);
+        else await comfyFromItem(k, null);
+      }catch(e){}
+    }
+    $("#prog").textContent = "T2VA 影片階段完成";
+  } finally { t2vaDrainSends.busy = false; }
 }
 /* 直接使用潤飾劇本送 ComfyUI（中文劇本＝最終 prompt；審查修劇情＝重寫劇本） */
 window.t2DirectSend = async k => {
@@ -2058,8 +2074,8 @@ window.t2DirectSend = async k => {
   const stat = document.querySelector(`[data-cstat="${k}"]`);
   const payload = {dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
                    mode: "t2va", content: it.polished, ...comfyFields(it.polished, "t2va")};
-  if (!rvEnabled("t2va")){ comfySend(payload, stat, null); return; }
-  comfyRunReviewed(payload, {mode: "t2va", content: it.polished, inputs: [], recId: it.rec_id,
+  if (!rvEnabled("t2va")) return comfySend(payload, stat, null);
+  return comfyRunReviewed(payload, {mode: "t2va", content: it.polished, inputs: [], recId: it.rec_id,
     inputLabel: "無輸入圖（直接使用潤飾劇本）",
     reviseFn: async (instruction) => {
       await gpuPrepare("llama", () => {});
@@ -2155,6 +2171,8 @@ async function runQueue(list, label){
   $("#prog").textContent = abort ? `已停止（完成 ${n} 筆）` : `${label}完成，共 ${n} 筆`;
   updateNavCounts();
   convergence(); updateFilterBar();
+  // T2VA 全自動：llama 階段全部結束後，才開始逐支送 ComfyUI（避免與 llama 同時上卡）
+  if (!abort && typeof t2vaDrainSends === "function" && items.some(x => x._autoSend)) t2vaDrainSends();
 }
 $("#run").onclick = () => {
   // T2VA：輸入框有內容但還沒按「加入清單」→ 自動加入再跑
@@ -2995,8 +3013,8 @@ window.comfyFromItem = (k, btnEl) => {
   const payload = {dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
                    mode, content: it.content, ...comfyFields(it.content, mode)};
   if (!isT2){ payload.image = it.orig || it.full; payload.more = it.more || []; }
-  if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
-  comfyRunReviewed(payload, {mode, content: it.content,
+  if (!rvEnabled(mode)) return comfySend(payload, stat, btnEl);
+  return comfyRunReviewed(payload, {mode, content: it.content,
     inputs: isT2 ? [] : (it.imgs || [it.full]), recId: it.rec_id,
     inputLabel: isT2 ? "無輸入圖（純文字劇本）"
       : mode === "ref2va" ? "參考圖" : (mode === "fl2va" ? "首幀、尾幀" : mode === "l2va" ? "目標尾幀" : "首幀"),

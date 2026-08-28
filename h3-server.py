@@ -1954,8 +1954,11 @@ class H(SimpleHTTPRequestHandler):
             in_flight = LLAMA_INFLIGHT[0] > 0
             since_llama = (time.time() - LLAMA_LAST[0]) if LLAMA_LAST[0] else 1e9
             if target == "llama":
-                if in_flight or since_llama < 8:
-                    # llama 正在用或權重還在卡上（idle 卸載前）：連續呼叫不用等
+                if in_flight:
+                    # 另一個 llama 呼叫正在跑：同對象直接放行
+                    return self.send_json({"ready": True, "state": "llama_resident", "gpu": mem})
+                if since_llama < 8 and not comfy_busy():
+                    # 權重還在卡上（idle 卸載前）且 ComfyUI 沒在算圖：連續呼叫不用等
                     return self.send_json({"ready": True, "state": "llama_resident", "gpu": mem})
                 if used <= thr:
                     return self.send_json({"ready": True, "state": "gpu_free", "gpu": mem})
