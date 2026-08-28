@@ -1143,9 +1143,14 @@ def split_fields(content, mode=""):
             return ""
         j = re.search(b + r":?\s*", c[m.end():]) if b else None
         return c[m.end(): m.end() + j.start()].strip() if j else c[m.end():].strip()
-    return {"imd": sec(main, "overall_soundscape"),
-            "soundscape": sec("overall_soundscape", "non_diegetic_music"),
-            "music": sec("non_diegetic_music", None)}
+    out = {"imd": sec(main, "overall_soundscape"),
+           "soundscape": sec("overall_soundscape", "non_diegetic_music"),
+           "music": sec("non_diegetic_music", None)}
+    # 沒有任何欄位標頭（例如 T2VA「直接使用」的中文劇本）→ 整段內容就是主 prompt，
+    # 否則影片內嵌 metadata 的 prompt 欄位會是空的
+    if not (out["imd"] or out["soundscape"] or out["music"]) and c.strip():
+        out["imd"] = c.strip()
+    return out
 
 
 def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspect=None, image_blob=None,
