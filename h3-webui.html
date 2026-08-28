@@ -739,6 +739,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div id="leslist" style="margin-top:10px"></div>
     <div class="row" style="margin-top:10px;gap:7px">
       <select id="lesaddmode" style="max-width:110px"><option value="all">通用</option>
+        <option value="t2va">T2VA</option>
         <option value="i2va">I2VA</option><option value="fl2va">FL2VA</option>
         <option value="l2va">L2VA</option><option value="ref2va">REF2VA</option></select>
       <input type="text" id="lesaddtxt" placeholder="手動新增規則（中文即可，會自動翻成英文注入）" style="flex:1;min-width:200px">
@@ -2573,7 +2574,9 @@ function renderHist(){
       ${r.rating ? `<span class="rmark">${r.rating==="up"?"👍":"👎"}</span>` : ""}
       ${total > 1 ? `<span class="vcount">${total} 版</span>` : ""}
       ${r.nmore ? `<span class="vcount" style="top:26px">+${r.nmore} 圖</span>` : ""}
-      <img src="/api/thumb/${r.id}.jpg" loading="lazy" onerror="this.style.visibility='hidden'">
+      ${hMode(r) === "t2va"
+        ? `<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:120px;font-size:26px;flex-direction:column;gap:4px">📝<span style="font-size:11px;opacity:.65">T2VA</span></div>`
+        : `<img src="/api/thumb/${r.id}.jpg" loading="lazy" onerror="this.style.visibility='hidden'">`}
       <div class="cap">${esc(g.image)}</div>
       <div class="cap t">${esc(r.ts.slice(5,16))} · ${esc(r.dur)}${r.ai_score != null ? ` · <b style="color:${r.ai_score >= 7 ? "var(--ok)" : "var(--warn)"}">AI ${r.ai_score}</b>` : ""}</div></button>`;
   }).join("") || '<span class="hint">還沒有紀錄</span>';
@@ -2589,22 +2592,44 @@ $("#hselnone") && ($("#hselnone").onclick = () => { hSel.clear(); renderHist(); 
 $("#himport") && ($("#himport").onclick = async () => {
   if (!hSel.size) return;
   $("#himport").disabled = true;
-  let n = 0;
+  let n = 0, firstMode = null;
   for (const id of [...hSel]){
     try{
       const rec = await (await fetch(API + "/" + id)).json();
+      const mode = hMode(rec);
+      if (!firstMode) firstMode = mode;
+      if (mode === "t2va"){
+        // T2VA：無圖，還原成文字項目（原始劇情＋潤飾劇本）
+        const raw = rec.story_raw || rec.note || rec.content || "";
+        items.push({mode: "t2va", rawStory: raw, polished: rec.story_polished || "",
+                    t2vaTab: rec.story_polished ? 1 : 0,
+                    name: raw.replace(/\s+/g, " ").slice(0, 28) + (raw.length > 28 ? "…" : ""),
+                    state: "pending", files: [], previews: [], arTouched: false});
+        n++;
+        continue;
+      }
+      // 圖片模式：主圖＋附加圖（FL2VA 尾幀 / REF2VA 參考圖）一起帶回原模式
       const url = rec.orig_ext ? `/api/orig/${id}.${rec.orig_ext}` : `/api/full/${id}.jpg`;
-      const blob = await (await fetch(url)).blob();
-      const f = new File([blob], rec.image || (id + ".jpg"), {type: blob.type || "image/jpeg"});
-      const f2 = f, u2 = URL.createObjectURL(f);
-      items.push({mode: "i2va", files: [f2], file: f2, name: f.name, state: "pending",
-                  preview: u2, previews: [u2],
+      const r0 = await fetch(url);
+      if (!r0.ok) throw new Error("no image");
+      const blob = await r0.blob();
+      const files = [new File([blob], rec.image || (id + ".jpg"), {type: blob.type || "image/jpeg"})];
+      for (let i = 1; i <= (rec.nmore || 0); i++){
+        try{
+          const rx = await fetch(`/api/extra/${id}/${i}.jpg`);
+          if (rx.ok) files.push(new File([await rx.blob()], `extra-${i}.jpg`, {type: "image/jpeg"}));
+        }catch(e){}
+      }
+      const previews = files.map(f => URL.createObjectURL(f));
+      items.push({mode, files, file: files[0],
+                  name: files.map(f => f.name).join(" ＋ "), state: "pending",
+                  preview: previews[0], previews,
                   note: rec.note || "", shots: rec.shots || undefined});
       n++;
     }catch(e){}
   }
   items.forEach(arFromPreview);
-  setMode("i2va");            // 匯入的單張圖回到 I2VA 清單
+  setMode(firstMode || "i2va");   // 回到匯入紀錄自己的模式頁
   render();
   $("#run").disabled = !modeItems().length;
   $("#prog").textContent = `${modeItems().length} 筆待處理`;
@@ -2665,7 +2690,9 @@ window.openRec = async id => {
           <button class="mini" id="mrerun">重跑 Prompt</button>
           <button class="mini" id="mcomfy" onclick="comfyFromRec('${r.id}', this)">🎬 送 ComfyUI 生成</button>
         </div>
-        <p class="hint" style="margin-top:8px"><span id="mrstat">${hasFull
+        <p class="hint" style="margin-top:8px"><span id="mrstat">${isT2rec
+          ? "重跑會用當時的潤飾劇本與 system prompt 重新生成，結果另存為新版本。"
+          : hasFull
           ? "重跑會用當時的圖片、模式與 system prompt，結果另存為新版本；不會動到目前的設定。"
           : "這筆紀錄沒有保存原圖（舊版本存的），只能重新上傳跑。"}</span>
           <span id="mcstat"></span></p>
@@ -2729,7 +2756,7 @@ window.openRec = async id => {
       renderHist(); refreshLessons();
     }catch(e){ $("#mfbstat").textContent = "失敗：" + e.message; }
   };
-  $("#mrerun").disabled = !hasFull;
+  $("#mrerun").disabled = !(hasFull || isT2rec);   // T2VA 沒圖也能重跑（用潤飾劇本）
   $("#mrerun").onclick = () => rerunRecord(r, mShots);
   $("#mcopy").onclick=()=>navigator.clipboard.writeText(r.content);
   $("#mdel").onclick=async()=>{
@@ -2824,7 +2851,7 @@ async function rerunRecord(r, shots){
 
 /* ---- 歷史紀錄的狀態篩選與批次重生成 ---- */
 const HSTATES=[["ok","通過","f-ok"],["warn","警告","f-warn"],["fail","錯誤","f-fail"]];
-const HMODES=[["i2va","I2VA","f-cuts"],["fl2va","FL2VA","f-onetake"],["l2va","L2VA","f-cuts"],["ref2va","REF2VA","f-onetake"]];
+const HMODES=[["t2va","T2VA","f-cuts"],["i2va","I2VA","f-cuts"],["fl2va","FL2VA","f-onetake"],["l2va","L2VA","f-cuts"],["ref2va","REF2VA","f-onetake"]];
 let HFILTER = new Set(HSTATES.map(x=>x[0])), HMFILTER = new Set(HMODES.map(x=>x[0])), hbusy = false;
 const hState = r => r.nerr ? "fail" : (r.nwarn ? "warn" : "ok");
 const hMode = r => (MODES[r.mode] ? r.mode : "i2va");   // records from before this feature count as i2va
@@ -2864,7 +2891,8 @@ function hRegenTargets(){
   for (const r of hVisible()){
     if (seen.has(r.image)) continue;
     seen.add(r.image);
-    if (r.full !== false) out.push(r);
+    // T2VA 紀錄沒有圖是正常的（用潤飾劇本重跑），不能當「沒保存原圖」跳過
+    if (r.full !== false || hMode(r) === "t2va") out.push(r);
   }
   return out;
 }
