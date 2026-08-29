@@ -648,7 +648,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div class="grid">
       <div><label>Language（介面語言）</label><select id="lang" class="no-i18n">
         <option value="zh-TW">繁體中文</option><option value="zh-CN">简体中文</option><option value="en">English</option></select></div>
-      <div><label>🎨 風格 Skill（官方，套用於生成與 T2VA 潤飾）</label><select id="styleSkill" class="no-i18n">
+      <div><label>🎨 風格 Skill（官方；只在各 skill 的適用模式疊加，其他模式自動忽略）</label><select id="styleSkill" class="no-i18n">
         <option value="">無風格（純 h3-prompt-writing）</option></select></div>
       <div><label>中文翻譯</label><select id="tr">
         <option value="1" selected>開啟</option><option value="0">關閉</option></select></div>
@@ -897,6 +897,22 @@ let prompts = [BUILTIN], active = BUILTIN.id, dirty = null;
 /* ===== 官方 MiniMax H3 Skills（repo skills/ 資料夾，由伺服器供給） ===== */
 const SKILLSET = {list: [], cache: {}};
 const STYLE_KEY = "h3.styleskill.v1";
+/* 各風格 skill 的適用模式（依官方工作流描述判讀：需要什麼輸入就對應什麼模式）。
+   只在目前模式屬於適用清單時才疊加，其餘模式自動忽略。 */
+const SKILL_MODES = {
+  "minimalist-product-ad-generator": ["i2va", "ref2va"],          // 需要產品圖
+  "3d-animation-short-generator":    ["t2va"],                     // 純文字敘事
+  "papercraft-stop-motion-explainer":["t2va"],                     // 知識主題→紙藝定格
+  "brand-promo-video-generator":     ["t2va", "i2va", "ref2va"],   // 素材可有可無
+  "music-video-subtitle-generator":  ["t2va"],                     // 歌詞驅動
+  "co-op-game-intro-generator":      ["i2va", "ref2va"],           // 需要角色圖
+  "paper-collage-explainer-generator":["t2va"],                    // 主題→紙拼貼
+  "handdrawn-live-video-generator":  ["t2va", "i2va"],             // 單景，可帶實拍圖
+};
+function skillFits(id, mode){
+  const m = SKILL_MODES[id];
+  return !m || m.includes(mode);
+}
 function styleSkillId(){ return store.get(STYLE_KEY) || ""; }
 async function ensureSkill(id){
   if (!id) return null;
@@ -916,7 +932,7 @@ function officialSys(mode){
   let sys = "You are an expert MiniMax H3 (Hailuo) video prompt writer. Follow the skill below and its reference guide EXACTLY - field names, section order, alignment instruction lines and timing notation. Output ONLY the final prompt, with no explanations before or after.\n\n"
           + (core.skill || "") + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
   const st = styleSkillId();
-  const sk = st && SKILLSET.cache[st];
+  const sk = st && skillFits(st, mode) && SKILLSET.cache[st];   // 不適用的模式自動忽略風格
   if (sk && sk.skill)
     sys += "\n\n===== STYLE SKILL: " + st + " =====\nApply this style skill's aesthetics, structure and conventions to the video prompt you write (the reference guide's output format still governs):\n" + sk.skill;
   return sys;
@@ -930,7 +946,10 @@ async function loadSkills(){
   if (sel){
     sel.innerHTML = `<option value="">無風格（純 h3-prompt-writing）</option>`
       + SKILLSET.list.filter(s => s.id !== "h3-prompt-writing")
-          .map(s => `<option value="${esc(s.id)}" ${s.id === styleSkillId() ? "selected" : ""}>${esc(s.id)}</option>`).join("");
+          .map(s => {
+            const fits = (SKILL_MODES[s.id] || []).map(m => MODES[m] || m).join("/") || "全部";
+            return `<option value="${esc(s.id)}" ${s.id === styleSkillId() ? "selected" : ""}>${esc(s.id)}（適用 ${fits}）</option>`;
+          }).join("");
     sel.onchange = async () => { store.set(STYLE_KEY, sel.value); await ensureSkill(sel.value); };
   }
   if (typeof renderPrompts === "function") renderPrompts();
@@ -1943,9 +1962,9 @@ const T2SP_KEY = "h3.t2vasp.v1";
 function getT2Sp(){ return store.get(T2SP_KEY) || T2VA_POLISH_SYS; }
 function t2vaPolishSys(){
   let sys = getT2Sp().split("{DUR}").join(effDur());
-  // 疊加選定的官方風格 skill（有中文版用中文版，潤飾是中文階段）
+  // 疊加選定的官方風格 skill（僅適用 T2VA 的風格才疊；有中文版用中文版）
   const st = styleSkillId();
-  const sk = st && SKILLSET.cache[st];
+  const sk = st && skillFits(st, "t2va") && SKILLSET.cache[st];
   if (sk && (sk.cn || sk.skill))
     sys += "\n\n===== 風格 SKILL（潤飾時套用其美學與結構）: " + st + " =====\n" + (sk.cn || sk.skill);
   return sys;
@@ -4279,7 +4298,7 @@ const EN = {
 "內建組＝":"Built-in set = ","官方 MiniMax H3「h3-prompt-writing」skill":"the official MiniMax H3 \"h3-prompt-writing\" skill",
 "：依模式自動搭配 base-en／ref-en 參考指南，並疊加你在生成頁選的風格 Skill（唯讀）。 左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。編輯內容會自動保存到伺服器。":": pairs base-en / ref-en reference guides by mode and layers the style skill picked on the run page (read-only). The checked set is the one used (custom sets override); edits save to the server automatically.",
 "🎨 風格 Skill":"🎨 Style skill",
-"🎨 風格 Skill（官方，套用於生成與 T2VA 潤飾）":"🎨 Style skill (official; applies to generation and T2VA polish)",
+"🎨 風格 Skill（官方；只在各 skill 的適用模式疊加，其他模式自動忽略）":"🎨 Style skill (official; applied only in each skill's applicable modes, ignored elsewhere)",
 "📝 原始劇情（任何語言；一筆＝一支影片；開頭打 /skill名稱 可切換風格 Skill）":"📝 Raw story (any language; one entry = one video; start with /skill-name to switch the style skill)",
 "新增一組":"New set","複製目前這組":"Duplicate","從檔案匯入":"Import file","刪除這組":"Delete set",
 "評分審查影片 System Prompt":"Review System Prompt",
