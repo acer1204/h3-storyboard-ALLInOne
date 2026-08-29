@@ -1890,7 +1890,8 @@ async function genOnce(imgUrl, utext, target, wantShots, prev){
       + prev.issues.join("\n")
       + "\n\n重新輸出**完整**的 prompt（所有欄位都要），只修正上面列的問題，其他內容保持不變。只輸出修正後的 prompt，不要任何說明。"});
   }
-  const j = await chat(msgs, {max:4000});
+  // 官方 skill 走嚴格格式：溫度降到 0.7（舊版 1.0 是配合已移除的隨機性保證＋驗證器重試）
+  const j = await chat(msgs, {temp:0.7, max:4000});
   const raw = j.choices[0].message.content || "";
   const content = repair(trim(raw));
   const v = validate(content, target, wantShots);
