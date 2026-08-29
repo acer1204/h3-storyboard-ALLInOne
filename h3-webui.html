@@ -429,8 +429,6 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <button class="ghost" id="expj" disabled>匯出 JSON</button>
     <button class="ghost" id="expt" disabled>匯出 TXT</button>
     <button class="ghost" id="clear">清空清單</button>
-    <label class="small" style="display:flex;align-items:center;gap:6px;margin-left:auto">🎨 風格 Skill
-      <select id="styleSkill" class="no-i18n"><option value="">無風格（純 h3-prompt-writing）</option></select></label>
   </div>
   <p class="status" id="prog" style="margin:0 0 10px"></p>
 
@@ -650,6 +648,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div class="grid">
       <div><label>Language（介面語言）</label><select id="lang" class="no-i18n">
         <option value="zh-TW">繁體中文</option><option value="zh-CN">简体中文</option><option value="en">English</option></select></div>
+      <div><label>🎨 風格 Skill（官方，套用於生成與 T2VA 潤飾）</label><select id="styleSkill" class="no-i18n">
+        <option value="">無風格（純 h3-prompt-writing）</option></select></div>
       <div><label>中文翻譯</label><select id="tr">
         <option value="1" selected>開啟</option><option value="0">關閉</option></select></div>
       <div><label>自動重試次數</label><input type="text" id="retry" value="3"></div>
@@ -751,7 +751,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
   <div class="panel">
     <h3>生成影片 System Prompt（全部類型） <span class="modetag" id="spmodetag"></span></h3>
-    <p class="ph">內建組＝<b>官方 MiniMax H3「h3-prompt-writing」skill</b>：依模式自動搭配 base-en／ref-en 參考指南，並疊加你在生成頁選的風格 Skill（唯讀）。
+    <p class="ph">內建組＝<b>官方 MiniMax H3「h3-prompt-writing」skill</b>：依模式自動搭配 base-en／ref-en 參考指南，並疊加上方「連線與生成」選的風格 Skill（唯讀）。
       左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。編輯內容會自動保存到伺服器。</p>
     <div class="splayout">
       <div class="splist">
@@ -4279,6 +4279,7 @@ const EN = {
 "內建組＝":"Built-in set = ","官方 MiniMax H3「h3-prompt-writing」skill":"the official MiniMax H3 \"h3-prompt-writing\" skill",
 "：依模式自動搭配 base-en／ref-en 參考指南，並疊加你在生成頁選的風格 Skill（唯讀）。 左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。編輯內容會自動保存到伺服器。":": pairs base-en / ref-en reference guides by mode and layers the style skill picked on the run page (read-only). The checked set is the one used (custom sets override); edits save to the server automatically.",
 "🎨 風格 Skill":"🎨 Style skill",
+"🎨 風格 Skill（官方，套用於生成與 T2VA 潤飾）":"🎨 Style skill (official; applies to generation and T2VA polish)",
 "📝 原始劇情（任何語言；一筆＝一支影片；開頭打 /skill名稱 可切換風格 Skill）":"📝 Raw story (any language; one entry = one video; start with /skill-name to switch the style skill)",
 "新增一組":"New set","複製目前這組":"Duplicate","從檔案匯入":"Import file","刪除這組":"Delete set",
 "評分審查影片 System Prompt":"Review System Prompt",
