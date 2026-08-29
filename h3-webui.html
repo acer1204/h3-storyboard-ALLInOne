@@ -878,7 +878,7 @@ $("#sreset").onclick = () => {
 const PAPI = "/api/prompts";
 const MODES = {t2va:"T2VA", i2va:"I2VA", fl2va:"FL2VA", l2va:"L2VA", ref2va:"REF2VA"};
 const MODE_INFO = {
-  t2va:  {title:"T2VA — 文字生影音", sub:"輸入原始劇情 → AI 潤飾成分鏡劇本 → 生成 H3 Prompt（含翻譯）→ 送 ComfyUI。可輸入多筆加入清單批次處理；全自動/半自動在系統設定的 T2VA 區塊切換。",
+  t2va:  {title:"T2VA — 文字生影音", sub:"輸入原始劇情 → 生成（官方 skill 直出最終 Prompt）→ 送 ComfyUI。潤飾為可選（想先看/改中文分鏡劇本、或勾「直接使用」時才需要）。可輸入多筆批次處理；全自動/半自動在系統設定切換。",
           drop:"", dropS:"", min:0, max:0, text:true},
   i2va:  {title:"I2VA — 圖生影音", sub:"圖片＝影片第一幀。1 格；一次拖入多張會自動逐張各成一筆（批次）。",
           drop:"拖圖到這裡，或點下方格子選圖", dropS:"多張＝批次，每張一筆", min:1, max:1},
@@ -2070,20 +2070,18 @@ async function t2vaGen(it){
 }
 
 async function runOneT2VA(it){
+  // 官方 skill 直接吃原始劇情（或你手動潤飾過的劇本）——潤飾是純可選步驟。
+  // 全自動兩階段不變：佇列先跑完全部 llama 工作，影片由 t2vaDrainSends() 逐支序列送出。
   const auto = rvCfg().t2vaAuto;
-  if (!it.polished) await t2vaPolish(it);
-  if (auto){
-    // 兩階段：佇列先把所有項目的 llama 工作（潤飾＋Prompt）跑完，影片送出集中到
-    // t2vaDrainSends() 逐支序列處理 —— 避免 llama 與 ComfyUI 同時上卡互搶 VRAM
-    if (it.direct){
-      it.state = "ok"; it._autoSend = !!onServer; render();
-      return;
-    }
-    await t2vaGen(it);
-    if (it.content && onServer) it._autoSend = true;
-  } else if (!it.content){
-    it.state = "pending";                    // 半自動：停在潤飾完成，之後用卡片上的按鈕逐步進行
+  if (it.direct){
+    if (!it.polished) await t2vaPolish(it);   // 「直接使用」走中文劇本，需要潤飾產物
+    it.state = "ok";
+    if (auto) it._autoSend = !!onServer;
+    render();
+    return;
   }
+  await t2vaGen(it);                           // 生成＝skill 呼叫，產出即最終 prompt
+  if (auto && it.content && onServer) it._autoSend = true;
 }
 /* 全自動的影片階段：等佇列的 llama 工作全部完成後，逐支送 ComfyUI（含審查重試）。
    一次只跑一支：算圖中不佔 llama、審查需要 llama 時走正常交接。 */
@@ -2144,7 +2142,7 @@ window.t2DoPolish = async k => {
   render();
 };
 window.t2DoGen = async k => {
-  const it = items[k]; if (!it || !it.polished || it.state === "running") return;
+  const it = items[k]; if (!it || !(it.polished || it.rawStory) || it.state === "running") return;
   it.state = "running"; it.keep = true; it.zh = null; render();
   try{ await t2vaGen(it); }
   catch(e){ it.state = "error"; it.err = e.message; }
@@ -2357,8 +2355,8 @@ function render(){
           <input type="checkbox" ${it.direct?"checked":""} onchange="setT2(${k},'direct',this.checked); render()">
           直接使用此劇本（跳過生成 Prompt 與翻譯，中文劇本直接送 ComfyUI）</label>` : ""}
         <div class="row" style="margin:0 0 8px">
-          <button class="ghost mini" onclick="t2DoPolish(${k})" ${it.state==="running"?"disabled":""}>✨ 潤飾劇情</button>
-          <button class="ghost mini" onclick="t2DoGen(${k})" ${(!it.polished || it.state==="running" || it.direct)?"disabled":""}>📝 生成 Prompt${it.content?"（重新生成）":""}</button>
+          <button class="ghost mini" onclick="t2DoPolish(${k})" ${it.state==="running"?"disabled":""} title="可選：先產中文分鏡劇本再生成（或供「直接使用」）">✨ 潤飾劇情（可選）</button>
+          <button class="ghost mini" onclick="t2DoGen(${k})" ${(it.state==="running" || it.direct)?"disabled":""} title="官方 skill 直出最終 prompt（用潤飾劇本，沒有就用原始劇情）">📝 生成 Prompt${it.content?"（重新生成）":""}</button>
           ${it.direct ? `<button class="ghost mini" onclick="t2DirectSend(${k})" ${(!it.polished || it.state==="running")?"disabled":""}>🎬 直接送 ComfyUI</button>` : ""}
           ${it.direct && !it.content ? `<span class="hint" data-cstat="${k}"></span>` : ""}
         </div>` : `
@@ -4355,7 +4353,8 @@ const EN = {
 "📝 原始劇情（任何語言；一筆＝一支影片）":"📝 Raw story (any language; one entry = one video)",
 "輸入你想要的劇情，例如：一位女僕在聖誕夜的咖啡廳裡偷偷佈置驚喜派對，最後被店長發現，兩人一起舉杯。":"Type the story you want, e.g. a maid secretly sets up a surprise party in the cafe on Christmas Eve; the owner finds out and they toast together.",
 "輸出比例":"Aspect","方向":"Orientation","直式":"Portrait","橫式":"Landscape",
-"原始輸入劇情":"Raw story","AI 潤飾後劇本":"Polished script","✨ 潤飾劇情":"✨ Polish story",
+"原始輸入劇情":"Raw story","AI 潤飾後劇本":"Polished script","✨ 潤飾劇情":"✨ Polish story","✨ 潤飾劇情（可選）":"✨ Polish story (optional)",
+"輸入原始劇情 → 生成（官方 skill 直出最終 Prompt）→ 送 ComfyUI。潤飾為可選（想先看/改中文分鏡劇本、或勾「直接使用」時才需要）。可輸入多筆批次處理；全自動/半自動在系統設定切換。":"Type a raw story → Generate (the official skill outputs the final prompt directly) → send to ComfyUI. Polishing is optional (only when you want to preview/edit a Chinese storyboard first, or for direct-use). Batch multiple entries; switch full/semi-automatic in Settings.",
 "📝 生成 Prompt":"📝 Generate prompt","📝 生成 Prompt（重新生成）":"📝 Generate prompt (again)",
 "文字生影音":"text to video","潤飾劇情中…":"Polishing story…","先輸入劇情":"Enter a story first",
 "尚未潤飾 — 按下方「✨ 潤飾劇情」，或切全自動後按「開始」":"Not polished yet — press \"✨ Polish story\" below, or switch to fully-automatic and press Start",
