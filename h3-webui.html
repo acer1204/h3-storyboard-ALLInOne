@@ -929,7 +929,10 @@ function officialSys(mode){
   if (!core) return "You are an expert MiniMax H3 video prompt writer. Output only the final prompt.";
   const guide = mode === "ref2va" ? (core.references["ref-en.txt"] || "")
                                   : (core.references["base-en.txt"] || "");
-  let sys = "You are an expert MiniMax H3 (Hailuo) video prompt writer. Follow the skill below and its reference guide EXACTLY - field names, section order, alignment instruction lines and timing notation. Output ONLY the final prompt, with no explanations before or after.\n\n"
+  let sys = "You are an expert MiniMax H3 (Hailuo) video prompt writer. Follow the skill below and its reference guide EXACTLY - field names, section order, alignment instruction lines and timing notation. Output ONLY the final prompt, with no explanations before or after.\n"
+          + "CRITICAL OUTPUT FORMAT: plain text ONLY - absolutely NO Markdown. No # headings, no ** bold, no bullet lists, no code fences, no title line. Field names must appear as bare lowercase lines exactly like:\n"
+          + "integrated_multimodal_description: ...\n"
+          + "Do NOT invent extra sections (no \"Core Subject\", no summaries) beyond what the guide defines.\n\n"
           + (core.skill || "") + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
   const st = styleSkillId();
   const sk = st && skillFits(st, mode) && SKILLSET.cache[st];   // 不適用的模式自動忽略風格
@@ -1850,13 +1853,28 @@ function retryCfg(){
 function isClean(v, lvl){
   return lvl === "noerr" ? !v.E.length : (!v.E.length && !v.W.length);
 }
-/* deterministic normalization：只補欄位標頭冒號（官方版：不再改寫對白語言或語法） */
+/* deterministic normalization：剝除模型自作主張的 Markdown 包裝、砍掉指南沒定義的前言，
+   再補欄位標頭冒號（官方版：不改寫對白語言或語法） */
 function repair(c){
+  // qwen 常見偏移：### 標題行、**field**:、- field:、粗體符號
+  c = c.replace(/^#{1,6}\s.*$/gm, "")
+       .replace(/\*\*([A-Za-z_ ]+)\*\*\s*(:)?/g, "$1$2")
+       .replace(/^\s*[-*]\s+(?=[a-z_]+\s*:)/gm, "")
+       .replace(/^\s*[\r\n]+/, "");
+  // 砍掉第一個合法起點（對齊宣告或首欄位）之前的雜訊（例如自加的 Core Subject 段）
+  const starts = ["For the target video", "How the reference pictures align",
+                  "subject_definitions", "integrated_multimodal_description"];
+  let cut = -1;
+  for (const s of starts){
+    const i = c.indexOf(s);
+    if (i >= 0 && (cut < 0 || i < cut)) cut = i;
+  }
+  if (cut > 0) c = c.slice(cut);
   if (curMode() === "ref2va")
     c = c.replace(/^(subject_definitions|summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music)\s*$/gm, "$1:");
   else
     c = c.replace(/^(integrated_multimodal_description|overall_soundscape|non_diegetic_music)\s*$/gm, "$1:");
-  return c;
+  return c.trim();
 }
 async function genOnce(imgUrl, utext, target, wantShots, prev){
   const urls = Array.isArray(imgUrl) ? imgUrl : [imgUrl];
