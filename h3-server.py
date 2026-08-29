@@ -71,6 +71,7 @@ LESSONS_DIR = os.path.join(ROOT, "lessons")
 LESSONS_FILE = os.path.join(LESSONS_DIR, "lessons.json")
 REQUIRED_FILE = os.path.join(LESSONS_DIR, "required.json")
 os.makedirs(LESSONS_DIR, exist_ok=True)
+SKILLS_DIR = os.path.join(ROOT, "skills")   # 官方 MiniMax H3 skills（隨 repo 附帶）
 PAGE = "h3-webui.html"
 MODES = ("t2va", "i2va", "fl2va", "l2va", "ref2va")   # generation task modes
 # ---------------------------------------------------------------- config
@@ -1681,6 +1682,51 @@ class H(SimpleHTTPRequestHandler):
             # 位址類設定不再送到瀏覽器——一律存在伺服器端 config.json，前端只走同源代理
             return self.send_json({"workflow_current": CONFIG.get("workflow_current", ""),
                                    "gpu_free_mb": CONFIG.get("gpu_free_mb", 4000)})
+
+        if p == "/api/skills":
+            # 官方 skills 清單：skills/<id>/SKILL.md 的資料夾
+            rows = []
+            try:
+                for d in sorted(os.listdir(SKILLS_DIR)):
+                    sd = os.path.join(SKILLS_DIR, d)
+                    if not os.path.isdir(sd) or not os.path.exists(os.path.join(sd, "SKILL.md")):
+                        continue
+                    desc = ""
+                    try:
+                        with open(os.path.join(sd, "SKILL.md"), encoding="utf-8") as f:
+                            head = f.read(2000)
+                        mm = re.search(r"^description:\s*(.+)$", head, re.M)
+                        if mm:
+                            desc = mm.group(1).strip()[:200]
+                    except Exception:
+                        pass
+                    rows.append({"id": d, "description": desc,
+                                 "has_cn": os.path.exists(os.path.join(sd, "SKILL.cn.md"))})
+            except OSError:
+                pass
+            return self.send_json(rows)
+
+        m = re.match(r"^/api/skill/([a-z0-9-]+)$", p)
+        if m:
+            sd = os.path.join(SKILLS_DIR, m.group(1))
+            if not os.path.isdir(sd) or not os.path.exists(os.path.join(sd, "SKILL.md")):
+                return self.send_json({"error": "not found"}, 404)
+            def rd(fp):
+                try:
+                    with open(fp, encoding="utf-8") as f:
+                        return f.read()
+                except OSError:
+                    return ""
+            refs = {}
+            rdir = os.path.join(sd, "references")
+            if os.path.isdir(rdir):
+                for fn in sorted(os.listdir(rdir)):
+                    if fn.lower().endswith((".txt", ".md")):
+                        refs[fn] = rd(os.path.join(rdir, fn))
+            return self.send_json({"id": m.group(1),
+                                   "skill": rd(os.path.join(sd, "SKILL.md")),
+                                   "cn": rd(os.path.join(sd, "SKILL.cn.md")),
+                                   "references": refs})
 
         if p == "/api/llama/props":
             maybe_reload_config()

@@ -429,6 +429,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <button class="ghost" id="expj" disabled>匯出 JSON</button>
     <button class="ghost" id="expt" disabled>匯出 TXT</button>
     <button class="ghost" id="clear">清空清單</button>
+    <label class="small" style="display:flex;align-items:center;gap:6px;margin-left:auto">🎨 風格 Skill
+      <select id="styleSkill" class="no-i18n"><option value="">無風格（純 h3-prompt-writing）</option></select></label>
   </div>
   <p class="status" id="prog" style="margin:0 0 10px"></p>
 
@@ -436,9 +438,9 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <input type="file" id="files" multiple accept="image/*" hidden>
 
   <div id="t2vaZone" style="display:none">
-    <div class="note-wrap"><label>📝 原始劇情（任何語言；一筆＝一支影片）</label>
+    <div class="note-wrap"><label>📝 原始劇情（任何語言；一筆＝一支影片；開頭打 /skill名稱 可切換風格 Skill）</label>
       <textarea class="note" id="t2vaInput" rows="5"
-        placeholder="輸入你想要的劇情，例如：一位女僕在聖誕夜的咖啡廳裡偷偷佈置驚喜派對，最後被店長發現，兩人一起舉杯。"></textarea></div>
+        placeholder="輸入你想要的劇情。也可用 /minimalist-product-ad-generator 這樣的前綴切換官方風格 Skill。"></textarea></div>
     <div class="row" style="margin:8px 0 0;align-items:center;gap:10px">
       <button class="mini" id="t2vaAdd">✚ 加入生成清單</button>
       <label class="small" style="display:flex;align-items:center;gap:6px">輸出比例
@@ -749,8 +751,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
   <div class="panel">
     <h3>生成影片 System Prompt（全部類型） <span class="modetag" id="spmodetag"></span></h3>
-    <p class="ph">I2VA / FL2VA / L2VA / REF2VA 四種模式<b>共用同一份</b>生成用 system prompt——內建版本已涵蓋四種模式的格式規則。
-      左邊勾選哪一組，產生時就用哪一組。編輯內容會自動保存到伺服器。</p>
+    <p class="ph">內建組＝<b>官方 MiniMax H3「h3-prompt-writing」skill</b>：依模式自動搭配 base-en／ref-en 參考指南，並疊加你在生成頁選的風格 Skill（唯讀）。
+      左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。編輯內容會自動保存到伺服器。</p>
     <div class="splayout">
       <div class="splist">
         <div id="plist"></div>
@@ -889,14 +891,57 @@ const MODE_INFO = {
 };
 function curMode(){ const m = $("#mode").value; return MODES[m] ? m : "i2va"; }
 function PSEL(){ return "h3.prompt.all.v1"; }
-const BUILTIN = {id:"builtin", name:"內建 StoryDirector-VA（I2VA/FL2VA/L2VA/REF2VA 通用）", text:null, builtin:true, mode:"all", file:"SYSTEM_PROMPT_STORYDIRECTOR_web.txt"};
+const BUILTIN = {id:"builtin", name:"官方 h3-prompt-writing（依模式自動組裝＋可疊風格 Skill）", text:null, builtin:true, mode:"all"};
 let prompts = [BUILTIN], active = BUILTIN.id, dirty = null;
+
+/* ===== 官方 MiniMax H3 Skills（repo skills/ 資料夾，由伺服器供給） ===== */
+const SKILLSET = {list: [], cache: {}};
+const STYLE_KEY = "h3.styleskill.v1";
+function styleSkillId(){ return store.get(STYLE_KEY) || ""; }
+async function ensureSkill(id){
+  if (!id) return null;
+  if (!SKILLSET.cache[id]){
+    try{ SKILLSET.cache[id] = await (await fetch("/api/skill/" + encodeURIComponent(id))).json(); }
+    catch(e){ return null; }
+  }
+  return SKILLSET.cache[id];
+}
+/* 生成用 system prompt＝h3-prompt-writing SKILL＋依模式的參考指南（base/ref）＋可選風格 skill。
+   模式與時長由 UI 供值（夾在使用者訊息），不需要 agent 式問答。 */
+function officialSys(mode){
+  const core = SKILLSET.cache["h3-prompt-writing"];
+  if (!core) return "You are an expert MiniMax H3 video prompt writer. Output only the final prompt.";
+  const guide = mode === "ref2va" ? (core.references["ref-en.txt"] || "")
+                                  : (core.references["base-en.txt"] || "");
+  let sys = "You are an expert MiniMax H3 (Hailuo) video prompt writer. Follow the skill below and its reference guide EXACTLY - field names, section order, alignment instruction lines and timing notation. Output ONLY the final prompt, with no explanations before or after.\n\n"
+          + (core.skill || "") + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
+  const st = styleSkillId();
+  const sk = st && SKILLSET.cache[st];
+  if (sk && sk.skill)
+    sys += "\n\n===== STYLE SKILL: " + st + " =====\nApply this style skill's aesthetics, structure and conventions to the video prompt you write (the reference guide's output format still governs):\n" + sk.skill;
+  return sys;
+}
+async function loadSkills(){
+  try{ SKILLSET.list = await (await fetch("/api/skills")).json(); }catch(e){ SKILLSET.list = []; }
+  await ensureSkill("h3-prompt-writing");
+  await ensureSkill(styleSkillId());
+  BUILTIN.text = officialSys("i2va");        // prompt 庫的預覽/計數用
+  const sel = $("#styleSkill");
+  if (sel){
+    sel.innerHTML = `<option value="">無風格（純 h3-prompt-writing）</option>`
+      + SKILLSET.list.filter(s => s.id !== "h3-prompt-writing")
+          .map(s => `<option value="${esc(s.id)}" ${s.id === styleSkillId() ? "selected" : ""}>${esc(s.id)}</option>`).join("");
+    sel.onchange = async () => { store.set(STYLE_KEY, sel.value); await ensureSkill(sel.value); };
+  }
+  if (typeof renderPrompts === "function") renderPrompts();
+}
 
 function builtinFor(){ return BUILTIN; }
 function visiblePrompts(){ return prompts; }
 function activeText(){
   const p = prompts.find(x => x.id === active) || BUILTIN;
-  return p.text != null ? p.text : (BUILTIN.text || "");
+  if (p.builtin) return officialSys(curMode());   // 官方組合依目前模式選 base/ref 指南
+  return p.text != null ? p.text : "";
 }
 window.setMode = m => {
   if (!MODES[m]) return;
@@ -959,11 +1004,8 @@ window.pickPrompt = async id => {
 };
 async function loadPrompts(){
   prompts = [BUILTIN];
-  // the builtin lives in a sidecar file so the HTML stays readable
-  for (const b of [BUILTIN]) if (b.text == null){
-    try { b.text = await (await fetch(b.file, {cache:"no-store"})).text(); }
-    catch(e){ b.text = ""; }
-  }
+  // 內建組＝官方 skills（loadSkills 會填 BUILTIN.text 預覽）
+  await loadSkills();
   if (onServer){
     try {
       const rows = await (await fetch(PAPI)).json();
@@ -1402,59 +1444,28 @@ function camFamily(t){
 }
 
 function validate(c, target, wantShots){
+  /* 官方 skill 版：自訂規則全數移除，只留「傳輸衛生」與「欄位存在性」——
+     格式細節交給官方 h3-prompt-writing 指南與模型自我檢查。 */
   const E=[], W=[], I=[];
   const mode = (typeof curMode === "function") ? curMode() : "i2va";
   const isRef = mode === "ref2va";
-  const wmin = Math.max(120, Math.round((typeof WF_DUR !== "undefined" ? (WF_DUR || 20) : 20) * 15));
 
-  /* ---------- 0. transport hygiene ---------- */
   if (c.includes("<think>")) E.push("<think> 洩漏進 content");
   if (/^\s*```/m.test(c)) E.push("輸出含程式碼框");
 
-  let body = "";   // the main narrative section
-  if (isRef){
-    /* ---------- REF2VA 六欄位格式 ---------- */
-    const labs = ["subject_definitions:","summary:","retention_analysis:","detailed_description:","overall_soundscape:","non_diegetic_music:"];
-    for (const l of labs) if (!c.includes(l)) E.push("缺欄位 " + l);
-    const m = c.match(/detailed_description:\s*([\s\S]*?)\s*overall_soundscape:/);
-    body = m ? m[1] : "";
-    const words = body.split(/\s+/).filter(Boolean).length;
-    if (words < wmin) E.push("detailed_description 只有 " + words + " 詞（需 >=" + wmin + "）");
-    if (!(c.match(/<Subject \d+>/g) || []).length) E.push("缺 <Subject N> 主體定義");
-    if (!(c.match(/<Picture \d+>/g) || []).length) E.push("缺 <Picture N> 對應");
-    if (!/summary:\s*\[/.test(c)) W.push("summary 缺任務標籤（[reference generation] …）");
-    if (!/fully_preserved|attribute_transfer|weak_reference/.test(c)) W.push("retention_analysis 缺保留等級標註");
-    if (!/\[Shot 1\]/.test(body)) E.push("detailed_description 需以 [Shot 1] 開場");
-    const shots = (body.match(/\[Shot \d+\]/g) || []).length;
-    if (shots > 3) W.push("鏡頭數 " + shots + " 超過 3");
-  } else {
-    /* ---------- I2VA / FL2VA / L2VA 三欄位、一鏡到底 ---------- */
-    const labs = ["integrated_multimodal_description","overall_soundscape","non_diegetic_music"];
-    for (const l of labs) if (!c.includes(l)) E.push("缺欄位 " + l);
-    const m = c.match(/integrated_multimodal_description:?\s*([\s\S]*?)\s*overall_soundscape/);
-    body = m ? m[1] : "";
-    const words = body.split(/\s+/).filter(Boolean).length;
-    if (words < wmin) E.push("主段落只有 " + words + " 詞（需 >=" + wmin + "）");
-    if (!/\[Shot 1\]/.test(body)) E.push("需以 [Shot 1] 開場");
-    if (/\[Shot [2-9]\]/.test(c)) E.push("出現 [Shot 2]+ — 此模式必須一鏡到底");
-    if (/\bcuts? to\b/i.test(body)) E.push("出現 \"cuts to\" — 禁止硬切");
-    if (/At \d\d:\d\d/.test(body)) W.push("出現時間戳 — 一鏡到底不需要");
-  }
+  const labs = isRef
+    ? ["subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music"]
+    : ["integrated_multimodal_description", "overall_soundscape", "non_diegetic_music"];
+  for (const l of labs) if (!c.includes(l)) E.push("缺欄位 " + l);
 
-  /* ---------- 對白：所有模式都要 >=2 句日文 <d> ＋ lip-sync ---------- */
-  const dlg = (c.match(/<d>\[Japanese\][^<]*[\u3040-\u30ff\u4e00-\u9fff][^<]*<\/d>/g) || []);
+  let body = "";
+  const m = isRef
+    ? c.match(/detailed_description:?\s*([\s\S]*?)\s*overall_soundscape/)
+    : c.match(/integrated_multimodal_description:?\s*([\s\S]*?)\s*overall_soundscape/);
+  body = m ? m[1] : c;
   const dAll = (c.match(/<d>[\s\S]*?<\/d>/g) || []);
-  if (dlg.length < 2) E.push("日文對話只有 " + dlg.length + " 句（需 >=2，格式 (S1) says: <d>[Japanese] …</d>）");
-  if (dAll.length > dlg.length) W.push("有 <d> 對白缺 [Japanese] 標記或內容非日文");
-  const lip = (c.match(/lips move in natural sync with the spoken words/g) || []).length;
-  if (lip < dAll.length) E.push("lip-sync 句 " + lip + " 次 < 對白 " + dAll.length + " 句（每句對白後都要接）");
 
-  /* ---------- 物理連續性（防影片破圖） ---------- */
-  if (/\bsuddenly\b/i.test(body)) W.push("用了 \"suddenly\" 描述動作（易產生瞬移破圖）");
-  if (/hidden (?:string|button|mechanism|wire)|invisible (?:string|button|mechanism|wire|force)/i.test(body))
-    E.push("出現隱形機關類描述（會導致影片破圖）");
-
-  /* ---------- 運鏡 chips ---------- */
+  /* 運鏡 chips（純資訊展示，不影響通過與否） */
   const moves = [];
   const low = body.toLowerCase();
   for (const mv of MOTIONS) if (low.includes(mv) && !moves.includes(mv)) moves.push(mv);
@@ -1792,24 +1803,18 @@ function frameLine(w, h){
   const ori = r < 0.95 ? "portrait" : (r > 1.05 ? "landscape" : "square");
   return `Reference image: ${w}×${h} px, ${ori}, aspect ratio ${best[0]}.`;
 }
-/* 隨機創意角度：同圖每次生成劇情都不同的來源之一 */
-const ANGLES = ["a playful surprise twist","a tiny everyday adventure","a heartwarming quiet moment",
-  "a comedic small mishap","an unexpected discovery","a mischievous prank","a moment of triumph",
-  "a magical little coincidence","a secret finally shared","a sudden change of weather that changes the mood"];
 function wantShotsFor(n){ return 1; }
+/* 官方 skill 版使用者訊息：模式與時長由 UI 供值（取代 agent 的問答步驟），其餘交給官方指南 */
 function userNote(it){
-  const mode = (it.mode || curMode()).toUpperCase();
-  const angle = ANGLES[Math.floor(Math.random() * ANGLES.length)];
-  it.angle = angle;
-  let t = `Task mode: ${mode}. Creative angle for this run: ${angle}. `
-        + `Analyze the image(s) and write the story prompt in the strict format for this mode.`;
+  const mode = (it.mode || curMode());
   const D = effDur();
-  if (D !== 20)
-    t += ` IMPORTANT — target video duration is ${D} seconds (NOT 20): scale ALL story timing to ${D}s`
-       + ` (phase boundaries, second marks, pacing, beat count) and aim for at least ${Math.max(120, Math.round(D * 15))} words in the main narrative,`
-       + ` overriding any 20-second or word-count assumption in the format rules.`;
-  const fl = frameLine(it.w, it.h);
-  if (fl) t += "\n" + fl;
+  const nImg = (it.files || []).length || (it.imgs || []).length || 1;
+  let t = `Task mode: ${mode.toUpperCase()}. Requested video duration: ${D} seconds (use S.SS = ${D}.00 where the guide asks for it).`;
+  if (mode === "i2va")       t += ` One reference image is attached: it is the FIRST frame (<Picture 1>).`;
+  else if (mode === "fl2va") t += ` Two reference images are attached in order: <Picture 1> is the first frame, <Picture 2> is the last frame.`;
+  else if (mode === "l2va")  t += ` One reference image is attached: it is the LAST frame (<Picture 1>).`;
+  else if (mode === "ref2va")t += ` ${nImg} reference picture(s) are attached in order as <Picture 1>..<Picture ${nImg}>.`;
+  t += ` Analyze the attached image(s) and write the final H3 prompt now, following the reference guide for this mode exactly (including the alignment instruction line where the guide requires one).`;
   const n = (it.note || "").trim();
   if (n) t += `\nStory hint (build the plot around this): "${n}"`;
   return t;
@@ -1826,11 +1831,8 @@ function retryCfg(){
 function isClean(v, lvl){
   return lvl === "noerr" ? !v.E.length : (!v.E.length && !v.W.length);
 }
-/* deterministic normalization: enforce H3 dialogue syntax and REF2VA header colons.
-   Nothing here changes meaning; validate() still runs after. */
+/* deterministic normalization：只補欄位標頭冒號（官方版：不再改寫對白語言或語法） */
 function repair(c){
-  c = c.replace(/<d>\s*(?!\[Japanese\])/g, "<d>[Japanese] ")
-       .replace(/\b(?:The|Her|His|She|He) \((S\d)\) says:/g, "($1) says:");
   if (curMode() === "ref2va")
     c = c.replace(/^(subject_definitions|summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music)\s*$/gm, "$1:");
   else
@@ -1930,17 +1932,24 @@ const T2VA_POLISH_SYS = `你是影視編劇兼分鏡師。把使用者的「原�
 輸出結構（繁體中文）：
 【整體風格】一句話定義類型與氛圍（例：溫馨日常／史詩戰爭／懸疑驚悚），加 3~6 個畫質關鍵詞（例：電影級調色、體積光、淺景深、真實皮膚與毛髮質感）。
 【場景與角色】場景、時段、光線；每位角色的外觀、服裝、髮型——跨段落必須完全一致。
-【時間軸】把 {DUR} 秒均分成 3~5 段，每段標【起-迄秒】並寫：畫面內容與動作、鏡頭運動（推進／搖攝／環繞／升降，含幅度與速度）、該段的聲音事件。
-- 全片一鏡到底：段與段之間用連續運鏡銜接，嚴禁剪輯、切換場景、蒙太奇、淡入淡出
-- 至少 2 句日文對白（各附中文意思），安排在合理的段落
+【時間軸】把 {DUR} 秒均分成 3~5 段，每段標【起-迄秒】並寫：畫面內容與動作、鏡頭安排（單鏡或分鏡皆可；分鏡要寫清楚切換點與新構圖）、該段的聲音事件。
+- 對白依劇情用自然的語言（保留原語言），安排在合理的段落
 【聲音與音樂】環境音細節；配樂的樂器、節奏與情緒曲線（開頭→高潮→收尾），指明風格
-【收尾】最後 2-3 秒如何在畫面內自然收束（不能靠切黑或換場景）
+【收尾】最後 2-3 秒如何自然收束
 
-動作要符合真實人體與物理規律；避免 AI 生成感、人物變形、手部異常。只輸出劇本，不要任何說明或前言。`;
+動作要符合真實人體與物理規律。只輸出劇本，不要任何說明或前言。`;
 /* 潤飾 system prompt：可在系統設定編輯，存於本機；空/未存 → 用內建 */
 const T2SP_KEY = "h3.t2vasp.v1";
 function getT2Sp(){ return store.get(T2SP_KEY) || T2VA_POLISH_SYS; }
-function t2vaPolishSys(){ return getT2Sp().split("{DUR}").join(effDur()); }
+function t2vaPolishSys(){
+  let sys = getT2Sp().split("{DUR}").join(effDur());
+  // 疊加選定的官方風格 skill（有中文版用中文版，潤飾是中文階段）
+  const st = styleSkillId();
+  const sk = st && SKILLSET.cache[st];
+  if (sk && (sk.cn || sk.skill))
+    sys += "\n\n===== 風格 SKILL（潤飾時套用其美學與結構）: " + st + " =====\n" + (sk.cn || sk.skill);
+  return sys;
+}
 (function t2SpInit(){
   const ta = $("#t2Sp");
   if (!ta) return;
@@ -1964,8 +1973,28 @@ function t2vaPolishSys(){ return getT2Sp().split("{DUR}").join(effDur()); }
 })();
 
 $("#t2vaAdd").onclick = () => {
-  const txt = $("#t2vaInput").value.trim();
+  let txt = $("#t2vaInput").value.trim();
   if (!txt){ $("#t2vaModeHint").textContent = "先輸入劇情"; return; }
+  // /skill名稱 前綴：跟 agent harness 一樣切換風格 skill（例：/minimalist-product-ad-generator 我的產品…）
+  const sm = txt.match(/^\/([a-z0-9-]+)\s*([\s\S]*)$/i);
+  if (sm){
+    const q = sm[1].toLowerCase();
+    const hit = (SKILLSET.list || []).find(s => s.id === q)
+             || (SKILLSET.list || []).find(s => s.id.startsWith(q))
+             || (SKILLSET.list || []).find(s => s.id.includes(q));
+    if (hit){
+      store.set(STYLE_KEY, hit.id === "h3-prompt-writing" ? "" : hit.id);
+      const sel = $("#styleSkill"); if (sel) sel.value = styleSkillId();
+      ensureSkill(hit.id);
+      txt = sm[2].trim();
+      $("#t2vaInput").value = txt;
+      $("#t2vaModeHint").textContent = `已切換風格 Skill：${hit.id}`;
+      if (!txt) return;                       // 只切 skill，沒帶劇情就不加入清單
+    } else {
+      $("#t2vaModeHint").textContent = `找不到 skill「${sm[1]}」（可用：${(SKILLSET.list || []).map(s => s.id).join("、")}）`;
+      return;
+    }
+  }
   const arv = $("#t2vaAR").value;
   const a = AR_LIST.find(x => x[0] === arv) || ["9:16", 9, 16];
   items.push({mode: "t2va", rawStory: txt, polished: "", t2vaTab: 0,
@@ -1981,14 +2010,9 @@ $("#t2vaAdd").onclick = () => {
 
 function t2vaNote(it){
   const D = effDur();
-  let t = `Task mode: T2VA (text-to-video — there is NO input image; invent all visuals from the script below). `
-    + `Write the story prompt in the strict three-field format (integrated_multimodal_description / overall_soundscape / non_diegetic_music). `
-    + `Base the ENTIRE story strictly on this script — keep its scenes, characters, actions, dialogue plan and ending:\n${(it.polished || it.rawStory).trim()}\n`
-    + `Open the description with a full visual definition of the scene and every character (appearance, outfit, lighting) since there is no reference image.`;
-  if (D !== 20)
-    t += ` IMPORTANT — target video duration is ${D} seconds (NOT 20): scale ALL story timing to ${D}s`
-       + ` and aim for at least ${Math.max(120, Math.round(D * 15))} words in the main narrative.`;
-  return t;
+  return `Task mode: T2VA (text only - no images are attached). Requested video duration: ${D} seconds.`
+    + ` Build the full audiovisual timeline from this script - keep its scenes, characters, actions, dialogue and ending:\n${(it.polished || it.rawStory).trim()}\n`
+    + `Write the final H3 prompt now following the reference guide for T2VA (the three core fields; T2VA has no alignment instruction line).`;
 }
 
 async function t2vaPolish(it){
@@ -4252,8 +4276,10 @@ const EN = {
 "每句台詞字數（最少）":"Words per line (min)","每句台詞字數（最多）":"Words per line (max)",
 "整理經驗":"Distill","載入中…":"Loading…","通用":"General","新增":"Add","經驗庫是空的":"The library is empty",
 "生成影片 System Prompt（全部類型）":"Generation System Prompt (all types)",
-"I2VA / FL2VA / L2VA / REF2VA 四種模式":"All four modes (I2VA / FL2VA / L2VA / REF2VA)","共用同一份":"share one",
-"生成用 system prompt——內建版本已涵蓋四種模式的格式規則。 左邊勾選哪一組，產生時就用哪一組。編輯內容會自動保存到伺服器。":"generation system prompt — the built-in covers all four modes' format rules. The checked set is the one used; edits save to the server automatically.",
+"內建組＝":"Built-in set = ","官方 MiniMax H3「h3-prompt-writing」skill":"the official MiniMax H3 \"h3-prompt-writing\" skill",
+"：依模式自動搭配 base-en／ref-en 參考指南，並疊加你在生成頁選的風格 Skill（唯讀）。 左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。編輯內容會自動保存到伺服器。":": pairs base-en / ref-en reference guides by mode and layers the style skill picked on the run page (read-only). The checked set is the one used (custom sets override); edits save to the server automatically.",
+"🎨 風格 Skill":"🎨 Style skill",
+"📝 原始劇情（任何語言；一筆＝一支影片；開頭打 /skill名稱 可切換風格 Skill）":"📝 Raw story (any language; one entry = one video; start with /skill-name to switch the style skill)",
 "新增一組":"New set","複製目前這組":"Duplicate","從檔案匯入":"Import file","刪除這組":"Delete set",
 "評分審查影片 System Prompt":"Review System Prompt",
 "「硬切檢測與自動重試」的視覺審查員指令——審查影片時帶入，定義評分規則與 accept / reroll / revise 的決策。 修改時務必保留「只輸出 JSON」的要求與欄位格式，否則審查結果無法解析。編輯即自動保存（存於本機瀏覽器）。":"Instructions for the vision reviewer used by cut detection & auto-retry — defines scoring rules and the accept / reroll / revise decision. Keep the \"JSON only\" requirement and the field format, or verdicts can't be parsed. Edits save locally.",
