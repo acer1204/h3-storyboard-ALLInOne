@@ -539,6 +539,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <button class="ghost mini" id="hrefresh">重新整理</button>
       <button class="ghost mini" id="hselnone">取消選取</button>
       <button class="mini" id="himport" disabled>匯入到上傳並處理</button>
+      <button class="mini" id="hcomfy" disabled>🎬 勾選的送 ComfyUI 生成</button>
       <button class="ghost mini" id="hclear">全部清除</button>
       <span class="status" id="hcount" style="margin:0"></span>
     </div>
@@ -2681,7 +2682,7 @@ function renderHist(){
     const total = totals[g.image] || g.vs.length;
     const sel = hSel.has(r.id);
     return `<button class="hcell ${sel?"hsel":""}" onclick="openGroup(${i})" title="${esc(g.image)} · ${total} 個版本">
-      <span class="hck" onclick="event.stopPropagation(); hToggle('${r.id}')" title="勾選後可匯入到上傳並處理">${sel?"✓":""}</span>
+      <span class="hck" onclick="event.stopPropagation(); hToggle('${r.id}')" title="勾選後可批次匯入或送 ComfyUI 生成（多版本取最新一版）">${sel?"✓":""}</span>
       <span class="sdot ${d}"></span>
       <span class="mtag ${["fl2va","ref2va"].includes(hMode(r))?"ot":""}">${MODES[hMode(r)]}</span>
       ${r.rating ? `<span class="rmark">${r.rating==="up"?"👍":"👎"}</span>` : ""}
@@ -2700,7 +2701,29 @@ function updateHImport(){
   const b = $("#himport"); if (!b) return;
   b.disabled = !hSel.size;
   b.textContent = hSel.size ? `匯入 ${hSel.size} 張到上傳並處理` : "匯入到上傳並處理";
+  const c = $("#hcomfy");
+  if (c){
+    c.disabled = !hSel.size || !onServer;
+    c.textContent = hSel.size ? `🎬 送 ComfyUI 生成 ${hSel.size} 筆` : "🎬 勾選的送 ComfyUI 生成";
+  }
 }
+/* 勾選的直接送 ComfyUI 生成影片：每張卡片＝該圖的最新一版紀錄（hSel 存的就是它），
+   走與詳情頁「送 ComfyUI 生成」相同的路徑（含比例沿用與各模式審查設定）。
+   選取不清空——抽卡時可直接再按一次重送。 */
+$("#hcomfy") && ($("#hcomfy").onclick = async () => {
+  if (!hSel.size) return;
+  const b = $("#hcomfy"); b.disabled = true;
+  const ids = [...hSel];
+  let n = 0;
+  for (const id of ids){
+    n++;
+    $("#hcount").textContent = `送 ComfyUI ${n}/${ids.length} …`;
+    try{ comfyFromRec(id, null); }catch(e){}
+    await new Promise(r => setTimeout(r, 500));   // 稍微錯開，避免同時搶 GPU 協調
+  }
+  $("#hcount").textContent = `已送出 ${n} 筆——進度看 ComfyUI 佇列或媒體庫（勾選保留，可再按一次重抽）`;
+  b.disabled = false;
+});
 $("#hselnone") && ($("#hselnone").onclick = () => { hSel.clear(); renderHist(); });
 $("#himport") && ($("#himport").onclick = async () => {
   if (!hSel.size) return;
@@ -4326,6 +4349,7 @@ const EN = {
 "保存的長片專案：分鏡圖、各片段劇情與影片、完成的長片。點「開啟」載回 Movie 頁查看或繼續。":"Saved film projects: storyboard, per-segment stories and videos, and the finished film. \"Open\" loads one back into the Movie page.",
 "存在伺服器的 history 資料夾，區網上任何裝置看到的都是同一份。點縮圖看當時的完整結果。":"Stored in the server's history folder — every device on your LAN sees the same list. Click a thumbnail for the full result.",
 "重新整理":"Refresh","取消選取":"Deselect","匯入到上傳並處理":"Import & process","全部清除":"Clear all","重新生成顯示中的":"Re-generate shown",
+"🎬 勾選的送 ComfyUI 生成":"🎬 Send checked to ComfyUI","勾選後可批次匯入或送 ComfyUI 生成（多版本取最新一版）":"check to batch-import or send to ComfyUI (latest version per card)",
 "上傳媒體庫":"Uploads","全選顯示中的":"Select all shown","刪除選取的":"Delete selected",
 "你上傳過的每一張原圖（同一張圖只留一份）。點圖看原圖；勾選後可一鍵匯入「上傳並處理」；刪除會":"Every original image you've uploaded (deduplicated). Click to view; check items to import into processing; deleting can",
 "連同用過這張圖的歷史紀錄一起刪":"also delete history records that used the image",
