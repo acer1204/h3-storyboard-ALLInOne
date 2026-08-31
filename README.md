@@ -1,17 +1,24 @@
-# H3 Storyboard — Image-to-Video Story Prompt WebUI + ComfyUI Pipeline
+# H3 Storyboard — MiniMax H3 Story Prompt WebUI + ComfyUI Pipeline
 
-Turn images into complete MiniMax H3 (Hailuo) video+audio prompts with your own local llama-server (multimodal Qwen model), then send them straight to ComfyUI and get finished videos — including chained multi-segment long films with automatic quality review.  
-用本地 llama-server（多模態 Qwen 模型）把圖片變成完整的 MiniMax H3（Hailuo）影音 Prompt，並可直接送 ComfyUI 產出成品影片——包含多段接龍長片與自動品質審查。
+Turn text or images into complete MiniMax H3 (Hailuo) video+audio prompts — generation is driven by the **official MiniMax H3 prompt skills** running on your own local llama-server (multimodal Qwen model) — then send them straight to ComfyUI and get finished videos, including chained multi-segment long films with automatic quality review.  
+用本地 llama-server（多模態 Qwen 模型）搭配**官方 MiniMax H3 prompt skills**，把文字或圖片變成完整的 MiniMax H3（海螺）影音 Prompt，並可直接送 ComfyUI 產出成品影片——包含多段接龍長片與自動品質審查。
 
 This project is fully open source — copy, modify and use it freely (MIT License).  
 本專案完全開源——可任意複製、修改與使用（MIT 授權）。
 
 ---
 
-## Four task modes 四種任務模式
+## Five task modes 五種任務模式
 
 Each mode has its own slot grid, its own generation list and its own history — switching modes never mixes them up.  
 每個模式都有獨立的格子、生成清單與歷史紀錄——切換模式互不干擾。
+
+### T2VA — text to video+audio 文字生影音
+
+Type a raw story in any language; the official skill generates the final H3 prompt directly (optionally AI-polish it into a Chinese storyboard script first, or send the polished script straight to ComfyUI). Batch multiple stories and let fully-automatic mode run all the way to finished videos.  
+輸入任何語言的原始劇情；官方 skill 直出最終 H3 Prompt（可選擇先 AI 潤飾成中文分鏡劇本，或勾「直接使用」把劇本直接送 ComfyUI）。可多筆批次，全自動模式一路跑到成品影片。
+
+![T2VA](docs/img/t2va.png)
 
 ### I2VA — image = first frame 圖生影音
 
@@ -36,13 +43,29 @@ The image is the LAST frame; the first frame is unconstrained (locked slot), and
 
 ### REF2VA — reference images 參考圖生影音
 
-1 to 9 reference images define character/object appearance (not frames); outputs the six-section reference format with `<Subject N>` / `<Picture N>` tokens, per-subject retention levels, and explicit on-screen/off-screen declarations per shot.
-1～9 張參考圖作為角色/物件外觀依據（非影格），輸出六欄位參考格式：`<Subject N>`／`<Picture N>` 代號、每個主體的保留等級、每個 Shot 明確宣告誰入鏡誰不入鏡。
+1 to 9 reference images define character/object appearance (not frames); outputs the official six-section reference format with `<Subject N>` / `<Picture N>` tokens, per-subject retention levels, and explicit on-screen/off-screen declarations per shot — and all six fields are written into the ComfyUI Director workflow, so reruns inside ComfyUI keep the ref format.
+1～9 張參考圖作為角色/物件外觀依據（非影格），輸出官方六欄位參考格式：`<Subject N>`／`<Picture N>` 代號、每個主體的保留等級、每個 Shot 明確宣告誰入鏡誰不入鏡——且六欄位完整寫入 ComfyUI Director 工作流，拖回 ComfyUI 重跑也維持 ref 格式。
 
 ![REF2VA](docs/img/ref2va.png)
 
-Slots support drag-to-reorder, click-to-replace and per-slot remove.  
-格子支援拖曳換順序、再點一次換圖、單格移除。
+Slots support drag-to-reorder, click-to-replace and per-slot remove; every card has its own aspect-ratio + orientation picker that is honored all the way into the rendered video and its embedded metadata.  
+格子支援拖曳換順序、再點一次換圖、單格移除；每張卡片有獨立的輸出比例＋方向選擇，一路生效到成品影片與其內嵌 metadata。
+
+---
+
+## Official MiniMax H3 skills 官方 skills 生成堆疊
+
+Generation runs on the official MiniMax H3 skills bundled in `skills/`: the `h3-prompt-writing` skill plus its base-en / ref-en reference guides are assembled per mode into the system prompt — the exact same guides the official agent harness uses.  
+生成由 repo 內建（`skills/`）的官方 MiniMax H3 skills 驅動：`h3-prompt-writing` skill 依模式搭配 base-en／ref-en 參考指南組成 system prompt——與官方 agent harness 使用的指南完全相同。
+
+![Official skills and prompt sets](docs/img/skills_settings.png)
+
+- Eight official style skills (minimalist product ads, 3D animation shorts, papercraft stop-motion, hand-drawn hybrids, MV subtitles, ...) can be layered on top: pick one in Settings, and it applies only in that skill's applicable modes.  
+  八個官方風格 skills（極簡產品廣告、3D 動畫短片、紙藝定格、手繪實拍混合、MV 字幕……）可疊加：在系統設定選擇，只在各 skill 適用的模式生效。
+- In T2VA, start your story with `/skill-name` to switch the style skill inline — just like an agent harness slash command.  
+  T2VA 輸入框開頭打 `/skill名稱` 即可切換風格 skill——用法跟 agent harness 的斜線指令一樣。
+- Custom prompt sets can replace the stack entirely, or check "layer on top of the official set" to append your own rules after the official skill while its format guide still governs the output.  
+  自訂 Prompt 組可整組取代，也可勾「疊加在官方組之上」——你的規則附加在官方 skill 之後，輸出格式仍由官方指南把關。
 
 ---
 
@@ -68,18 +91,14 @@ Movie 專案存在伺服器端，有專屬歷史分類——之後可隨時開�
 
 ## Story quality guarantees 劇情品質保證
 
-- Output follows the official MiniMax H3 prompt structure, with `overall_soundscape` and `non_diegetic_music` sections.  
-  輸出遵循 MiniMax H3 官方 Prompt 結構，含整體聲景與配樂欄位。
-- Dialogue uses the H3 syntax `(S1) says: <d>[Japanese] ...</d>`, every line followed by a lip-sync sentence; at least 2 meaningful dialogue lines (no filler sounds).  
-  對話使用 H3 語法 `(S1) says: <d>[Japanese] ...</d>`，每句後附唇形同步句；至少 2 句有內容的台詞（禁止語助詞充數）。
-- Story length follows the applied ComfyUI workflow duration (e.g. a 10-second workflow gets a 10-second story), scaled at ~15 words per second, written as one continuous take with smooth camera moves and no hard cuts.  
-  劇情長度跟隨套用的 ComfyUI 工作流秒數（10 秒工作流就寫 10 秒劇情），依每秒約 15 個英文單詞縮放；一鏡到底、平滑運鏡、禁止硬切。
-- Physical-continuity rules prevent common artifacts: no teleporting motion, no "suddenly" limb movements, a deliberate action-beat budget per video.  
-  物理連續性規則防止常見破圖：禁止瞬移、禁止用「suddenly」帶過肢體動作、動作節拍數量受控。
-- High randomness: the same image (even the same hint) produces a different story every run.  
-  高隨機性：同一張圖（甚至同一個提示）每次生成的劇情都不同。
-- Every mode accepts an optional story hint in any language; a built-in validator checks the format and auto-retries failed generations.  
-  每個模式都可選填任何語言的劇情提示；內建格式檢核，不達標自動重生成。
+- Output follows the official MiniMax H3 prompt structure exactly as the official guides define it — the base `integrated_multimodal_description` / `overall_soundscape` / `non_diegetic_music` format, or the six-section reference format for REF2VA.  
+  輸出完全遵循官方 MiniMax H3 Prompt 結構——基礎三欄位格式（整合多模態描述／整體聲景／配樂），REF2VA 則為六欄位參考格式。
+- Dialogue uses the H3 syntax `(S1) says: <d>[Japanese] ...</d>`, with lip-sync sentences, per the official guide.  
+  對話使用官方指南的 H3 語法 `(S1) says: <d>[Japanese] ...</d>`，附唇形同步句。
+- Story length follows the applied ComfyUI workflow duration (e.g. a 10-second workflow gets a 10-second story), written as one continuous take with smooth camera moves.  
+  劇情長度跟隨套用的 ComfyUI 工作流秒數（10 秒工作流就寫 10 秒劇情）；一鏡到底、平滑運鏡。
+- A built-in validator checks transport hygiene and field presence, and failed generations auto-retry with the issue list attached; every mode accepts an optional story hint in any language.  
+  內建驗證器檢查傳輸衛生與欄位存在性，不達標自動帶問題清單重試；每個模式都可選填任何語言的劇情提示。
 
 ---
 
@@ -90,26 +109,28 @@ Pick any workflow .json from your workflow folder (or upload one from the page) 
 
 ![ComfyUI settings](docs/img/comfy_settings.png)
 
-- One click sends a generated prompt (with its images) into the Director-based workflow; the Director mode switches automatically to match the sidebar mode (I2VA/FL2VA/L2VA/REF2VA).  
+- One click sends a generated prompt (with its images) into the Director-based workflow; the Director mode switches automatically to match the sidebar mode (T2VA/I2VA/FL2VA/L2VA/REF2VA).  
   一鍵把生成好的 Prompt（連同圖片）送進 Director 工作流；Director 模式會自動跟著側欄模式切換。
+- Mode-aware field mapping: base modes fill the Director's three builder fields, REF2VA fills its six dedicated ref fields, and the full prompt always rides along as `external_prompt`.  
+  依模式對應欄位：基礎模式填 Director 三欄位，REF2VA 填六個專屬 ref 欄位，完整 prompt 一律同時走 `external_prompt`。
 - Default parameters (fps, resolution, steps, shift...) can be overridden per send; empty fields keep the template's own values.  
   預設參數（fps／解析度／步數／shift…）可逐項覆寫；留空一律照模板原值。
-- Finished videos embed the full workflow metadata, so dragging a video back into ComfyUI restores the exact graph and prompt.  
-  成品影片內嵌完整工作流參數，拖回 ComfyUI 即還原當時的節點圖與 Prompt。
+- Finished videos embed the full workflow metadata — including the resolution/aspect actually applied — so dragging a video back into ComfyUI restores the exact graph and prompt.  
+  成品影片內嵌完整工作流參數（含當次實際套用的解析度／比例），拖回 ComfyUI 即還原當時的節點圖與 Prompt。
 - A media library page browses everything in the ComfyUI output folder.  
   媒體庫頁可瀏覽 ComfyUI 輸出資料夾的所有成品。
 
 ### GPU coexistence GPU 共存協調
 
-llama-server and ComfyUI can share one GPU: before prompting, the app frees ComfyUI's VRAM and waits for it to drop; before rendering, it waits for llama's idle unload — verified via nvidia-smi, fully automatic.
-llama-server 與 ComfyUI 可共用一張 GPU：生成 Prompt 前自動 Free ComfyUI 並等 VRAM 降下，送算圖前等 llama 閒置卸載——透過 nvidia-smi 驗證，全自動。
+llama-server and ComfyUI can share one GPU: before prompting, the app frees ComfyUI's VRAM and waits for it to drop; before rendering, it waits for llama's idle unload — verified via nvidia-smi, fully automatic, and identity-aware (consecutive same-target use never waits).
+llama-server 與 ComfyUI 可共用一張 GPU：生成 Prompt 前自動 Free ComfyUI 並等 VRAM 降下，送算圖前等 llama 閒置卸載——透過 nvidia-smi 驗證，全自動，且具身分感知（同對象連續使用不等待）。
 
 ---
 
 ## History + automatic video review 歷史紀錄＋自動影片審查
 
-Every generation is stored server-side (with its images) and shared across devices on your LAN; filter by filename or mode, rerun any record with its original images, or resend it to ComfyUI.  
-每筆生成（含圖片）存在伺服器端，區網任何裝置看到同一份；可依檔名／模式篩選，任一筆可用原圖重跑 Prompt 或重送 ComfyUI。
+Every generation is stored server-side (with its images and chosen aspect ratio) and shared across devices on your LAN; filter by filename or mode, rerun any record with its original inputs, or resend it to ComfyUI with the same aspect.  
+每筆生成（含圖片與所選比例）存在伺服器端，區網任何裝置看到同一份；可依檔名／模式篩選，任一筆可用原輸入重跑 Prompt 或以同比例重送 ComfyUI。
 
 ![History](docs/img/history.png)
 
@@ -143,10 +164,10 @@ Your ratings and notes accumulate into reusable rules: one click asks the model 
    （選用）若要網頁內直接出片，另跑一個裝了 MiniMax H3 Director 自訂節點的 ComfyUI。
 3. Double-click `start_app.bat` — it creates a dedicated Python venv on first run and opens `http://localhost:9998/`.  
    雙擊 `start_app.bat`——首次執行會自動建立專屬 Python venv，並開啟 `http://localhost:9998/`。
-4. Fill in your llama-server / ComfyUI addresses and the workflow folder in the settings pages (saved to `config.json`).  
-   在設定頁填入 llama-server／ComfyUI 位址與工作流資料夾（保存於 `config.json`）。
-5. Pick a mode, upload image(s), optionally type a story hint, then generate — and send to ComfyUI when you like the prompt.  
-   選擇模式 → 上傳圖片 →（選填）劇情提示 → 生成——滿意就一鍵送 ComfyUI。
+4. Fill in your llama-server / ComfyUI addresses and the workflow folder in the settings pages (saved to `config.json`). The official skills ship in-repo — nothing extra to install.  
+   在設定頁填入 llama-server／ComfyUI 位址與工作流資料夾（保存於 `config.json`）。官方 skills 已隨 repo 附帶，不需另外安裝。
+5. Pick a mode, type a story or upload image(s), optionally choose a style skill, then generate — and send to ComfyUI when you like the prompt.  
+   選擇模式 → 輸入劇情或上傳圖片 →（選用）挑一個風格 skill → 生成——滿意就一鍵送 ComfyUI。
 
 Requirements: Windows + Python 3 and a modern browser; ffmpeg is auto-discovered (bundled imageio-ffmpeg works) for the review and merge features.  
 需求：Windows＋Python 3 與現代瀏覽器；審查與合併功能會自動尋找 ffmpeg（imageio-ffmpeg 內附版即可）。
@@ -159,10 +180,10 @@ Requirements: Windows + Python 3 and a modern browser; ffmpeg is auto-discovered
 |---|---|
 | `h3-webui.html` | The whole WebUI in one HTML file.<br>網頁介面（單一 HTML 檔）。 |
 | `h3-server.py` | Backend: llama proxy, history, ComfyUI submit, GPU coordination, review scan, movie merge.<br>後端：llama 代理、歷史、ComfyUI 送單、GPU 協調、審查掃描、長片合併。 |
+| `skills/` | The official MiniMax H3 skills: `h3-prompt-writing` (+ base-en / ref-en guides) and 8 style skills.<br>官方 MiniMax H3 skills：`h3-prompt-writing`（含 base-en／ref-en 指南）與 8 個風格 skills。 |
+| `workflows/` | Bundled MiniMax H3 ComfyUI workflows, usable straight from the dropdown.<br>隨附 MiniMax H3 ComfyUI 工作流，下拉即可選用。 |
 | `ui2api.py` | Converts ComfyUI Save-format workflows into runnable API graphs (subgraphs/bypass supported).<br>將 ComfyUI Save 格式工作流轉成可執行 API 圖（支援子圖／bypass）。 |
 | `start_app.bat` | One-click launcher on port 9998.<br>一鍵啟動（port 9998）。 |
-| `i2va_test.py` | The master System Prompt + a batch test harness. System Prompt 主版本＋批次測試腳本。 |
-| `sync_prompt.py` | Syncs the System Prompt into the legacy `app.html`.<br>同步 System Prompt 至舊版 `app.html`。 |
 | `app.html` | Legacy single-page frontend (kept for reference).<br>舊版簡易前端（保留參考）。 |
 
 ---
