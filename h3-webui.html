@@ -752,7 +752,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <div class="panel">
     <h3>生成影片 System Prompt（全部類型） <span class="modetag" id="spmodetag"></span></h3>
     <p class="ph">內建組＝<b>官方 MiniMax H3「h3-prompt-writing」skill</b>：依模式自動搭配 base-en／ref-en 參考指南，並疊加上方「連線與生成」選的風格 Skill（唯讀）。
-      左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。編輯內容會自動保存到伺服器。</p>
+      左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。自建組勾「疊加在官方組之上」時不取代官方 skill，只把這組文字附加為額外規則。編輯內容會自動保存到伺服器。</p>
     <div class="splayout">
       <div class="splist">
         <div id="plist"></div>
@@ -770,6 +770,10 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
           <span style="margin-left:auto"></span>
           <button class="ghost mini" id="pdel">刪除這組</button>
         </div>
+        <label class="row" style="margin-bottom:8px;gap:6px;cursor:pointer">
+          <input type="checkbox" id="poverlay">
+          <span>疊加在官方組之上（保留官方 skill＋格式指南，這組文字只作為額外規則附加）</span>
+        </label>
         <textarea id="sp" spellcheck="false"></textarea>
         <p class="status" id="pstat"></p>
       </div>
@@ -963,7 +967,14 @@ function visiblePrompts(){ return prompts; }
 function activeText(){
   const p = prompts.find(x => x.id === active) || BUILTIN;
   if (p.builtin) return officialSys(curMode());   // 官方組合依目前模式選 base/ref 指南
-  return p.text != null ? p.text : "";
+  const t = p.text != null ? p.text : "";
+  if (p.overlay)   // 疊加組：官方 skill＋指南照常，這組文字附加為額外規則（格式仍由指南管）
+    return officialSys(curMode())
+      + "\n\n# USER RULES — custom rules layered on top of the official skill\n"
+      + "These rules OVERRIDE any conflicting wording or content guidance elsewhere in this brief,\n"
+      + "but the reference guide's OUTPUT FORMAT (field names, section order, timing notation) still governs:\n"
+      + t;
+  return t;
 }
 window.setMode = m => {
   if (!MODES[m]) return;
@@ -1002,7 +1013,7 @@ function renderPrompts(){
     const n = Math.round((p.text != null ? p.text.length : (p.len || 0)) / 3.6);
     return '<button class="pitem ' + (p.id === active ? "on" : "") + '" onclick="pickPrompt(\'' + p.id + '\')">'
       + '<span class="rd"></span><span style="min-width:0">'
-      + '<span class="nm">' + esc(p.name) + (p.builtin ? '<span class="lock">內建</span>' : "") + '</span>'
+      + '<span class="nm">' + esc(p.name) + (p.builtin ? '<span class="lock">內建</span>' : "") + (!p.builtin && p.overlay ? '<span class="lock">疊加</span>' : "") + '</span>'
       + '<span class="sub">' + n + ' tokens' + (p.ts ? " · " + esc(p.ts.slice(5,16)) : "") + '</span>'
       + '</span></button>';
   }).join("");
@@ -1012,6 +1023,8 @@ function renderPrompts(){
   $("#pdel").disabled = !!p.builtin;
   $("#sp").value = p.text != null ? p.text : "";
   $("#sp").readOnly = !!p.builtin;
+  $("#poverlay").checked = !p.builtin && !!p.overlay;
+  $("#poverlay").disabled = !!p.builtin;
   upTok();
   $("#pstat").textContent = p.builtin ? "內建版本唯讀。要改就按「複製目前這組」，改副本。" : "";
 }
@@ -1031,7 +1044,7 @@ async function loadPrompts(){
   if (onServer){
     try {
       const rows = await (await fetch(PAPI)).json();
-      for (const r of rows) prompts.push({id:r.id, name:r.name, ts:r.ts, len:r.len, text:null, mode:r.mode || "all"});
+      for (const r of rows) prompts.push({id:r.id, name:r.name, ts:r.ts, len:r.len, text:null, mode:r.mode || "all", overlay:!!r.overlay});
     } catch(e){}
   }
   const want = store.get(PSEL());
@@ -1048,10 +1061,11 @@ async function savePrompt(){
   if (!p || p.builtin) return;
   p.text = $("#sp").value;
   p.name = $("#pname").value.trim() || "未命名";
+  p.overlay = $("#poverlay").checked;
   if (!onServer){ $("#pstat").textContent = "以 file:// 開啟時無法保存到伺服器"; return; }
   try {
     const r = await (await fetch(PAPI, {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({id:p.id, name:p.name, text:p.text, mode:p.mode || "all"})})).json();
+      body: JSON.stringify({id:p.id, name:p.name, text:p.text, mode:p.mode || "all", overlay:!!p.overlay})})).json();
     p.ts = r.ts;
     $("#pstat").textContent = "已保存";
     clearTimeout(savePrompt.t);
@@ -1062,6 +1076,7 @@ async function savePrompt(){
 const debouncedSave = () => { clearTimeout(dirty); dirty = setTimeout(savePrompt, 700); };
 $("#sp").addEventListener("input", () => { upTok(); debouncedSave(); });
 $("#pname").addEventListener("input", debouncedSave);
+$("#poverlay").addEventListener("change", debouncedSave);
 
 async function createPrompt(name, text){
   if (!onServer){ alert("以 file:// 開啟時無法新增，請用 start_app.bat 啟動服務"); return; }
@@ -2038,13 +2053,36 @@ $("#t2vaAdd").onclick = () => {
   items.push({mode: "t2va", rawStory: txt, polished: "", t2vaTab: 0,
               name: txt.replace(/\s+/g, " ").slice(0, 28) + (txt.length > 28 ? "…" : ""),
               state: "pending", files: [], previews: [],
-              ar: {preset: arv, w: a[1], h: a[2], swap: $("#t2vaSwap").value === "1"}, arTouched: true});
+              ar: {preset: arv, w: a[1], h: a[2], swap: $("#t2vaSwap").value === "1"},
+              arTouched: true, arHdr: true});
   $("#t2vaInput").value = "";
   $("#t2vaModeHint").textContent = "";
   render(); $("#run").disabled = !modeItems().length;
   $("#prog").textContent = `${modeItems().length} 筆待處理`;
   updateNavCounts();
 };
+
+/* T2VA 比例/方向：記憶選擇（重整不重設），且變更時同步套用到清單中
+   尚未生成、且沒在卡片上個別改過比例的 T2VA 項目 */
+const T2AR_KEY = "h3.t2va.ar.v1";
+{
+  try{
+    const s = JSON.parse(store.get(T2AR_KEY) || "null");
+    if (s && s.ar && AR_LIST.some(x => x[0] === s.ar)) $("#t2vaAR").value = s.ar;
+    if (s && (s.swap === "0" || s.swap === "1")) $("#t2vaSwap").value = s.swap;
+  }catch(e){}
+  const applyHdrAR = () => {
+    store.set(T2AR_KEY, JSON.stringify({ar: $("#t2vaAR").value, swap: $("#t2vaSwap").value}));
+    const a = AR_LIST.find(x => x[0] === $("#t2vaAR").value);
+    if (!a) return;
+    for (const it of items)
+      if (it.mode === "t2va" && it.state === "pending" && it.arHdr)
+        it.ar = {preset: a[0], w: a[1], h: a[2], swap: $("#t2vaSwap").value === "1"};
+    render();
+  };
+  $("#t2vaAR").addEventListener("change", applyHdrAR);
+  $("#t2vaSwap").addEventListener("change", applyHdrAR);
+}
 
 function t2vaNote(it){
   const D = effDur();
@@ -2292,15 +2330,22 @@ function field(c,a,b){
   return c.slice(i+a.length, j>0 ? j : undefined).trim();
 }
 function bilingual(content, zh, note){
-  const d=field(content,"integrated_multimodal_description:","overall_soundscape:");
-  const s=field(content,"overall_soundscape:","non_diegetic_music:");
-  const m=field(content,"non_diegetic_music:",null);
+  // REF2VA 內容＝六欄位格式，其餘＝基礎三欄位；依內容自動判斷（標頭有無冒號都吃）
+  const isRef = /(^|\n)\s*subject_definitions\s*:?/.test(content || "");
+  const labs = isRef
+    ? ["subject_definitions","summary","retention_analysis","detailed_description","overall_soundscape","non_diegetic_music"]
+    : ["integrated_multimodal_description","overall_soundscape","non_diegetic_music"];
+  const found = [];
+  for (const l of labs){
+    const m = (content || "").match(new RegExp("(^|\\n)\\s*" + l + "\\s*:?[ \\t]*\\n?"));
+    if (m) found.push([l, m.index, m.index + m[0].length]);
+  }
+  found.sort((a,b) => a[1] - b[1]);
+  const secs = found.map(([l, s, e], i) =>
+    `<p class="lab">${l}</p><p>${hl((content || "").slice(e, i+1 < found.length ? found[i+1][1] : undefined).trim())}</p>`
+  ).join("") || `<p>${hl(content || "")}</p>`;
   return `<div class="cols">
-    <div class="col">
-      <p class="lab">integrated_multimodal_description</p><p>${hl(d)}</p>
-      <p class="lab">overall_soundscape</p><p>${hl(s)}</p>
-      <p class="lab">non_diegetic_music</p><p>${hl(m)}</p>
-    </div>
+    <div class="col">${secs}</div>
     <div class="col zh"><p class="lab">中文對照${note?" · "+note:""}</p>
       <p>${zh ? hl(zh) : '<span class="hint">—</span>'}</p></div>
   </div>`;
@@ -2455,6 +2500,8 @@ function nearestAR(w, h){
 window.setAR = (k, v) => { const it = items[k]; if (!it) return;
   if (v === "CUSTOM"){ it.ar = {...(it.ar||{w:2,h:3,swap:false}), preset:"CUSTOM"}; }
   else { const a = AR_LIST.find(x => x[0] === v); it.ar = {preset:v, w:a[1], h:a[2], swap:(it.ar||{}).swap||false}; }
+  it.arTouched = true;   // 手動選擇後，生成時不再用圖片比例覆蓋
+  it.arHdr = false;      // 卡片上個別改過 → T2VA 上方選單變更不再套用到此項目
   render(); };
 window.setARWH = (k, w, h) => { const it = items[k]; if (!it) return;
   it.ar = {...(it.ar||{preset:"CUSTOM",w:2,h:3,swap:false})};
@@ -2462,9 +2509,14 @@ window.setARWH = (k, w, h) => { const it = items[k]; if (!it) return;
   if (h != null) it.ar.h = Math.max(1, parseInt(h)||1);
   const hit = AR_LIST.find(x => x[1] === it.ar.w && x[2] === it.ar.h);
   it.ar.preset = hit ? hit[0] : "CUSTOM";
+  it.arTouched = true;
+  it.arHdr = false;
   render(); };
 window.setARSwap = k => { const it = items[k]; if (!it) return;
-  it.ar = {...(it.ar||{preset:"2:3",w:2,h:3,swap:false}), swap:!(it.ar||{}).swap}; render(); };
+  it.ar = {...(it.ar||{preset:"2:3",w:2,h:3,swap:false}), swap:!(it.ar||{}).swap};
+  it.arTouched = true;
+  it.arHdr = false;
+  render(); };
 function arPayload(it){
   if (!it || !it.ar) return null;
   const name = it.ar.preset === "CUSTOM" ? "CUSTOM"
@@ -2586,6 +2638,7 @@ async function record(it){
         content:it.content,raw:it.raw,zh:it.zh||"",note:it.note||"",thumb:it.thumb,full:it.full||"",
         orig:it.orig||"", more:it.more||[],
         story_raw:it.rawStory||"", story_polished:it.polished||"",
+        ar: it.ar || null,
         attempts:it.attempts||1,shots:it.shots||1,
         ...(() => { const c = it.ctx || genContext(); return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
                      lora: c.lora ? {...c.lora, report:(it.lora||{}).report||null, issues:(it.lora||{}).issues||[]} : null}; })()})});
@@ -3080,7 +3133,7 @@ window.comfyFromRec = (id, btnEl) => {
   fetch(API + "/" + id).then(async rec0 => {
     const rec = await rec0.json();
     const mode = hMode(rec);
-    const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(),
+    const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(), aspect: arPayload(rec),
                      mode, content: rec.content, ...comfyFields(rec.content, mode)};
     if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
     // 審查啟用：抓紀錄的圖片作為審查輸入（修劇情不支援歷史紀錄路徑，revise 會退為換 seed）
@@ -4313,7 +4366,8 @@ const EN = {
 "整理經驗":"Distill","載入中…":"Loading…","通用":"General","新增":"Add","經驗庫是空的":"The library is empty",
 "生成影片 System Prompt（全部類型）":"Generation System Prompt (all types)",
 "內建組＝":"Built-in set = ","官方 MiniMax H3「h3-prompt-writing」skill":"the official MiniMax H3 \"h3-prompt-writing\" skill",
-"：依模式自動搭配 base-en／ref-en 參考指南，並疊加你在生成頁選的風格 Skill（唯讀）。 左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。編輯內容會自動保存到伺服器。":": pairs base-en / ref-en reference guides by mode and layers the style skill picked on the run page (read-only). The checked set is the one used (custom sets override); edits save to the server automatically.",
+"：依模式自動搭配 base-en／ref-en 參考指南，並疊加上方「連線與生成」選的風格 Skill（唯讀）。 左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。自建組勾「疊加在官方組之上」時不取代官方 skill，只把這組文字附加為額外規則。編輯內容會自動保存到伺服器。":": pairs base-en / ref-en reference guides by mode and layers the style skill picked under Connection & Generation (read-only). The checked set is the one used (custom sets override). A custom set with \"layer on top of the official set\" checked keeps the official skill and only appends its text as extra rules; edits save to the server automatically.",
+"疊加在官方組之上（保留官方 skill＋格式指南，這組文字只作為額外規則附加）":"Layer on top of the official set (keeps the official skill + format guide; this set's text is appended as extra rules only)",
 "🎨 風格 Skill":"🎨 Style skill",
 "🎨 風格 Skill（官方；只在各 skill 的適用模式疊加，其他模式自動忽略）":"🎨 Style skill (official; applied only in each skill's applicable modes, ignored elsewhere)",
 "📝 原始劇情（任何語言；一筆＝一支影片；開頭打 /skill名稱 可切換風格 Skill）":"📝 Raw story (any language; one entry = one video; start with /skill-name to switch the style skill)",
