@@ -26,7 +26,7 @@ H3 Prompt 批次產生器 - 本機服務
 
   GET    /api/prompts           -> system prompt 清單
   GET    /api/prompts/<id>      -> 單一 prompt 全文
-  POST   /api/prompts           -> 新增或更新 {id?, name, text}
+  POST   /api/prompts           -> 新增或更新 {id?, name, text, mode?, overlay?}（overlay=疊加在官方組之上）
   DELETE /api/prompts/<id>      -> 刪除
 
   GET    /api/uploads           -> 上傳過的原圖清單（以內容 hash 去重）
@@ -71,6 +71,7 @@ LESSONS_DIR = os.path.join(ROOT, "lessons")
 LESSONS_FILE = os.path.join(LESSONS_DIR, "lessons.json")
 REQUIRED_FILE = os.path.join(LESSONS_DIR, "required.json")
 os.makedirs(LESSONS_DIR, exist_ok=True)
+SKILLS_DIR = os.path.join(ROOT, "skills")   # 官方 MiniMax H3 skills（隨 repo 附帶）
 PAGE = "h3-webui.html"
 MODES = ("t2va", "i2va", "fl2va", "l2va", "ref2va")   # generation task modes
 # ---------------------------------------------------------------- config
@@ -1158,6 +1159,24 @@ def split_fields(content, mode=""):
     return out
 
 
+def split_ref_fields(c):
+    """REF2VA 六欄位拆解（標頭有無冒號都吃）；至少找到 4 欄才視為有效。"""
+    labs = ["subject_definitions", "summary", "retention_analysis",
+            "detailed_description", "overall_soundscape", "non_diegetic_music"]
+    c = str(c or "")
+    found = []
+    for l in labs:
+        m = re.search(r"(?m)^\s*" + l + r"\s*:?\s*", c)
+        if m:
+            found.append((l, m.start(), m.end()))
+    found.sort(key=lambda x: x[1])
+    out = {}
+    for i, (l, s, e) in enumerate(found):
+        nxt = found[i + 1][1] if i + 1 < len(found) else len(c)
+        out[l] = c[e:nxt].strip()
+    return out if len(found) >= 4 else None
+
+
 def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspect=None, image_blob=None,
                 mode=None, extra_names=None, full_prompt=None):
     """載模板，換圖與欄位（＋影片秒數），其餘照舊；種子隨機化避免重複送出被去重。
@@ -1180,7 +1199,33 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
     if director is None:
         raise ValueError("模板裡沒有 MiniMaxH3Director 節點")
 
+    # REF2VA：Director 的 builder_state 用專屬 ref 欄位（subject_definitions/summary/
+    # retention_analysis/detailed_description...），不是基礎三欄——塞錯欄位的話，
+    # 工作流拖回 ComfyUI 顯示空的 ref 欄，且無 external_prompt 重跑會重組成基礎格式
+    ref_secs = None
+    if str(mode or "").lower() == "ref2va":
+        ref_secs = split_ref_fields(full_prompt)
+
     def patch_bs(bs):
+        if ref_secs:
+            bs["imd"] = ""
+            r = bs.get("ref") if isinstance(bs.get("ref"), dict) else {}
+            r["subject_definitions"] = ref_secs.get("subject_definitions", "")
+            r["summary"] = ref_secs.get("summary", "")
+            r["retention_analysis"] = ref_secs.get("retention_analysis", "")
+            r["detailed_description"] = ref_secs.get("detailed_description", "")
+            r["soundscape"] = ref_secs.get("overall_soundscape", soundscape)
+            r["music"] = ref_secs.get("non_diegetic_music", music) or "N/A"
+            # 清空舊短鍵快取，避免節點在長鍵為空時回退到模板殘值
+            r["subject_defs"] = []
+            r["summary_text"] = ""
+            r["retention"] = []
+            r["style_line"] = ""
+            r["detail"] = ""
+            bs["ref"] = r
+            bs["soundscape"] = ""
+            bs["music"] = ""
+            return bs
         bs["imd"] = imd
         bs["soundscape"] = soundscape
         bs["music"] = music
@@ -1283,6 +1328,26 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
                     wv[0] = dmode
                 if full_prompt and str(full_prompt).strip() and len(wv) >= 2 and isinstance(wv[1], str):
                     wv[1] = str(full_prompt)
+
+    # 比例/解析度節點的 widget 同步：apply_wf_params 只改 API 圖，內嵌 UI 工作流（含 subgraph
+    # 定義）不跟著改的話，影片拖回 ComfyUI 會顯示模板原比例，看起來像比例設定沒生效
+    def _sync_rsc(nodes):
+        for n in nodes or []:
+            if n.get("type") != "DaSiWa_ResolutionScaleCalculator":
+                continue
+            api = None
+            for nid2, node2 in g.items():
+                if node2.get("class_type") == "DaSiWa_ResolutionScaleCalculator" and \
+                   str(nid2).split(":")[-1] == str(n.get("id")):
+                    api = node2["inputs"]
+                    break
+            wv2 = n.get("widgets_values")
+            if api and isinstance(wv2, list) and len(wv2) == len(api) and \
+               all(isinstance(v, (str, int, float, bool)) for v in api.values()):
+                n["widgets_values"] = list(api.values())
+    _sync_rsc(wf.get("nodes"))
+    for _sg in ((wf.get("definitions") or {}).get("subgraphs") or []):
+        _sync_rsc(_sg.get("nodes"))
     extra = dict(extra)
     extra["client_id"] = "h3-webui"
     return g, extra
@@ -1681,6 +1746,51 @@ class H(SimpleHTTPRequestHandler):
             # 位址類設定不再送到瀏覽器——一律存在伺服器端 config.json，前端只走同源代理
             return self.send_json({"workflow_current": CONFIG.get("workflow_current", ""),
                                    "gpu_free_mb": CONFIG.get("gpu_free_mb", 4000)})
+
+        if p == "/api/skills":
+            # 官方 skills 清單：skills/<id>/SKILL.md 的資料夾
+            rows = []
+            try:
+                for d in sorted(os.listdir(SKILLS_DIR)):
+                    sd = os.path.join(SKILLS_DIR, d)
+                    if not os.path.isdir(sd) or not os.path.exists(os.path.join(sd, "SKILL.md")):
+                        continue
+                    desc = ""
+                    try:
+                        with open(os.path.join(sd, "SKILL.md"), encoding="utf-8") as f:
+                            head = f.read(2000)
+                        mm = re.search(r"^description:\s*(.+)$", head, re.M)
+                        if mm:
+                            desc = mm.group(1).strip()[:200]
+                    except Exception:
+                        pass
+                    rows.append({"id": d, "description": desc,
+                                 "has_cn": os.path.exists(os.path.join(sd, "SKILL.cn.md"))})
+            except OSError:
+                pass
+            return self.send_json(rows)
+
+        m = re.match(r"^/api/skill/([a-z0-9-]+)$", p)
+        if m:
+            sd = os.path.join(SKILLS_DIR, m.group(1))
+            if not os.path.isdir(sd) or not os.path.exists(os.path.join(sd, "SKILL.md")):
+                return self.send_json({"error": "not found"}, 404)
+            def rd(fp):
+                try:
+                    with open(fp, encoding="utf-8") as f:
+                        return f.read()
+                except OSError:
+                    return ""
+            refs = {}
+            rdir = os.path.join(sd, "references")
+            if os.path.isdir(rdir):
+                for fn in sorted(os.listdir(rdir)):
+                    if fn.lower().endswith((".txt", ".md")):
+                        refs[fn] = rd(os.path.join(rdir, fn))
+            return self.send_json({"id": m.group(1),
+                                   "skill": rd(os.path.join(sd, "SKILL.md")),
+                                   "cn": rd(os.path.join(sd, "SKILL.cn.md")),
+                                   "references": refs})
 
         if p == "/api/llama/props":
             maybe_reload_config()
@@ -2324,13 +2434,14 @@ class H(SimpleHTTPRequestHandler):
                    "name": (str(body.get("name", "")).strip() or "未命名")[:80],
                    "text": str(body.get("text", "")),
                    "mode": mode,
+                   "overlay": bool(body.get("overlay")),
                    "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
             with LOCK:
                 with open(os.path.join(PROMPTS, rid + ".json"), "w", encoding="utf-8") as f:
                     json.dump(rec, f, ensure_ascii=False, indent=1)
                 rows = [r for r in load_pindex() if r.get("id") != rid]
                 rows.append({"id": rid, "name": rec["name"], "ts": rec["ts"],
-                             "len": len(rec["text"]), "mode": mode})
+                             "len": len(rec["text"]), "mode": mode, "overlay": rec["overlay"]})
                 rows.sort(key=lambda r: r.get("name", ""))
                 save_pindex(rows)
             return self.send_json({"id": rid, "ts": rec["ts"]})
@@ -2424,6 +2535,8 @@ class H(SimpleHTTPRequestHandler):
             # T2VA：原始輸入劇情與 AI 潤飾後劇本
             "story_raw": str(body.get("story_raw", "") or "")[:8000],
             "story_polished": str(body.get("story_polished", "") or "")[:12000],
+            # 輸出比例（重送 ComfyUI 時沿用；舊紀錄無此欄＝照舊依圖推斷/模板預設）
+            "ar": (body.get("ar") if isinstance(body.get("ar"), dict) else None),
             # ---- generation context, so a record can be re-run exactly as it was made ----
             "mode": (str(body.get("mode", "i2va")) if str(body.get("mode", "i2va")) in MODES else "i2va"),
             "prompt_id": str(body.get("prompt_id", "") or "")[:64],
