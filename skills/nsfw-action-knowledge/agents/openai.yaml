@@ -1,0 +1,4 @@
+interface:
+  display_name: "NSFW Story Action Knowledge"
+  short_description: "Action library and writing rules for NSFW story beats"
+  default_prompt: "Use $nsfw-action-knowledge to describe these NSFW story actions."

@@ -436,9 +436,9 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <input type="file" id="files" multiple accept="image/*" hidden>
 
   <div id="t2vaZone" style="display:none">
-    <div class="note-wrap"><label>📝 原始劇情（任何語言；一筆＝一支影片；開頭打 /skill名稱 可切換風格 Skill）</label>
+    <div class="note-wrap"><label>📝 原始劇情（任何語言；一筆＝一支影片；開頭可列多個 /skill名稱 指定這筆的 skill 組合）</label>
       <textarea class="note" id="t2vaInput" rows="5"
-        placeholder="輸入你想要的劇情。也可用 /minimalist-product-ad-generator 這樣的前綴切換官方風格 Skill。"></textarea></div>
+        placeholder="輸入你想要的劇情。可像 harness 一樣：/action-knowledge /minimalist-product-ad 街舞產品廣告…（/none 清空附加 skill）"></textarea></div>
     <div class="row" style="margin:8px 0 0;align-items:center;gap:10px">
       <button class="mini" id="t2vaAdd">✚ 加入生成清單</button>
       <label class="small" style="display:flex;align-items:center;gap:6px">輸出比例
@@ -539,6 +539,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <button class="ghost mini" id="hrefresh">重新整理</button>
       <button class="ghost mini" id="hselnone">取消選取</button>
       <button class="mini" id="himport" disabled>匯入到上傳並處理</button>
+      <button class="mini" id="hcomfy" disabled>🎬 勾選的送 ComfyUI 生成</button>
       <button class="ghost mini" id="hclear">全部清除</button>
       <span class="status" id="hcount" style="margin:0"></span>
     </div>
@@ -648,8 +649,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div class="grid">
       <div><label>Language（介面語言）</label><select id="lang" class="no-i18n">
         <option value="zh-TW">繁體中文</option><option value="zh-CN">简体中文</option><option value="en">English</option></select></div>
-      <div><label>🎨 風格 Skill（官方；只在各 skill 的適用模式疊加，其他模式自動忽略）</label><select id="styleSkill" class="no-i18n">
-        <option value="">無風格（純 h3-prompt-writing）</option></select></div>
+      <div style="grid-column:1/-1"><label>🎨 附加 Skills（可多選；只在各 skill 的適用模式疊加，其他模式自動忽略。把含 SKILL.md 的資料夾丟進 skills/ 即可安裝新 skill）</label>
+        <div id="skillChecks" class="no-i18n" style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:6px"></div></div>
       <div><label>中文翻譯</label><select id="tr">
         <option value="1" selected>開啟</option><option value="0">關閉</option></select></div>
       <div><label>自動重試次數</label><input type="text" id="retry" value="3"></div>
@@ -915,9 +916,26 @@ const SKILL_MODES = {
 };
 function skillFits(id, mode){
   const m = SKILL_MODES[id];
-  return !m || m.includes(mode);
+  return !m || m.includes(mode);   // 沒登記的（例如自装的知識型 skill）視為全模式適用
 }
-function styleSkillId(){ return store.get(STYLE_KEY) || ""; }
+/* 多 skill 啟用集合：設定頁勾選；T2VA 可用 /skill1 /skill2 內容 一次指定（取代整組）。
+   佇列執行時 SKILL_OVERRIDE 讓每筆 T2VA 項目帶自己加入清單當下的組合。 */
+const SKILLS_KEY = "h3.skills.v1";
+let SKILL_OVERRIDE = null;
+function activeSkillIds(){
+  try{
+    const v = JSON.parse(store.get(SKILLS_KEY) || "null");
+    if (Array.isArray(v)) return v;
+  }catch(e){}
+  const legacy = store.get(STYLE_KEY);                 // 舊版單選遷移
+  return legacy ? [legacy] : [];
+}
+function setActiveSkillIds(ids){
+  store.set(SKILLS_KEY, JSON.stringify([...new Set(ids)].filter(Boolean)));
+  renderSkillChecks();
+}
+function currentSkillIds(){ return SKILL_OVERRIDE || activeSkillIds(); }
+function styleSkillId(){ return (currentSkillIds()[0] || ""); }   // 相容舊呼叫點
 async function ensureSkill(id){
   if (!id) return null;
   if (!SKILLSET.cache[id]){
@@ -938,27 +956,42 @@ function officialSys(mode){
           + "integrated_multimodal_description: ...\n"
           + "Do NOT invent extra sections (no \"Core Subject\", no summaries) beyond what the guide defines.\n\n"
           + (core.skill || "") + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
-  const st = styleSkillId();
-  const sk = st && skillFits(st, mode) && SKILLSET.cache[st];   // 不適用的模式自動忽略風格
-  if (sk && sk.skill)
-    sys += "\n\n===== STYLE SKILL: " + st + " =====\nApply this style skill's aesthetics, structure and conventions to the video prompt you write (the reference guide's output format still governs):\n" + sk.skill;
+  // 疊加所有啟用的附加 skill（風格/知識皆可、可多個）；不適用目前模式的自動忽略
+  for (const st of currentSkillIds()){
+    if (st === "h3-prompt-writing" || !skillFits(st, mode)) continue;
+    const sk = SKILLSET.cache[st];
+    if (sk && sk.skill)
+      sys += "\n\n===== ADDITIONAL SKILL: " + st + " =====\nApply this skill's knowledge, aesthetics, structure and conventions to the video prompt you write (the reference guide's output format still governs):\n" + sk.skill;
+  }
   return sys;
 }
+function renderSkillChecks(){
+  const box = $("#skillChecks");
+  if (!box) return;
+  const act = new Set(activeSkillIds());
+  box.innerHTML = SKILLSET.list.filter(s => s.id !== "h3-prompt-writing").map(s => {
+    const fits = (SKILL_MODES[s.id] || []).map(m => MODES[m] || m).join("/") || "全部模式";
+    return `<label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
+        text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--fg);font-weight:400;
+        border:1px solid var(--line);border-radius:999px;padding:5px 12px 5px 9px;cursor:pointer;margin:0
+        ${act.has(s.id) ? ";border-color:var(--acc);background:color-mix(in srgb,var(--acc) 8%,transparent)" : ""}">
+      <input type="checkbox" style="width:14px;height:14px;accent-color:var(--acc);margin:0;flex:none"
+        ${act.has(s.id) ? "checked" : ""} onchange="toggleSkill('${esc(s.id)}', this.checked)">
+      <span style="font-family:ui-monospace,Consolas,monospace">${esc(s.id)}</span>
+      <span style="color:var(--faint);font-size:11px">${fits}</span></label>`;
+  }).join("") || '<span class="hint">skills/ 資料夾內沒有附加 skill</span>';
+}
+window.toggleSkill = async (id, on) => {
+  const ids = activeSkillIds().filter(x => x !== id);
+  if (on){ ids.push(id); await ensureSkill(id); }
+  setActiveSkillIds(ids);
+};
 async function loadSkills(){
   try{ SKILLSET.list = await (await fetch("/api/skills")).json(); }catch(e){ SKILLSET.list = []; }
   await ensureSkill("h3-prompt-writing");
-  await ensureSkill(styleSkillId());
+  for (const id of activeSkillIds()) await ensureSkill(id);
   BUILTIN.text = officialSys("i2va");        // prompt 庫的預覽/計數用
-  const sel = $("#styleSkill");
-  if (sel){
-    sel.innerHTML = `<option value="">無風格（純 h3-prompt-writing）</option>`
-      + SKILLSET.list.filter(s => s.id !== "h3-prompt-writing")
-          .map(s => {
-            const fits = (SKILL_MODES[s.id] || []).map(m => MODES[m] || m).join("/") || "全部";
-            return `<option value="${esc(s.id)}" ${s.id === styleSkillId() ? "selected" : ""}>${esc(s.id)}（適用 ${fits}）</option>`;
-          }).join("");
-    sel.onchange = async () => { store.set(STYLE_KEY, sel.value); await ensureSkill(sel.value); };
-  }
+  renderSkillChecks();
   if (typeof renderPrompts === "function") renderPrompts();
 }
 
@@ -1996,11 +2029,13 @@ const T2SP_KEY = "h3.t2vasp.v1";
 function getT2Sp(){ return store.get(T2SP_KEY) || T2VA_POLISH_SYS; }
 function t2vaPolishSys(){
   let sys = getT2Sp().split("{DUR}").join(effDur());
-  // 疊加選定的官方風格 skill（僅適用 T2VA 的風格才疊；有中文版用中文版）
-  const st = styleSkillId();
-  const sk = st && skillFits(st, "t2va") && SKILLSET.cache[st];
-  if (sk && (sk.cn || sk.skill))
-    sys += "\n\n===== 風格 SKILL（潤飾時套用其美學與結構）: " + st + " =====\n" + (sk.cn || sk.skill);
+  // 疊加所有啟用且適用 T2VA 的附加 skill（有中文版用中文版，潤飾是中文階段）
+  for (const st of currentSkillIds()){
+    if (st === "h3-prompt-writing" || !skillFits(st, "t2va")) continue;
+    const sk = SKILLSET.cache[st];
+    if (sk && (sk.cn || sk.skill))
+      sys += "\n\n===== 附加 SKILL（潤飾時套用其知識與美學）: " + st + " =====\n" + (sk.cn || sk.skill);
+  }
   return sys;
 }
 (function t2SpInit(){
@@ -2028,29 +2063,38 @@ function t2vaPolishSys(){
 $("#t2vaAdd").onclick = () => {
   let txt = $("#t2vaInput").value.trim();
   if (!txt){ $("#t2vaModeHint").textContent = "先輸入劇情"; return; }
-  // /skill名稱 前綴：跟 agent harness 一樣切換風格 skill（例：/minimalist-product-ad-generator 我的產品…）
-  const sm = txt.match(/^\/([a-z0-9-]+)\s*([\s\S]*)$/i);
-  if (sm){
-    const q = sm[1].toLowerCase();
-    const hit = (SKILLSET.list || []).find(s => s.id === q)
-             || (SKILLSET.list || []).find(s => s.id.startsWith(q))
-             || (SKILLSET.list || []).find(s => s.id.includes(q));
-    if (hit){
-      store.set(STYLE_KEY, hit.id === "h3-prompt-writing" ? "" : hit.id);
-      const sel = $("#styleSkill"); if (sel) sel.value = styleSkillId();
-      ensureSkill(hit.id);
-      txt = sm[2].trim();
-      $("#t2vaInput").value = txt;
-      $("#t2vaModeHint").textContent = `已切換風格 Skill：${hit.id}`;
-      if (!txt) return;                       // 只切 skill，沒帶劇情就不加入清單
-    } else {
-      $("#t2vaModeHint").textContent = `找不到 skill「${sm[1]}」（可用：${(SKILLSET.list || []).map(s => s.id).join("、")}）`;
-      return;
+  // /skill1 /skill2 內容 —— 跟 agent harness 一樣一次列出這筆要用的 skill 組合
+  //（會取代目前啟用集合；/none 清空；h3-prompt-writing 是核心不必列，列了也會忽略）
+  const toks = [];
+  let m2;
+  while ((m2 = txt.match(/^\/([a-z0-9-]+)\s*/i))){
+    toks.push(m2[1].toLowerCase());
+    txt = txt.slice(m2[0].length);
+  }
+  if (toks.length){
+    const ids = [];
+    for (const q of toks){
+      if (q === "none" || q === "clear") continue;
+      const hit = (SKILLSET.list || []).find(s => s.id === q)
+               || (SKILLSET.list || []).find(s => s.id.startsWith(q))
+               || (SKILLSET.list || []).find(s => s.id.includes(q));
+      if (!hit){
+        $("#t2vaModeHint").textContent = `找不到 skill「${q}」（可用：${(SKILLSET.list || []).map(s => s.id).join("、")}）`;
+        return;
+      }
+      if (hit.id !== "h3-prompt-writing" && !ids.includes(hit.id)) ids.push(hit.id);
     }
+    setActiveSkillIds(ids);
+    ids.forEach(id => ensureSkill(id));
+    txt = txt.trim();
+    $("#t2vaInput").value = txt;
+    $("#t2vaModeHint").textContent = `Skill 組合：h3-prompt-writing${ids.length ? " + " + ids.join(" + ") : "（無附加）"}`;
+    if (!txt) return;                       // 只設定組合、沒帶劇情就不加入清單
   }
   const arv = $("#t2vaAR").value;
   const a = AR_LIST.find(x => x[0] === arv) || ["9:16", 9, 16];
   items.push({mode: "t2va", rawStory: txt, polished: "", t2vaTab: 0,
+              skills: activeSkillIds(),        // 快照：這筆生成時用加入清單當下的 skill 組合
               name: txt.replace(/\s+/g, " ").slice(0, 28) + (txt.length > 28 ? "…" : ""),
               state: "pending", files: [], previews: [],
               ar: {preset: arv, w: a[1], h: a[2], swap: $("#t2vaSwap").value === "1"},
@@ -2094,19 +2138,25 @@ function t2vaNote(it){
 async function t2vaPolish(it){
   await gpuPrepare("llama", t => { it.state2 = t; render(); });
   it.state2 = "潤飾劇情中…"; render();
+  SKILL_OVERRIDE = it.skills || null;          // 用這筆加入清單當下的 skill 組合
   try{
+    for (const id of (it.skills || [])) await ensureSkill(id);
     const j = await chat([{role: "system", content: t2vaPolishSys()},
                           {role: "user", content: it.rawStory}], {temp: 0.8, max: 1600});
     it.polished = (j.choices[0].message.content || "").trim();
     it.t2vaTab = 1;
-  } finally { it.state2 = null; }
+  } finally { it.state2 = null; SKILL_OVERRIDE = null; }
   render();
 }
 
 async function t2vaGen(it){
   await gpuPrepare("llama", t => { it.state2 = t; render(); });
   const t0 = performance.now();
-  const best = await genWithRetry([], t2vaNote(it), 20, 1, t => { it.state2 = t; render(); });
+  SKILL_OVERRIDE = it.skills || null;          // 用這筆加入清單當下的 skill 組合
+  for (const id of (it.skills || [])) await ensureSkill(id);
+  let best;
+  try{ best = await genWithRetry([], t2vaNote(it), 20, 1, t => { it.state2 = t; render(); }); }
+  finally{ SKILL_OVERRIDE = null; }
   it.elapsed = ((performance.now() - t0) / 1000).toFixed(1);
   it.usage = best.j.usage || {}; it.timings = best.j.timings || {};
   it.raw = best.raw; it.content = best.content;
@@ -2423,7 +2473,8 @@ function render(){
           <button class="ghost mini" onclick="t2DoGen(${k})" ${(it.state==="running" || it.direct)?"disabled":""} title="官方 skill 直出最終 prompt（用潤飾劇本，沒有就用原始劇情）">📝 生成 Prompt${it.content?"（重新生成）":""}</button>
           ${it.direct ? `<button class="ghost mini" onclick="t2DirectSend(${k})" ${(!it.polished || it.state==="running")?"disabled":""}>🎬 直接送 ComfyUI</button>` : ""}
           ${it.direct && !it.content ? `<span class="hint" data-cstat="${k}"></span>` : ""}
-        </div>` : `
+        </div>
+        ${(it.skills || []).length ? `<div class="hint" style="margin:0 0 8px">🎨 ${esc(it.skills.join(" + "))}</div>` : ""}` : `
         <div class="note-wrap" style="margin:0 0 8px"><label>劇情提示（選填，中/英/日皆可）</label>
           <textarea class="note" data-note="${k}" rows="3" placeholder="留空＝自由創作。輸入提示＝以此為劇情核心，例如：她在雪地裡撿到一隻迷路的小企鵝"
             oninput="setNote(${k}, this.value); agrow(this)">${esc(it.note||"")}</textarea></div>`}
@@ -2681,7 +2732,7 @@ function renderHist(){
     const total = totals[g.image] || g.vs.length;
     const sel = hSel.has(r.id);
     return `<button class="hcell ${sel?"hsel":""}" onclick="openGroup(${i})" title="${esc(g.image)} · ${total} 個版本">
-      <span class="hck" onclick="event.stopPropagation(); hToggle('${r.id}')" title="勾選後可匯入到上傳並處理">${sel?"✓":""}</span>
+      <span class="hck" onclick="event.stopPropagation(); hToggle('${r.id}')" title="勾選後可批次匯入或送 ComfyUI 生成（多版本取最新一版）">${sel?"✓":""}</span>
       <span class="sdot ${d}"></span>
       <span class="mtag ${["fl2va","ref2va"].includes(hMode(r))?"ot":""}">${MODES[hMode(r)]}</span>
       ${r.rating ? `<span class="rmark">${r.rating==="up"?"👍":"👎"}</span>` : ""}
@@ -2700,7 +2751,29 @@ function updateHImport(){
   const b = $("#himport"); if (!b) return;
   b.disabled = !hSel.size;
   b.textContent = hSel.size ? `匯入 ${hSel.size} 張到上傳並處理` : "匯入到上傳並處理";
+  const c = $("#hcomfy");
+  if (c){
+    c.disabled = !hSel.size || !onServer;
+    c.textContent = hSel.size ? `🎬 送 ComfyUI 生成 ${hSel.size} 筆` : "🎬 勾選的送 ComfyUI 生成";
+  }
 }
+/* 勾選的直接送 ComfyUI 生成影片：每張卡片＝該圖的最新一版紀錄（hSel 存的就是它），
+   走與詳情頁「送 ComfyUI 生成」相同的路徑（含比例沿用與各模式審查設定）。
+   選取不清空——抽卡時可直接再按一次重送。 */
+$("#hcomfy") && ($("#hcomfy").onclick = async () => {
+  if (!hSel.size) return;
+  const b = $("#hcomfy"); b.disabled = true;
+  const ids = [...hSel];
+  let n = 0;
+  for (const id of ids){
+    n++;
+    $("#hcount").textContent = `送 ComfyUI ${n}/${ids.length} …`;
+    try{ comfyFromRec(id, null); }catch(e){}
+    await new Promise(r => setTimeout(r, 500));   // 稍微錯開，避免同時搶 GPU 協調
+  }
+  $("#hcount").textContent = `已送出 ${n} 筆——進度看 ComfyUI 佇列或媒體庫（勾選保留，可再按一次重抽）`;
+  b.disabled = false;
+});
 $("#hselnone") && ($("#hselnone").onclick = () => { hSel.clear(); renderHist(); });
 $("#himport") && ($("#himport").onclick = async () => {
   if (!hSel.size) return;
@@ -4326,6 +4399,7 @@ const EN = {
 "保存的長片專案：分鏡圖、各片段劇情與影片、完成的長片。點「開啟」載回 Movie 頁查看或繼續。":"Saved film projects: storyboard, per-segment stories and videos, and the finished film. \"Open\" loads one back into the Movie page.",
 "存在伺服器的 history 資料夾，區網上任何裝置看到的都是同一份。點縮圖看當時的完整結果。":"Stored in the server's history folder — every device on your LAN sees the same list. Click a thumbnail for the full result.",
 "重新整理":"Refresh","取消選取":"Deselect","匯入到上傳並處理":"Import & process","全部清除":"Clear all","重新生成顯示中的":"Re-generate shown",
+"🎬 勾選的送 ComfyUI 生成":"🎬 Send checked to ComfyUI","勾選後可批次匯入或送 ComfyUI 生成（多版本取最新一版）":"check to batch-import or send to ComfyUI (latest version per card)",
 "上傳媒體庫":"Uploads","全選顯示中的":"Select all shown","刪除選取的":"Delete selected",
 "你上傳過的每一張原圖（同一張圖只留一份）。點圖看原圖；勾選後可一鍵匯入「上傳並處理」；刪除會":"Every original image you've uploaded (deduplicated). Click to view; check items to import into processing; deleting can",
 "連同用過這張圖的歷史紀錄一起刪":"also delete history records that used the image",
@@ -4369,7 +4443,8 @@ const EN = {
 "：依模式自動搭配 base-en／ref-en 參考指南，並疊加上方「連線與生成」選的風格 Skill（唯讀）。 左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。自建組勾「疊加在官方組之上」時不取代官方 skill，只把這組文字附加為額外規則。編輯內容會自動保存到伺服器。":": pairs base-en / ref-en reference guides by mode and layers the style skill picked under Connection & Generation (read-only). The checked set is the one used (custom sets override). A custom set with \"layer on top of the official set\" checked keeps the official skill and only appends its text as extra rules; edits save to the server automatically.",
 "疊加在官方組之上（保留官方 skill＋格式指南，這組文字只作為額外規則附加）":"Layer on top of the official set (keeps the official skill + format guide; this set's text is appended as extra rules only)",
 "🎨 風格 Skill":"🎨 Style skill",
-"🎨 風格 Skill（官方；只在各 skill 的適用模式疊加，其他模式自動忽略）":"🎨 Style skill (official; applied only in each skill's applicable modes, ignored elsewhere)",
+"🎨 附加 Skills（可多選；只在各 skill 的適用模式疊加，其他模式自動忽略。把含 SKILL.md 的資料夾丟進 skills/ 即可安裝新 skill）":"🎨 Additional skills (multi-select; each applies only in its applicable modes. Install new skills by dropping a folder with SKILL.md into skills/)",
+"📝 原始劇情（任何語言；一筆＝一支影片；開頭可列多個 /skill名稱 指定這筆的 skill 組合）":"📝 Raw story (any language; one entry = one video; start with one or more /skill-name tokens to set this entry's skill combo)",
 "📝 原始劇情（任何語言；一筆＝一支影片；開頭打 /skill名稱 可切換風格 Skill）":"📝 Raw story (any language; one entry = one video; start with /skill-name to switch the style skill)",
 "新增一組":"New set","複製目前這組":"Duplicate","從檔案匯入":"Import file","刪除這組":"Delete set",
 "評分審查影片 System Prompt":"Review System Prompt",

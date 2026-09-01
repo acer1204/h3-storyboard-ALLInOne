@@ -1,0 +1,17 @@
+display-name-zh: NSFW 動作行為知識庫
+version: 1.0.0
+tag-en: Reference
+tag-cn: 參考知識
+complete-tags-en:
+- Reference / NSFW
+- Reference / Action Description
+complete-tags-cn:
+- 參考知識 / NSFW
+- 參考知識 / 動作描述
+summary-en: A reference knowledge base of NSFW physical actions, positions, rhythms, and intensity vocabulary for prompt writing and model training.
+summary-cn: NSFW 身體動作、姿勢、節奏與力度詞彙的參考知識庫，適用於提示詞撰寫與模型微調。
+desc-en: A structured reference of visible physical actions for NSFW content, covering hand contact, oral actions, body friction, insertion, riding, deep-throat, anal, toys, climax, combination templates, position-specific actions, and rhythm/intensity vocabulary. Format principle: character + verb + target body part + detail modifiers. Use when writing prompts, storyboards, or training data that involve intimate physical actions. Pairs well with h3-prompt-writing for MiniMax H3 video generation.
+desc-cn: 結構化的 NSFW 可見身體動作參考，涵蓋手部接觸、口部動作、身體摩擦、插入抽插、騎乘、深喉、肛交、道具、高潮、組合模板、姿勢補充與節奏力度詞彙。格式原則：角色 + 動詞 + 目標部位 + 細節修飾。適用於撰寫包含親密身體動作的提示詞、分鏡或訓練資料。與 h3-prompt-writing 搭配可強化 MiniMax H3 影片生成的動作描述。
+author-en: ITRI
+author-cn: ITRI
+source: community
