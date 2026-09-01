@@ -971,9 +971,14 @@ function renderSkillChecks(){
   const act = new Set(activeSkillIds());
   box.innerHTML = SKILLSET.list.filter(s => s.id !== "h3-prompt-writing").map(s => {
     const fits = (SKILL_MODES[s.id] || []).map(m => MODES[m] || m).join("/") || "全部模式";
-    return `<label class="small" style="display:flex;align-items:center;gap:6px">
-      <input type="checkbox" ${act.has(s.id) ? "checked" : ""} onchange="toggleSkill('${esc(s.id)}', this.checked)">
-      <span>${esc(s.id)}<span class="hint" style="margin-left:6px">適用 ${fits}</span></span></label>`;
+    return `<label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
+        text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--fg);font-weight:400;
+        border:1px solid var(--line);border-radius:999px;padding:5px 12px 5px 9px;cursor:pointer;margin:0
+        ${act.has(s.id) ? ";border-color:var(--acc);background:color-mix(in srgb,var(--acc) 8%,transparent)" : ""}">
+      <input type="checkbox" style="width:14px;height:14px;accent-color:var(--acc);margin:0;flex:none"
+        ${act.has(s.id) ? "checked" : ""} onchange="toggleSkill('${esc(s.id)}', this.checked)">
+      <span style="font-family:ui-monospace,Consolas,monospace">${esc(s.id)}</span>
+      <span style="color:var(--faint);font-size:11px">${fits}</span></label>`;
   }).join("") || '<span class="hint">skills/ 資料夾內沒有附加 skill</span>';
 }
 window.toggleSkill = async (id, on) => {
