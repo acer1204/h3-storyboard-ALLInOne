@@ -1386,7 +1386,11 @@ class H(SimpleHTTPRequestHandler):
             self.send_header("Accept-Ranges", "bytes")
             self.end_headers()
             return
-        return SimpleHTTPRequestHandler.do_HEAD(self)
+        # 同 do_GET：只有首頁可經靜態處理，其餘一律 404，不對外曝光工作目錄
+        if urlparse(self.path).path in ("/", "/index.html"):
+            self.path = "/" + PAGE
+            return SimpleHTTPRequestHandler.do_HEAD(self)
+        return self.send_json({"error": "not found"}, 404)
 
     def log_message(self, fmt, *args):
         pth = self.path or ""
@@ -1854,7 +1858,10 @@ class H(SimpleHTTPRequestHandler):
 
         if p.startswith("/api/"):
             return self.send_json({"error": "unknown endpoint"}, 404)
-        return SimpleHTTPRequestHandler.do_GET(self)
+        # 不再把工作目錄當靜態站台：這行以前會把整個專案資料夾（含 .git/、config.json、
+        # h3-server.py 原始碼）公開給任何連得到的人。網頁本身只需要 "/"（見 do_GET 開頭），
+        # 其餘資源都是執行期組出的 /api/、blob: 或 data: 網址。
+        return self.send_json({"error": "not found"}, 404)
 
     def do_POST(self):
         p = urlparse(self.path).path
