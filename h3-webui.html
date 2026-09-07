@@ -1811,7 +1811,16 @@ function encode(file){
       URL.revokeObjectURL(url);
       res({b64:full, thumb:t.toDataURL("image/jpeg",0.62), w:img.width, h:img.height, orig});
     };
-    img.onerror=rej; img.src=url;
+    img.onerror = () => {
+      // onerror 收到的是 Event，直接 rej(event) 會讓 e.message 變成 undefined，
+      // 卡片的錯誤框就顯示成一片空白（esc(undefined) === ""）。這裡改丟真正的 Error。
+      URL.revokeObjectURL(url);
+      const kb = Math.round((file.size || 0) / 1024);
+      rej(new Error(`圖片無法解碼：${file.name}（${file.type || "未知格式"}，${kb} KB）`
+        + "。瀏覽器打不開這個檔案——最常見的原因是 iPhone 的 HEIC/HEIF 檔只是改了副檔名，"
+        + "或檔案在傳輸中損毀。請先轉存成 JPEG／PNG 再上傳。"));
+    };
+    img.src = url;
   });
 }
 
@@ -2673,7 +2682,8 @@ function urlToDataURL(url){
   }).then(b => new Promise((res, rej) => {
     const fr = new FileReader();
     fr.onload = () => res(fr.result);
-    fr.onerror = rej;
+    // 同上：ProgressEvent 沒有 message，改丟帶訊息的 Error 才看得出原因
+    fr.onerror = () => rej(new Error("讀取檔案失敗：" + (fr.error && fr.error.message || "FileReader 錯誤")));
     fr.readAsDataURL(b);
   }));
 }
