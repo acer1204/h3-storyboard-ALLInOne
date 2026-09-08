@@ -48,8 +48,8 @@ The image is the LAST frame; the first frame is unconstrained (locked slot), and
 
 ![REF2VA](docs/img/ref2va.png)
 
-Slots support drag-to-reorder, click-to-replace and per-slot remove; every card has its own aspect-ratio + orientation picker that is honored all the way into the rendered video and its embedded metadata.  
-格子支援拖曳換順序、再點一次換圖、單格移除；每張卡片有獨立的輸出比例＋方向選擇，一路生效到成品影片與其內嵌 metadata。
+Slots support drag-to-reorder, click-to-replace and per-slot remove. There is no aspect-ratio picker: the output canvas is derived from the input image itself and aligned to the model's 32-pixel grid, keeping the pixel budget of the quality tier you chose in ComfyUI settings — so a 1898×2492 portrait renders 640×864 and a 1536×1920 renders 672×832.  
+格子支援拖曳換順序、再點一次換圖、單格移除。沒有比例選項：輸出畫布直接由輸入圖推算並對齊模型要求的 32 像素格線，同時維持你在 ComfyUI 設定所選畫質檔位的像素預算——所以 1898×2492 的直式圖產出 640×864，1536×1920 產出 672×832。
 
 ---
 
@@ -118,8 +118,8 @@ Pick any workflow .json from your workflow folder (or upload one from the page) 
   依模式對應欄位：基礎模式填 Director 三欄位，REF2VA 填六個專屬 ref 欄位，完整 prompt 一律同時走 `external_prompt`。
 - Default parameters (fps, resolution, steps, shift...) can be overridden per send; empty fields keep the template's own values.  
   預設參數（fps／解析度／步數／shift…）可逐項覆寫；留空一律照模板原值。
-- Finished videos embed the full workflow metadata — including the resolution/aspect actually applied — so dragging a video back into ComfyUI restores the exact graph and prompt.  
-  成品影片內嵌完整工作流參數（含當次實際套用的解析度／比例），拖回 ComfyUI 即還原當時的節點圖與 Prompt。
+- Finished videos embed the full workflow metadata — including the canvas actually applied — so dragging a video back into ComfyUI restores the exact graph and prompt.  
+  成品影片內嵌完整工作流參數（含當次實際套用的畫布尺寸），拖回 ComfyUI 即還原當時的節點圖與 Prompt。
 - A media library page browses everything in the ComfyUI output folder.  
   媒體庫頁可瀏覽 ComfyUI 輸出資料夾的所有成品。
 
@@ -137,13 +137,17 @@ Everything sent to ComfyUI — from any mode — goes into one queue held by the
 
 - Jobs run strictly one at a time: the dispatcher keeps ComfyUI's own queue at depth 1, so every browser sees the same order and the GPU is never double-booked.  
   任務嚴格逐一執行：派工把 ComfyUI 自己的佇列維持在深度 1，所以每個瀏覽器看到的順序一致，GPU 也不會被重複佔用。
-- While a job runs the row shows a progress bar and the **live preview** coming out of the sampler; when it finishes the row becomes the playable result.  
-  生成中會顯示進度條與取樣器吐出的**即時預覽**；完成後該列直接變成可播放的成品。
+- Active jobs sit at the top as large cards showing a progress bar and the **live preview** coming out of the sampler; finished ones collapse into a compact grid below, where hovering a card reveals its title, timestamp, output path and any error.  
+  進行中的任務以大卡置頂，顯示進度條與取樣器吐出的**即時預覽**；完成的收在下方小卡格狀排列，滑鼠移到卡片上才顯示標題、時間、輸出路徑與錯誤訊息。
+- The list updates each row in place rather than redrawing itself, so a video you are watching is never restarted and full-screen playback is never interrupted.  
+  清單是逐列就地更新而非整塊重畫，所以正在看的影片不會被重來，全螢幕播放也不會被打斷。
 - Anything already queued survives a server restart too — the queue is on disk, because ComfyUI's own history is in-memory and is wiped whenever ComfyUI restarts.  
   已排入的任務連伺服器重啟都不會掉——佇列存在磁碟，因為 ComfyUI 自己的歷史是記憶體暫存，它一重啟就清空。
 
 Progress and previews arrive over a single WebSocket the server holds. That is a requirement, not an optimisation: ComfyUI unicasts these events to one client id, so a second connection claiming the same id would silently starve the first.
 進度與預覽由伺服器持有的單一 WebSocket 收取。這是必要條件而非最佳化：ComfyUI 的這些事件是單播給單一 client id，第二條同 id 的連線會讓第一條靜默收不到東西。
+
+![Task queue](docs/img/queue.png)
 
 ---
 
@@ -159,8 +163,8 @@ Work you have not sent yet is preserved too: images dropped into slots and cards
 
 ## History + automatic video review 歷史紀錄＋自動影片審查
 
-Every generation is stored server-side (with its images and chosen aspect ratio) and shared across devices on your LAN; filter by filename or mode, rerun any record with its original inputs, or resend it to ComfyUI with the same aspect.  
-每筆生成（含圖片與所選比例）存在伺服器端，區網任何裝置看到同一份；可依檔名／模式篩選，任一筆可用原輸入重跑 Prompt 或以同比例重送 ComfyUI。
+Every generation is stored server-side with its images and parameters and shared across devices on your LAN; filter by filename or mode, rerun any record with its original inputs, or resend it straight to ComfyUI — handy for rerolling the seed on a shot you almost like.  
+每筆生成（含圖片與參數）存在伺服器端，區網任何裝置看到同一份；可依檔名／模式篩選，任一筆可用原輸入重跑 Prompt，或直接重送 ComfyUI——想對某顆鏡頭換 seed 抽卡時很方便。
 
 ![History](docs/img/history.png)
 
