@@ -1064,16 +1064,25 @@ def comfy_capture_template():
     return {"prompt_id": pid, "nodes": len(g), "output": out}
 
 
-# 畫質預設（v18：對應 Director timeline_data.resolution.resolution）
-RES_PRESETS = ["144p", "240p", "360p", "480p", "540p", "576p", "720p", "900p", "1024p", "1080p",
-               "1152p", "1440p", "2160p", "2K", "4K", "0.26 MP - Preview", "0.36 MP - Small",
-               "0.52 MP - SD", "0.65 MP - Balanced", "0.83 MP - HD", "1.00 MP - 1024p",
-               "1.05 MP - HD+", "1.20 MP - HD++", "1.35 MP - 2K lite", "1.55 MP - 2K",
-               "1.65 MP - 2K+", "1.75 MP - QHD", "2.10 MP - FHD", "3.30 MP - QHD+",
-               "4.75 MP - 2K Pro", "6.50 MP - Production", "8.30 MP - UHD"]
+# 畫質預設 -> 百萬像素。數值抄自 ComfyUI Director 前端的 RESOLUTION_PRESETS
+# （custom_nodes/ComfyUI-DaSiWa-Nodes/js/minimax_h3_director.js），與它算出的畫布一致：
+#   pixels = MP * 1024 * 1024 ; h = sqrt(pixels/aspect) ; w = h*aspect ; 兩邊對齊 32
+RESOLUTION_MP = {
+    "144p": 0.0352, "240p": 0.0977, "360p": 0.22, "480p": 0.391, "540p": 0.494, "576p": 0.396,
+    "720p": 0.879, "900p": 1.373, "1024p": 1.00, "1080p": 1.978, "1152p": 2.25, "1440p": 3.516,
+    "2160p": 7.91, "2K": 3.906, "4K": 7.91,
+    "0.26 MP - Preview": 0.26, "0.36 MP - Small": 0.36, "0.52 MP - SD": 0.52,
+    "0.65 MP - Balanced": 0.65, "0.83 MP - HD": 0.83, "1.00 MP - 1024p": 1.00,
+    "1.05 MP - HD+": 1.05, "1.20 MP - HD++": 1.20, "1.35 MP - 2K lite": 1.35,
+    "1.55 MP - 2K": 1.55, "1.65 MP - 2K+": 1.65, "1.75 MP - QHD": 1.75,
+    "2.10 MP - FHD": 2.10, "3.30 MP - QHD+": 3.30, "4.75 MP - 2K Pro": 4.75,
+    "6.50 MP - Production": 6.50, "8.30 MP - UHD": 8.30,
+}
+NATIVE_SHORT_EDGE = "Native (ShortEdge 768px)"     # Director 的 "auto"：短邊固定 768
+RES_PRESETS = [NATIVE_SHORT_EDGE] + list(RESOLUTION_MP)
 
 
-def fit_canvas(img_w, img_h, base_w, base_h, mult=32):
+def fit_canvas(img_w, img_h, base_w, base_h, preset=None, mult=32):
     """依輸入圖的長寬比算出畫布尺寸，像素預算沿用模板的 width*height。
     v18 的 timeline_data.resolution.aspect="auto" 只有 ComfyUI 的瀏覽器 JS 會執行；
     我們是直接把 API 圖 POST 給 /prompt，沒有瀏覽器，Director 只會用 width/height
@@ -1089,10 +1098,16 @@ def fit_canvas(img_w, img_h, base_w, base_h, mult=32):
         return None
     if min(img_w, img_h, base_w, base_h) <= 0:
         return None
-    budget = base_w * base_h                      # 維持模板的畫質檔位（例如 0.52 MP）
     ratio = img_w / img_h
-    w = (budget * ratio) ** 0.5
-    h = w / ratio if ratio else 0
+    if preset == NATIVE_SHORT_EDGE:               # 短邊固定 768，長邊依比例
+        short = 768
+        w, h = (short * ratio, short) if ratio >= 1 else (short, short / ratio)
+    else:
+        mp = RESOLUTION_MP.get(preset)
+        # 有選畫質就用它的像素預算，沒選就沿用模板現有的畫布大小
+        budget = (mp * 1024 * 1024) if mp else (base_w * base_h)
+        w = (budget * ratio) ** 0.5
+        h = w / ratio if ratio else 0
     w = max(mult, int(round(w / mult)) * mult)
     h = max(mult, int(round(h / mult)) * mult)
     return w, h
@@ -1305,7 +1320,8 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
     # 沒有輸入圖（T2VA）就完全不動，直接用模板值。
     if image_blob:
         iw, ih = _img_dims(image_blob)
-        fit = fit_canvas(iw, ih, ins.get("width"), ins.get("height")) if (iw and ih) else None
+        _preset = (wf or {}).get("resolution_preset") or None
+        fit = fit_canvas(iw, ih, ins.get("width"), ins.get("height"), _preset) if (iw and ih) else None
         if fit:
             ins["width"], ins["height"] = fit
     apply_wf_params(g, wf)
