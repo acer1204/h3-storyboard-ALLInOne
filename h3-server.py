@@ -1058,9 +1058,7 @@ def comfy_capture_template():
     return {"prompt_id": pid, "nodes": len(g), "output": out}
 
 
-# 比例預設（DaSiWa_ResolutionScaleCalculator 的合法值；全部直式 寬:高）
-ASPECTS = [("1:1 - Square", 1, 1), ("2:3 - Classic", 2, 3), ("3:4 - Photo", 3, 4),
-           ("5:8 - Tall", 5, 8), ("9:16 - Social", 9, 16), ("9:21 - Cinema", 9, 21)]
+# 畫質預設（v18：對應 Director timeline_data.resolution.resolution）
 RES_PRESETS = ["144p", "240p", "360p", "480p", "540p", "576p", "720p", "900p", "1024p", "1080p",
                "1152p", "1440p", "2160p", "2K", "4K", "0.26 MP - Preview", "0.36 MP - Small",
                "0.52 MP - SD", "0.65 MP - Balanced", "0.83 MP - HD", "1.00 MP - 1024p",
@@ -1069,24 +1067,10 @@ RES_PRESETS = ["144p", "240p", "360p", "480p", "540p", "576p", "720p", "900p", "
                "4.75 MP - 2K Pro", "6.50 MP - Production", "8.30 MP - UHD"]
 
 
-def nearest_aspect(w, h):
-    """圖片尺寸 -> 最接近的直式預設 + 是否橫置。回 (preset_name, aw, ah, swap)。"""
-    import math
-    if not w or not h:
-        return ("2:3 - Classic", 2, 3, False)
-    r = w / h
-    best = None
-    for name, aw, ah in ASPECTS:
-        for swap in (False, True):
-            cand = (ah / aw) if swap else (aw / ah)
-            d = abs(math.log(r) - math.log(cand))
-            if best is None or d < best[0]:
-                best = (d, name, aw, ah, swap)
-    return best[1], best[2], best[3], best[4]
-
-
-def apply_wf_params(g, wf, aspect):
-    """把工作流預設參數與比例寫進節點圖。wf/aspect 缺項就不動模板值。"""
+def apply_wf_params(g, wf):
+    """把工作流預設參數寫進節點圖（v18）。缺項就不動模板值。
+    比例／畫質／放大解析度一律不碰——它們在 Director 的 timeline_data.resolution，
+    模板預設 aspect="auto"（依輸入圖自動決定），這正是我們要的行為。"""
     wf = wf if isinstance(wf, dict) else {}
     for nid, node in g.items():
         ct = node.get("class_type")
@@ -1107,34 +1091,21 @@ def apply_wf_params(g, wf, aspect):
                             ins[k] = v
                     except (TypeError, ValueError):
                         pass
-        if ct == "DaSiWa_EnhancedVideoCombine" and wf.get("fps"):
-            try:
-                v = float(wf["fps"])
-                if 1 <= v <= 120:
-                    fr = ins.get("frame_rate")
-                    if isinstance(fr, list) and len(fr) == 2 and str(fr[0]) in g and "value" in g[str(fr[0])].get("inputs", {}):
-                        g[str(fr[0])]["inputs"]["value"] = v      # PrimitiveFloat「FPS」
-                    else:
-                        ins["frame_rate"] = v
-            except (TypeError, ValueError):
-                pass
-        if ct == "DaSiWa_ResolutionScaleCalculator":
-            if wf.get("resolution_preset") in RES_PRESETS:
-                ins["resolution_preset"] = wf["resolution_preset"]
-            if isinstance(aspect, dict) and aspect.get("preset"):
-                ins["scale_from_image"] = False
-                ins["swap_aspect_when_not_image"] = bool(aspect.get("swap"))
-                if aspect["preset"] == "CUSTOM":
-                    ins["aspect_preset_when_not_image"] = "CUSTOM"
-                    try:
-                        aw, ah = int(aspect.get("w") or 0), int(aspect.get("h") or 0)
-                        if 1 <= aw <= 8192 and 1 <= ah <= 8192:
-                            ins["custom_aspect_width"], ins["custom_aspect_height"] = aw, ah
-                    except (TypeError, ValueError):
-                        pass
-                elif aspect["preset"] in [a[0] for a in ASPECTS]:
-                    ins["aspect_preset_when_not_image"] = aspect["preset"]
-
+        # v18：frame_rate 已移到 Director 上（模板裡預設是空字串，送單前必須給實數）
+        if ct == "MiniMaxH3Director":
+            fr = ins.get("frame_rate")
+            v = None
+            if wf.get("fps"):
+                try:
+                    fv = float(wf["fps"])
+                    if 1 <= fv <= 120:
+                        v = fv
+                except (TypeError, ValueError):
+                    v = None
+            if v is None and not isinstance(fr, (int, float)):
+                v = 24.0                      # 模板留空 -> 用節點預設值，否則 ComfyUI 會擋下
+            if v is not None:
+                ins["frame_rate"] = v
 
 MODE_TO_DIRECTOR = {"t2va": "T2VA", "i2va": "I2VA", "fl2va": "FL2VA", "l2va": "L2VA", "ref2va": "REF2VA"}
 
@@ -1177,13 +1148,14 @@ def split_ref_fields(c):
     return out if len(found) >= 4 else None
 
 
-def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspect=None, image_blob=None,
+def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, image_blob=None,
                 mode=None, extra_names=None, full_prompt=None):
     """載模板，換圖與欄位（＋影片秒數），其餘照舊；種子隨機化避免重複送出被去重。
     extra_data（UI 工作流）同步替換相同欄位——save_metadata 嵌進影片的是它。
     mode/extra_names/full_prompt：四模式支援 —— 設 Director 的 mode、重建 timeline 的圖片清單
     （FL2VA 兩張 slot 0/1、REF2VA 最多 9 張依序、L2VA 單張由 mode 決定當末幀），
-    並把網頁生成的完整 prompt 塞進 external_prompt（Director 以它為最終 prompt，繞過欄位重組）。"""
+    並把網頁生成的完整 prompt 塞進 external_prompt_overwrite（v18 的名稱；Director 以它為最終
+    prompt，優先於 builder_state 的重組）。"""
     import random
     with open(COMFY_TEMPLATE, encoding="utf-8") as f:
         tpl = json.load(f)
@@ -1198,6 +1170,15 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
             director, director_id = node, nid
     if director is None:
         raise ValueError("模板裡沒有 MiniMaxH3Director 節點")
+    # 只支援 v18：v18 的 Director 有 frame_rate / ref_image_size，舊版沒有；
+    # 舊版另有 DaSiWa_ResolutionScaleCalculator。用這兩點辨識並明確擋下。
+    _dins = director.get("inputs", {})
+    if "frame_rate" not in _dins or "ref_image_size" not in _dins:
+        raise ValueError("這個工作流不是 v18（Director 缺少 frame_rate / ref_image_size）。"
+                         "本程式只支援 MiniMax H3 v18 工作流，請改用 v18 模板。")
+    if any(n.get("class_type") == "DaSiWa_ResolutionScaleCalculator" for n in g.values()):
+        raise ValueError("這個工作流是 v18 之前的舊版（含 DaSiWa_ResolutionScaleCalculator）。"
+                         "本程式只支援 v18 工作流，請改用 v18 模板。")
 
     # REF2VA：Director 的 builder_state 用專屬 ref 欄位（subject_definitions/summary/
     # retention_analysis/detailed_description...），不是基礎三欄——塞錯欄位的話，
@@ -1207,6 +1188,12 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
         ref_secs = split_ref_fields(full_prompt)
 
     def patch_bs(bs):
+        # v18：builder_state 走 prompt_mode="simple" 時，Director 只讀 simple_prompt，
+        # 底下那些結構化欄位一概不看。送單當下我們用 external_prompt_overwrite 決勝負，
+        # 但這裡同步寫入 simple_prompt，影片拖回 ComfyUI 直接重跑才會得到同一份 prompt。
+        if full_prompt and str(full_prompt).strip():
+            bs["prompt_mode"] = "simple"
+            bs["simple_prompt"] = str(full_prompt)
         if ref_secs:
             bs["imd"] = ""
             r = bs.get("ref") if isinstance(bs.get("ref"), dict) else {}
@@ -1242,8 +1229,10 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
     if dmode:
         ins["mode"] = dmode
     if full_prompt and str(full_prompt).strip():
-        # Director：external_prompt 為字串時直接作為最終 prompt（見節點原始碼 resolved 邏輯）
-        ins["external_prompt"] = str(full_prompt)
+        # v18：欄位改名為 external_prompt_overwrite，且優先於 build_prompt(builder_state)：
+        #   if external_prompt_overwrite.strip(): resolved = external_prompt_overwrite
+        # 舊名 external_prompt 在 v18 已不存在，寫進去會被靜默忽略（prompt 等於沒送到）。
+        ins["external_prompt_overwrite"] = str(full_prompt)
     old_bs_str = ins.get("builder_state") or "{}"
     old_tl_str = ins.get("timeline_data") or "{}"
     bs = patch_bs(json.loads(old_bs_str))
@@ -1281,13 +1270,8 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
     if not done:
         raise ValueError("模板的 timeline 裡沒有圖片項目")
 
-    # 比例：沒指定就依上傳圖片解析度自動匹配最接近的直式預設（含橫置判斷）
-    if not (isinstance(aspect, dict) and aspect.get("preset")) and image_blob:
-        w, h = _img_dims(image_blob)
-        if w and h:
-            name, aw, ah, swap = nearest_aspect(w, h)
-            aspect = {"preset": name, "w": aw, "h": ah, "swap": swap}
-    apply_wf_params(g, wf, aspect)
+    # 比例完全交給 v18：timeline_data.resolution.aspect 預設 "auto"，Director 會依輸入圖決定。
+    apply_wf_params(g, wf)
 
     # 影片秒數：網頁寫 prompt 時用的時長要跟 Director 跑的一致（時間戳才不會超出）
     old_dur = ins.get("duration")
@@ -1329,25 +1313,6 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, aspe
                 if full_prompt and str(full_prompt).strip() and len(wv) >= 2 and isinstance(wv[1], str):
                     wv[1] = str(full_prompt)
 
-    # 比例/解析度節點的 widget 同步：apply_wf_params 只改 API 圖，內嵌 UI 工作流（含 subgraph
-    # 定義）不跟著改的話，影片拖回 ComfyUI 會顯示模板原比例，看起來像比例設定沒生效
-    def _sync_rsc(nodes):
-        for n in nodes or []:
-            if n.get("type") != "DaSiWa_ResolutionScaleCalculator":
-                continue
-            api = None
-            for nid2, node2 in g.items():
-                if node2.get("class_type") == "DaSiWa_ResolutionScaleCalculator" and \
-                   str(nid2).split(":")[-1] == str(n.get("id")):
-                    api = node2["inputs"]
-                    break
-            wv2 = n.get("widgets_values")
-            if api and isinstance(wv2, list) and len(wv2) == len(api) and \
-               all(isinstance(v, (str, int, float, bool)) for v in api.values()):
-                n["widgets_values"] = list(api.values())
-    _sync_rsc(wf.get("nodes"))
-    for _sg in ((wf.get("definitions") or {}).get("subgraphs") or []):
-        _sync_rsc(_sg.get("nodes"))
     extra = dict(extra)
     extra["client_id"] = "h3-webui"
     return g, extra
@@ -1525,7 +1490,7 @@ class H(SimpleHTTPRequestHandler):
             return self.send_json({"count": len(items), "items": items})
 
         if p == "/api/comfy/params":
-            out = {"presets": RES_PRESETS, "aspects": [a[0] for a in ASPECTS] + ["CUSTOM"],
+            out = {"presets": RES_PRESETS,
                    "fps": None, "resolution_preset": None, "steps": None, "duration": None,
                    "shift_video": None, "shift_audio": None, "has_template": os.path.exists(COMFY_TEMPLATE)}
             try:
@@ -1544,22 +1509,16 @@ class H(SimpleHTTPRequestHandler):
                     if ct == "MiniMaxH3SigmaShift" and out["shift_video"] is None:
                         out["shift_video"] = ins.get("shift_video")
                         out["shift_audio"] = ins.get("shift_audio")
-                    if ct == "DaSiWa_ResolutionScaleCalculator" and out["resolution_preset"] is None:
-                        out["resolution_preset"] = ins.get("resolution_preset")
-                    if ct == "DaSiWa_EnhancedVideoCombine" and out["fps"] is None:
-                        fr = ins.get("frame_rate")
-                        if isinstance(fr, list) and len(fr) == 2 and str(fr[0]) in g:
-                            out["fps"] = g[str(fr[0])].get("inputs", {}).get("value")
-                        elif isinstance(fr, (int, float)):
-                            out["fps"] = fr
-            except Exception:
-                pass
-            try:
-                info = comfy_api("/object_info/DaSiWa_ResolutionScaleCalculator", timeout=6)
-                node = list(info.values())[0]
-                req = node.get("input", {}).get("required", {})
-                if isinstance(req.get("resolution_preset", [None])[0], list):
-                    out["presets"] = req["resolution_preset"][0]
+                    # v18：fps 在 Director 上；畫質在 timeline_data.resolution.resolution
+                    if ct == "MiniMaxH3Director":
+                        if out["fps"] is None and isinstance(ins.get("frame_rate"), (int, float)):
+                            out["fps"] = ins["frame_rate"]
+                        if out["resolution_preset"] is None:
+                            try:
+                                res = (json.loads(ins.get("timeline_data") or "{}") or {}).get("resolution") or {}
+                                out["resolution_preset"] = res.get("resolution")
+                            except Exception:
+                                pass
             except Exception:
                 pass
             return self.send_json(out)
@@ -2379,7 +2338,7 @@ class H(SimpleHTTPRequestHandler):
                                            str(body.get("soundscape") or flds["soundscape"]),
                                            str(body.get("music") or flds["music"]),
                                            up_name, dur,
-                                           body.get("wf"), body.get("aspect"), blob,
+                                           body.get("wf"), blob,
                                            mode=run_mode, extra_names=extra_names, full_prompt=full_prompt)
                 payload = {"prompt": graph, "client_id": "h3-webui"}
                 if extra:
@@ -2542,8 +2501,6 @@ class H(SimpleHTTPRequestHandler):
             # T2VA：原始輸入劇情與 AI 潤飾後劇本
             "story_raw": str(body.get("story_raw", "") or "")[:8000],
             "story_polished": str(body.get("story_polished", "") or "")[:12000],
-            # 輸出比例（重送 ComfyUI 時沿用；舊紀錄無此欄＝照舊依圖推斷/模板預設）
-            "ar": (body.get("ar") if isinstance(body.get("ar"), dict) else None),
             # ---- generation context, so a record can be re-run exactly as it was made ----
             "mode": (str(body.get("mode", "i2va")) if str(body.get("mode", "i2va")) in MODES else "i2va"),
             "prompt_id": str(body.get("prompt_id", "") or "")[:64],

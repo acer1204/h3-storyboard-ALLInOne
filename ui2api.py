@@ -137,6 +137,12 @@ class _Flattener:
         for e in (inst.get("inputs") or []):
             by_name[e.get("name")] = e
         wvals = list(inst.get("widgets_values") or [])
+        # ComfyUI 新版在子圖實例上另存 widgets_values_named（欄名 -> 值）。有它就依名稱對應，
+        # 免去「哪些欄位會佔 widgets_values 一格」的猜測——v18 的子圖把 noise_seed 外露成
+        # 插槽而不佔位，純位置式對應會從該欄之後整串偏移一格，導致 shift_audio 變 False、
+        # VAE 缺值、CLIP 拿到 VAE 檔名，送進 ComfyUI 直接驗證失敗。
+        wnamed = inst.get("widgets_values_named")
+        wnamed = wnamed if isinstance(wnamed, dict) else None
         wi = 0
         for k, dinp in enumerate(sg.get("inputs") or []):
             name, typ = dinp.get("name"), str(dinp.get("type", ""))
@@ -146,8 +152,12 @@ class _Flattener:
                 src = outer_ctx["lk"].get(e["link"])
                 if src is not None:
                     ext_in[k] = _Ref(outer_ctx, src[0], src[1])
-                if is_widget:
-                    wi += 1     # 已連線的 widget 輸入仍佔一個值欄
+                if is_widget and wnamed is None:
+                    wi += 1     # 已連線的 widget 輸入仍佔一個值欄（位置式後備）
+                continue
+            if wnamed is not None:
+                if name in wnamed:
+                    ext_in[k] = wnamed[name]
                 continue
             if is_widget and wi < len(wvals):
                 ext_in[k] = wvals[wi]

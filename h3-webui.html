@@ -155,17 +155,6 @@ button:disabled{opacity:.35;cursor:not-allowed}
 .note-wrap{margin-top:10px}
 .note-wrap label{margin-bottom:5px}
 .card .note{resize:none;overflow:hidden;min-height:4.2em}
-.arwrap{display:flex;flex-direction:column;gap:6px}
-.arrow{display:flex;gap:6px;align-items:stretch}
-.arrow select{flex:1;min-width:0;max-width:none}
-.arrow input[type=number]{flex:1;min-width:0;width:auto;text-align:center}
-.arrow .arsep{flex:none;align-self:center;color:var(--faint)}
-.arswap{flex:none;display:flex;align-items:center;gap:5px;font-size:12.5px;padding:0 11px;
-  cursor:pointer;border:1px solid var(--line);border-radius:8px;background:var(--bg);
-  color:var(--mut);white-space:nowrap}
-.arswap:hover{border-color:var(--acc);color:var(--acc)}
-.arswap .ph-ic{display:inline-block;font-size:14px;transition:transform .15s}
-.arswap.land .ph-ic{transform:rotate(90deg)}
 textarea.note{min-height:74px;font-family:inherit;font-size:13px;line-height:1.6;resize:vertical;
   padding:8px 10px}
 .card.hide{display:none}
@@ -441,15 +430,6 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
         placeholder="輸入你想要的劇情。可像 harness 一樣：/action-knowledge /minimalist-product-ad 街舞產品廣告…（/none 清空附加 skill）"></textarea></div>
     <div class="row" style="margin:8px 0 0;align-items:center;gap:10px">
       <button class="mini" id="t2vaAdd">✚ 加入生成清單</button>
-      <label class="small" style="display:flex;align-items:center;gap:6px">輸出比例
-        <select id="t2vaAR">
-          <option value="1:1">1:1</option><option value="2:3">2:3</option><option value="3:4">3:4</option>
-          <option value="5:8">5:8</option><option value="9:16" selected>9:16</option><option value="9:21">9:21</option>
-        </select></label>
-      <label class="small" style="display:flex;align-items:center;gap:6px">方向
-        <select id="t2vaSwap">
-          <option value="0" selected>直式</option><option value="1">橫式</option>
-        </select></label>
       <span class="hint" id="t2vaModeHint"></span>
     </div>
   </div>
@@ -1602,12 +1582,6 @@ drop.ondragleave=()=>drop.classList.remove("hot");
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove("hot");add(e.dataTransfer.files)};
 $("#files").onchange=e=>add(e.target.files);
 
-function arFromPreview(it){
-  if (!it.preview || it.ar) return;
-  const im = new Image();
-  im.onload = () => { if (!it.ar){ it.ar = {...nearestAR(im.naturalWidth, im.naturalHeight)}; render(); } };
-  im.src = it.preview;
-}
 function add(fl){
   const files=[...fl].filter(f=>f.type.startsWith("image/"));
   files.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
@@ -1764,7 +1738,6 @@ function composeSlots(){
   items.push(it);
   SLOTS_BY[curMode()] = [];
   renderSlots();
-  items.forEach(arFromPreview);
   render(); $("#run").disabled = !modeItems().length;
   $("#prog").textContent = `${modeItems().length} 筆待處理`;
   updateNavCounts();
@@ -1983,7 +1956,6 @@ async function runOne(it){
   it.thumb = p.thumb; it.full = p.b64; it.w = p.w; it.h = p.h; it.orig = p.orig || null;
   it.imgs = encs.map(e => e.b64);
   it.more = encs.slice(1).map(e => e.b64);   // 額外圖片（尾幀/參考圖），存歷史用
-  if (!it.ar || !it.arTouched) it.ar = {...nearestAR(p.w, p.h)};
   (it.previews || []).forEach(u => { try{ URL.revokeObjectURL(u); }catch(e){} });
   it.previews = null; it.preview = null;
   await gpuPrepare("llama", t => { it.state2 = t; render(); });
@@ -2100,14 +2072,11 @@ $("#t2vaAdd").onclick = () => {
     $("#t2vaModeHint").textContent = `Skill 組合：h3-prompt-writing${ids.length ? " + " + ids.join(" + ") : "（無附加）"}`;
     if (!txt) return;                       // 只設定組合、沒帶劇情就不加入清單
   }
-  const arv = $("#t2vaAR").value;
-  const a = AR_LIST.find(x => x[0] === arv) || ["9:16", 9, 16];
   items.push({mode: "t2va", rawStory: txt, polished: "", t2vaTab: 0,
               skills: activeSkillIds(),        // 快照：這筆生成時用加入清單當下的 skill 組合
               name: txt.replace(/\s+/g, " ").slice(0, 28) + (txt.length > 28 ? "…" : ""),
               state: "pending", files: [], previews: [],
-              ar: {preset: arv, w: a[1], h: a[2], swap: $("#t2vaSwap").value === "1"},
-              arTouched: true, arHdr: true});
+              });
   $("#t2vaInput").value = "";
   $("#t2vaModeHint").textContent = "";
   render(); $("#run").disabled = !modeItems().length;
@@ -2115,27 +2084,6 @@ $("#t2vaAdd").onclick = () => {
   updateNavCounts();
 };
 
-/* T2VA 比例/方向：記憶選擇（重整不重設），且變更時同步套用到清單中
-   尚未生成、且沒在卡片上個別改過比例的 T2VA 項目 */
-const T2AR_KEY = "h3.t2va.ar.v1";
-{
-  try{
-    const s = JSON.parse(store.get(T2AR_KEY) || "null");
-    if (s && s.ar && AR_LIST.some(x => x[0] === s.ar)) $("#t2vaAR").value = s.ar;
-    if (s && (s.swap === "0" || s.swap === "1")) $("#t2vaSwap").value = s.swap;
-  }catch(e){}
-  const applyHdrAR = () => {
-    store.set(T2AR_KEY, JSON.stringify({ar: $("#t2vaAR").value, swap: $("#t2vaSwap").value}));
-    const a = AR_LIST.find(x => x[0] === $("#t2vaAR").value);
-    if (!a) return;
-    for (const it of items)
-      if (it.mode === "t2va" && it.state === "pending" && it.arHdr)
-        it.ar = {preset: a[0], w: a[1], h: a[2], swap: $("#t2vaSwap").value === "1"};
-    render();
-  };
-  $("#t2vaAR").addEventListener("change", applyHdrAR);
-  $("#t2vaSwap").addEventListener("change", applyHdrAR);
-}
 
 function t2vaNote(it){
   const D = effDur();
@@ -2230,7 +2178,7 @@ window.t2DirectSend = async k => {
     try{ await record(w); it.rec_id = w.rec_id; }catch(e){}
   }
   const stat = document.querySelector(`[data-cstat="${k}"]`);
-  const payload = {dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
+  const payload = {dur: durStr(), wf: wfOverrides(),
                    mode: "t2va", content: it.polished, ...comfyFields(it.polished, "t2va")};
   if (!rvEnabled("t2va")) return comfySend(payload, stat, null);
   return comfyRunReviewed(payload, {mode: "t2va", content: it.polished, inputs: [], recId: it.rec_id,
@@ -2447,23 +2395,6 @@ function render(){
                  `<img src="${u}" title="圖 ${i+1}" style="aspect-ratio:1;object-fit:cover">`).join("")}</div>`)
           : '<p class="ph">無預覽</p>'}
         <div style="margin-top:6px">${modeTag}${thumbs.length>1?`<span class="hint" style="margin-left:6px">${thumbs.length} 張</span>`:""}</div>
-        <div class="note-wrap"><label>輸出比例（寬:高，預設依圖自動匹配）</label>
-          <div class="arwrap">
-            <div class="arrow">
-              <select onchange="setAR(${k}, this.value)">
-                ${["1:1","2:3","3:4","5:8","9:16","9:21"].map(r => `<option value="${r}" ${(it.ar&&it.ar.preset)===r?"selected":""}>${r}</option>`).join("")}
-                <option value="CUSTOM" ${(it.ar&&it.ar.preset)==="CUSTOM"?"selected":""}>自訂</option>
-              </select>
-              <button class="arswap ${it.ar&&it.ar.swap?"land":""}" onclick="setARSwap(${k})" title="直式／橫式切換">
-                <span class="ph-ic">▯</span>${it.ar&&it.ar.swap?"橫式":"直式"}</button>
-            </div>
-            ${(it.ar&&it.ar.preset)==="CUSTOM" ? `
-            <div class="arrow">
-              <input type="number" min="1" max="8192" value="${it.ar.w}" onchange="setARWH(${k}, this.value, null)" title="比例寬">
-              <span class="arsep">:</span>
-              <input type="number" min="1" max="8192" value="${it.ar.h}" onchange="setARWH(${k}, null, this.value)" title="比例高">
-            </div>` : ""}
-          </div></div>
       </div>
       <div>
         ${isT2 ? `
@@ -2545,44 +2476,6 @@ window.removeItem = k => {
 };
 window.setNote = (k, v) => { if (items[k]) items[k].note = v; };
 window.agrow = t => { t.style.height = "auto"; t.style.height = (t.scrollHeight + 2) + "px"; };
-/* ---- 輸出比例（直式 寬:高 ＋ 橫式切換）；預設依圖片解析度自動匹配 ---- */
-const AR_LIST = [["1:1",1,1],["2:3",2,3],["3:4",3,4],["5:8",5,8],["9:16",9,16],["9:21",9,21]];
-function nearestAR(w, h){
-  if (!w || !h) return {preset:"2:3", w:2, h:3, swap:false};
-  const r = w / h; let best = null;
-  for (const [name, aw, ah] of AR_LIST) for (const swap of [false, true]){
-    const cand = swap ? ah/aw : aw/ah;
-    const d = Math.abs(Math.log(r) - Math.log(cand));
-    if (!best || d < best.d) best = {d, preset:name, w:aw, h:ah, swap};
-  }
-  return {preset:best.preset, w:best.w, h:best.h, swap:best.swap};
-}
-window.setAR = (k, v) => { const it = items[k]; if (!it) return;
-  if (v === "CUSTOM"){ it.ar = {...(it.ar||{w:2,h:3,swap:false}), preset:"CUSTOM"}; }
-  else { const a = AR_LIST.find(x => x[0] === v); it.ar = {preset:v, w:a[1], h:a[2], swap:(it.ar||{}).swap||false}; }
-  it.arTouched = true;   // 手動選擇後，生成時不再用圖片比例覆蓋
-  it.arHdr = false;      // 卡片上個別改過 → T2VA 上方選單變更不再套用到此項目
-  render(); };
-window.setARWH = (k, w, h) => { const it = items[k]; if (!it) return;
-  it.ar = {...(it.ar||{preset:"CUSTOM",w:2,h:3,swap:false})};
-  if (w != null) it.ar.w = Math.max(1, parseInt(w)||1);
-  if (h != null) it.ar.h = Math.max(1, parseInt(h)||1);
-  const hit = AR_LIST.find(x => x[1] === it.ar.w && x[2] === it.ar.h);
-  it.ar.preset = hit ? hit[0] : "CUSTOM";
-  it.arTouched = true;
-  it.arHdr = false;
-  render(); };
-window.setARSwap = k => { const it = items[k]; if (!it) return;
-  it.ar = {...(it.ar||{preset:"2:3",w:2,h:3,swap:false}), swap:!(it.ar||{}).swap};
-  it.arTouched = true;
-  it.arHdr = false;
-  render(); };
-function arPayload(it){
-  if (!it || !it.ar) return null;
-  const name = it.ar.preset === "CUSTOM" ? "CUSTOM"
-    : ({"1:1":"1:1 - Square","2:3":"2:3 - Classic","3:4":"3:4 - Photo","5:8":"5:8 - Tall","9:16":"9:16 - Social","9:21":"9:21 - Cinema"})[it.ar.preset];
-  return {preset:name, w:it.ar.w, h:it.ar.h, swap:!!it.ar.swap};
-}
 /* ---- 工作流預設參數（ComfyUI 設定頁） ---- */
 /* 影片時長跟隨目前模板（Director 的 duration）；劇情長度/時間軸與送單都用它 */
 let WF_DUR = 20;
@@ -2699,7 +2592,6 @@ async function record(it){
         content:it.content,raw:it.raw,zh:it.zh||"",note:it.note||"",thumb:it.thumb,full:it.full||"",
         orig:it.orig||"", more:it.more||[],
         story_raw:it.rawStory||"", story_polished:it.polished||"",
-        ar: it.ar || null,
         attempts:it.attempts||1,shots:it.shots||1,
         ...(() => { const c = it.ctx || genContext(); return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
                      lora: c.lora ? {...c.lora, report:(it.lora||{}).report||null, issues:(it.lora||{}).issues||[]} : null}; })()})});
@@ -2800,7 +2692,7 @@ $("#himport") && ($("#himport").onclick = async () => {
         items.push({mode: "t2va", rawStory: raw, polished: rec.story_polished || "",
                     t2vaTab: rec.story_polished ? 1 : 0,
                     name: raw.replace(/\s+/g, " ").slice(0, 28) + (raw.length > 28 ? "…" : ""),
-                    state: "pending", files: [], previews: [], arTouched: false});
+                    state: "pending", files: [], previews: []});
         n++;
         continue;
       }
@@ -2824,7 +2716,6 @@ $("#himport") && ($("#himport").onclick = async () => {
       n++;
     }catch(e){}
   }
-  items.forEach(arFromPreview);
   setMode(firstMode || "i2va");   // 回到匯入紀錄自己的模式頁
   render();
   $("#run").disabled = !modeItems().length;
@@ -3216,7 +3107,7 @@ window.comfyFromRec = (id, btnEl) => {
   fetch(API + "/" + id).then(async rec0 => {
     const rec = await rec0.json();
     const mode = hMode(rec);
-    const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(), aspect: arPayload(rec),
+    const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(),
                      mode, content: rec.content, ...comfyFields(rec.content, mode)};
     if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
     // 審查啟用：抓紀錄的圖片作為審查輸入（修劇情不支援歷史紀錄路徑，revise 會退為換 seed）
@@ -3234,7 +3125,7 @@ window.comfyFromItem = (k, btnEl) => {
   const stat = document.querySelector(`[data-cstat="${k}"]`);
   const mode = it.mode || curMode();
   const isT2 = mode === "t2va";
-  const payload = {dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
+  const payload = {dur: durStr(), wf: wfOverrides(),
                    mode, content: it.content, ...comfyFields(it.content, mode)};
   if (!isT2){ payload.image = it.orig || it.full; payload.more = it.more || []; }
   if (!rvEnabled(mode)) return comfySend(payload, stat, btnEl);
@@ -4469,7 +4360,6 @@ const EN = {
 "整體":"Overall","運鏡分佈":"Camera-move mix",
 "不同的圖本該產生不同的運鏡。若某一種超過 50%，代表模型在套習慣而不是看畫面。":"Different images should yield different camera moves. If one exceeds 50%, the model is following habit instead of the image.",
 "原始輸出":"Raw output","重跑這張":"Re-run this","複製 prompt":"Copy prompt","🎬 送 ComfyUI":"🎬 Send to ComfyUI","無預覽":"No preview",
-"輸出比例（寬:高，預設依圖自動匹配）":"Aspect ratio (W:H, auto-matched to the image by default)","自訂":"Custom",
 "劇情提示（選填，中/英/日皆可）":"Story hint (optional; any language)",
 "（資料夾內沒有 .json）":"(no .json in the folder)","（讀取失敗）":"(failed to read)","還沒有紀錄":"No records yet","僅 1024px":"1024px only",
 "劇情提示（選填，重跑時會一起送給模型）":"Story hint (optional; sent along on rerun)",
@@ -4490,7 +4380,7 @@ const EN = {
 "設定已保存":"Settings saved","已保存":"Saved","已保存 ✔":"Saved ✔","已還原預設":"Reset to default","保存中…":"Saving…","釋放中…":"Freeing…",
 "待生成劇情":"story pending","劇情就緒":"story ready","劇情有錯誤":"story has errors","🎬 影片生成中…":"🎬 Rendering…","⏸ 等待指示中…":"⏸ Waiting for you…","🔧 調整中":"🔧 Adjusting","✅ 已確認":"✅ Confirmed",
 "開啟原圖":"Open original","送 ComfyUI 用全解析度原圖":"Full-resolution original is sent to ComfyUI","這筆只有 1024px 工作副本，送 ComfyUI 會用它":"Only a 1024px working copy exists; it will be sent",
-"以檔名篩選":"filter by filename","移除這張":"Remove","直式／橫式切換":"Portrait / landscape","比例寬":"ratio W","比例高":"ratio H",
+"以檔名篩選":"filter by filename","移除這張":"Remove",
 "留空＝自由創作。輸入提示＝以此為劇情核心，例如：她在雪地裡撿到一隻迷路的小企鵝":"Empty = free creation. A hint becomes the story core, e.g. she finds a lost penguin in the snow",
 "留空＝自由創作":"empty = free creation","勾選後可批次生成 / 批次送 ComfyUI":"check to batch-generate / batch-send",
 "從清單移除這張（不影響已存的歷史紀錄）":"Remove from the list (saved history unaffected)","勾選後可匯入到上傳並處理":"check to import into processing",
@@ -4510,7 +4400,6 @@ const EN = {
 "輸入原始劇情 → AI 潤飾成分鏡劇本 → 生成 H3 Prompt（含翻譯）→ 送 ComfyUI。可輸入多筆加入清單批次處理；全自動/半自動在系統設定的 T2VA 區塊切換。":"Type a raw story → the model polishes it into a storyboard script → generates the H3 prompt (with translation) → sends to ComfyUI. Add multiple stories to the list for batching; switch full/semi-automatic in Settings under T2VA.",
 "📝 原始劇情（任何語言；一筆＝一支影片）":"📝 Raw story (any language; one entry = one video)",
 "輸入你想要的劇情，例如：一位女僕在聖誕夜的咖啡廳裡偷偷佈置驚喜派對，最後被店長發現，兩人一起舉杯。":"Type the story you want, e.g. a maid secretly sets up a surprise party in the cafe on Christmas Eve; the owner finds out and they toast together.",
-"輸出比例":"Aspect","方向":"Orientation","直式":"Portrait","橫式":"Landscape",
 "原始輸入劇情":"Raw story","AI 潤飾後劇本":"Polished script","✨ 潤飾劇情":"✨ Polish story","✨ 潤飾劇情（可選）":"✨ Polish story (optional)",
 "輸入原始劇情 → 生成（官方 skill 直出最終 Prompt）→ 送 ComfyUI。潤飾為可選（想先看/改中文分鏡劇本、或勾「直接使用」時才需要）。可輸入多筆批次處理；全自動/半自動在系統設定切換。":"Type a raw story → Generate (the official skill outputs the final prompt directly) → send to ComfyUI. Polishing is optional (only when you want to preview/edit a Chinese storyboard first, or for direct-use). Batch multiple entries; switch full/semi-automatic in Settings.",
 "📝 生成 Prompt":"📝 Generate prompt","📝 生成 Prompt（重新生成）":"📝 Generate prompt (again)",
