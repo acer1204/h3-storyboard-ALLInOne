@@ -155,17 +155,6 @@ button:disabled{opacity:.35;cursor:not-allowed}
 .note-wrap{margin-top:10px}
 .note-wrap label{margin-bottom:5px}
 .card .note{resize:none;overflow:hidden;min-height:4.2em}
-.arwrap{display:flex;flex-direction:column;gap:6px}
-.arrow{display:flex;gap:6px;align-items:stretch}
-.arrow select{flex:1;min-width:0;max-width:none}
-.arrow input[type=number]{flex:1;min-width:0;width:auto;text-align:center}
-.arrow .arsep{flex:none;align-self:center;color:var(--faint)}
-.arswap{flex:none;display:flex;align-items:center;gap:5px;font-size:12.5px;padding:0 11px;
-  cursor:pointer;border:1px solid var(--line);border-radius:8px;background:var(--bg);
-  color:var(--mut);white-space:nowrap}
-.arswap:hover{border-color:var(--acc);color:var(--acc)}
-.arswap .ph-ic{display:inline-block;font-size:14px;transition:transform .15s}
-.arswap.land .ph-ic{transform:rotate(90deg)}
 textarea.note{min-height:74px;font-family:inherit;font-size:13px;line-height:1.6;resize:vertical;
   padding:8px 10px}
 .card.hide{display:none}
@@ -233,6 +222,20 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   transition:.13s;position:relative;text-align:left}
 .hcell:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:var(--shadow)}
 .hcell img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:var(--code)}
+.qrow{display:grid;grid-template-columns:132px 1fr auto;gap:12px;align-items:start;
+  border:1px solid var(--line);border-radius:11px;padding:11px;margin-bottom:9px;background:var(--panel)}
+.qrow .qthumb{width:132px;border-radius:8px;overflow:hidden;background:var(--code);
+  aspect-ratio:3/4;display:grid;place-items:center;font-size:26px;color:var(--faint)}
+.qrow .qthumb img,.qrow .qthumb video{width:100%;height:100%;object-fit:cover;display:block}
+.qrow .qmeta{min-width:0}
+.qrow .qtitle{font-size:13.5px;font-weight:600;line-height:1.4;word-break:break-word}
+.qrow .qsub{font-size:11.5px;color:var(--mut);margin-top:3px;font-family:ui-monospace,Consolas,monospace}
+.qbar{height:5px;border-radius:3px;background:var(--code);overflow:hidden;margin-top:7px}
+.qbar i{display:block;height:100%;background:var(--acc);transition:width .3s}
+.qbadge{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--line)}
+.qb-queued{color:var(--mut)} .qb-running{color:var(--acc);border-color:var(--acc)}
+.qb-done{color:var(--ok);border-color:var(--ok)} .qb-error{color:var(--warn);border-color:var(--warn)}
+.qb-canceled{color:var(--faint)}
 .hcell .cap{padding:5px 8px;font-size:10.5px;color:var(--mut);line-height:1.4;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
 .hcell .cap.t{color:var(--faint);padding-top:0;padding-bottom:7px}
@@ -395,6 +398,10 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <button class="nav sub" data-view="mvhist"><span>· FL2VA Movie</span><span class="cnt" id="navMvHist"></span></button>
   </div>
 
+  <button class="nav" data-view="queue" data-tip="任務清單">
+    <svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+    <span>任務清單</span><span class="cnt" id="navQueue"></span></button>
+
   <button class="nav" data-view="media" data-tip="ComfyUI 媒體庫">
     <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20M6 4v4M10 4v4M14 4v4M18 4v4"/><path d="m10 12 5 3-5 3z"/></svg>
     <span>ComfyUI 媒體庫</span><span class="cnt" id="navMedia"></span></button>
@@ -441,15 +448,6 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
         placeholder="輸入你想要的劇情。可像 harness 一樣：/action-knowledge /minimalist-product-ad 街舞產品廣告…（/none 清空附加 skill）"></textarea></div>
     <div class="row" style="margin:8px 0 0;align-items:center;gap:10px">
       <button class="mini" id="t2vaAdd">✚ 加入生成清單</button>
-      <label class="small" style="display:flex;align-items:center;gap:6px">輸出比例
-        <select id="t2vaAR">
-          <option value="1:1">1:1</option><option value="2:3">2:3</option><option value="3:4">3:4</option>
-          <option value="5:8">5:8</option><option value="9:16" selected>9:16</option><option value="9:21">9:21</option>
-        </select></label>
-      <label class="small" style="display:flex;align-items:center;gap:6px">方向
-        <select id="t2vaSwap">
-          <option value="0" selected>直式</option><option value="1">橫式</option>
-        </select></label>
       <span class="hint" id="t2vaModeHint"></span>
     </div>
   </div>
@@ -571,6 +569,20 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <span class="selinfo" id="upcount"></span>
     </div>
     <div id="upgrid" class="upgrid"></div>
+  </div>
+</section>
+
+<section class="view" id="v-queue">
+  <h1 class="vh">任務清單</h1>
+  <p class="vs">所有送去 ComfyUI 的生成都排在這裡，由伺服器保管。重新整理、換瀏覽器或換電腦都看得到同一份，關掉網頁也會繼續跑。</p>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:12px">
+      <button class="ghost mini" id="qrefresh">重新整理</button>
+      <button class="ghost mini" id="qclear">清除已完成</button>
+      <span class="status" id="qcount" style="margin:0"></span>
+    </div>
+    <div id="qlist"></div>
   </div>
 </section>
 
@@ -841,6 +853,10 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 /* builtin system prompts live in sidecar .txt files (loaded in loadPrompts) */
 const $ = s => document.querySelector(s);
 const esc = t => (t||"").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+/* v18 的影片輸出是 .webm（container=Auto），不再是 .mp4。凡是「哪個輸出是成品影片」
+   一律用這個判斷，別再寫死副檔名。 */
+const VIDEO_RE = /\.(mp4|webm|mkv|mov)$/i;
+const isVideoOut = f => VIDEO_RE.test(String(f || ""));
 const onServer = location.protocol.startsWith("http");
 
 /* ================= 設定持久化 ================= */
@@ -848,19 +864,62 @@ const SKEY="h3.settings.v1", SPKEY="h3.sp.v1", VKEY="h3.view.v1";
 const FIELDS={tr:"#tr",
               retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
               wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur"};
+/* 共用設定：這些鍵存在伺服器端 settings.json，換瀏覽器或換電腦都是同一份。
+   其餘（介面語言、側欄收合、目前檢視）留在本機，那些本來就該因裝置而異。
+   讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），寫入同時更新本機與伺服器。 */
+const SHARED_KEYS = new Set(["h3.settings.v1","h3.review.v1","h3.reviewsys.v1","h3.sp.v1",
+                             "h3.t2vasp.v1","h3.skills.v1","h3.styleskill.v1","h3.prompt.all.v1"]);
+let SHARED = {}, sharedTimer = null;
+function pushShared(){
+  clearTimeout(sharedTimer);
+  sharedTimer = setTimeout(() => {
+    if (!onServer) return;
+    fetch("/api/settings", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({values: SHARED})}).catch(() => {});
+  }, 400);
+}
 const store={
-  get(k){try{return localStorage.getItem(k)}catch(e){return null}},
-  set(k,v){try{localStorage.setItem(k,v);return true}catch(e){return false}},
-  del(k){try{localStorage.removeItem(k)}catch(e){}}
+  get(k){
+    if (SHARED_KEYS.has(k) && Object.prototype.hasOwnProperty.call(SHARED, k)){
+      const v = SHARED[k];
+      return v === null || v === undefined ? null : String(v);
+    }
+    try{return localStorage.getItem(k)}catch(e){return null}
+  },
+  set(k,v){
+    if (SHARED_KEYS.has(k)){ SHARED[k] = String(v); pushShared(); }
+    try{localStorage.setItem(k,v);return true}catch(e){return false}
+  },
+  del(k){
+    if (SHARED_KEYS.has(k)){ delete SHARED[k]; pushShared(); }
+    try{localStorage.removeItem(k)}catch(e){}
+  }
 };
+/* 開頁時先取回共用設定；伺服器還沒有的鍵，用本機既有值補上去（一次性遷移）。 */
+async function loadShared(){
+  if (!onServer) return;
+  try{
+    const j = await (await fetch("/api/settings")).json();
+    SHARED = (j && j.values) || {};
+  }catch(e){ SHARED = {}; }
+  let migrated = false;
+  for (const k of SHARED_KEYS){
+    if (Object.prototype.hasOwnProperty.call(SHARED, k) && SHARED[k] != null) continue;
+    let local = null;
+    try{ local = localStorage.getItem(k); }catch(e){}
+    if (local != null){ SHARED[k] = local; migrated = true; }
+  }
+  if (migrated) pushShared();
+}
 /* 伺服器位址不在前端：llama/ComfyUI 位址一律存在伺服器端 config.json，由後端代理連線 */
-(() => {
+function applySettings(){
   const q = new URLSearchParams(location.search);
   for (const [k,el] of Object.entries(FIELDS)) if (q.has(k)) $(el).value = q.get(k);
   let saved={}; try{ saved = JSON.parse(store.get(SKEY)||"{}") }catch(e){}
   for (const [k,el] of Object.entries(FIELDS))
     if (saved[k] != null && saved[k] !== "") $(el).value = saved[k];
-})();
+}
+applySettings();   // 先用本機值畫面不空白；共用設定取回後 loadShared() 會再套一次
 function saveSettings(){
   const o={}; for (const [k,el] of Object.entries(FIELDS)) o[k]=$(el).value;
   const ok = store.set(SKEY, JSON.stringify(o));
@@ -1458,6 +1517,7 @@ function setView(v){
   if (v === "comfy") { loadWfParams(); if (typeof loadComfyCfg === "function") loadComfyCfg(); }
   if (v === "media") loadMedia();
   if (v === "mvhist" && typeof loadMvHist === "function") loadMvHist();
+  if (v === "queue" && typeof loadQueue === "function") loadQueue();
 }
 /* ---- collapsible sidebar ---- */
 const SIDEKEY = "h3.side.collapsed.v1";
@@ -1602,12 +1662,6 @@ drop.ondragleave=()=>drop.classList.remove("hot");
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove("hot");add(e.dataTransfer.files)};
 $("#files").onchange=e=>add(e.target.files);
 
-function arFromPreview(it){
-  if (!it.preview || it.ar) return;
-  const im = new Image();
-  im.onload = () => { if (!it.ar){ it.ar = {...nearestAR(im.naturalWidth, im.naturalHeight)}; render(); } };
-  im.src = it.preview;
-}
 function add(fl){
   const files=[...fl].filter(f=>f.type.startsWith("image/"));
   files.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
@@ -1661,11 +1715,13 @@ function setSlot(i, f){
   const S = slotsArr();
   if (S[i] && S[i].url){ try{ URL.revokeObjectURL(S[i].url); }catch(e){} }
   S[i] = f ? {file: f, url: URL.createObjectURL(f)} : null;
+  saveDraft();
 }
 function clearSlots(){
   const S = slotsArr();
   S.forEach(s => { if (s && s.url){ try{ URL.revokeObjectURL(s.url); }catch(e){} } });
   SLOTS_BY[curMode()] = [];
+  saveDraft();
 }
 
 /* ===== 拖曳重排：把 from 格的圖插到 to 格位置（保持其餘相對順序、自動壓實空格） ===== */
@@ -1761,10 +1817,11 @@ function composeSlots(){
   // objectURL 交棒給 item，格子清空但不 revoke
   it.previews = picked.map(x => x.s.url);
   it.preview = it.previews[0];
+  picked.forEach((x, n) => { if (x.s._hash) it.files[n]._hash = x.s._hash; });
   items.push(it);
   SLOTS_BY[curMode()] = [];
+  saveDraft();
   renderSlots();
-  items.forEach(arFromPreview);
   render(); $("#run").disabled = !modeItems().length;
   $("#prog").textContent = `${modeItems().length} 筆待處理`;
   updateNavCounts();
@@ -1811,7 +1868,16 @@ function encode(file){
       URL.revokeObjectURL(url);
       res({b64:full, thumb:t.toDataURL("image/jpeg",0.62), w:img.width, h:img.height, orig});
     };
-    img.onerror=rej; img.src=url;
+    img.onerror = () => {
+      // onerror 收到的是 Event，直接 rej(event) 會讓 e.message 變成 undefined，
+      // 卡片的錯誤框就顯示成一片空白（esc(undefined) === ""）。這裡改丟真正的 Error。
+      URL.revokeObjectURL(url);
+      const kb = Math.round((file.size || 0) / 1024);
+      rej(new Error(`圖片無法解碼：${file.name}（${file.type || "未知格式"}，${kb} KB）`
+        + "。瀏覽器打不開這個檔案——最常見的原因是 iPhone 的 HEIC/HEIF 檔只是改了副檔名，"
+        + "或檔案在傳輸中損毀。請先轉存成 JPEG／PNG 再上傳。"));
+    };
+    img.src = url;
   });
 }
 
@@ -1974,7 +2040,6 @@ async function runOne(it){
   it.thumb = p.thumb; it.full = p.b64; it.w = p.w; it.h = p.h; it.orig = p.orig || null;
   it.imgs = encs.map(e => e.b64);
   it.more = encs.slice(1).map(e => e.b64);   // 額外圖片（尾幀/參考圖），存歷史用
-  if (!it.ar || !it.arTouched) it.ar = {...nearestAR(p.w, p.h)};
   (it.previews || []).forEach(u => { try{ URL.revokeObjectURL(u); }catch(e){} });
   it.previews = null; it.preview = null;
   await gpuPrepare("llama", t => { it.state2 = t; render(); });
@@ -2091,14 +2156,11 @@ $("#t2vaAdd").onclick = () => {
     $("#t2vaModeHint").textContent = `Skill 組合：h3-prompt-writing${ids.length ? " + " + ids.join(" + ") : "（無附加）"}`;
     if (!txt) return;                       // 只設定組合、沒帶劇情就不加入清單
   }
-  const arv = $("#t2vaAR").value;
-  const a = AR_LIST.find(x => x[0] === arv) || ["9:16", 9, 16];
   items.push({mode: "t2va", rawStory: txt, polished: "", t2vaTab: 0,
               skills: activeSkillIds(),        // 快照：這筆生成時用加入清單當下的 skill 組合
               name: txt.replace(/\s+/g, " ").slice(0, 28) + (txt.length > 28 ? "…" : ""),
               state: "pending", files: [], previews: [],
-              ar: {preset: arv, w: a[1], h: a[2], swap: $("#t2vaSwap").value === "1"},
-              arTouched: true, arHdr: true});
+              });
   $("#t2vaInput").value = "";
   $("#t2vaModeHint").textContent = "";
   render(); $("#run").disabled = !modeItems().length;
@@ -2106,27 +2168,6 @@ $("#t2vaAdd").onclick = () => {
   updateNavCounts();
 };
 
-/* T2VA 比例/方向：記憶選擇（重整不重設），且變更時同步套用到清單中
-   尚未生成、且沒在卡片上個別改過比例的 T2VA 項目 */
-const T2AR_KEY = "h3.t2va.ar.v1";
-{
-  try{
-    const s = JSON.parse(store.get(T2AR_KEY) || "null");
-    if (s && s.ar && AR_LIST.some(x => x[0] === s.ar)) $("#t2vaAR").value = s.ar;
-    if (s && (s.swap === "0" || s.swap === "1")) $("#t2vaSwap").value = s.swap;
-  }catch(e){}
-  const applyHdrAR = () => {
-    store.set(T2AR_KEY, JSON.stringify({ar: $("#t2vaAR").value, swap: $("#t2vaSwap").value}));
-    const a = AR_LIST.find(x => x[0] === $("#t2vaAR").value);
-    if (!a) return;
-    for (const it of items)
-      if (it.mode === "t2va" && it.state === "pending" && it.arHdr)
-        it.ar = {preset: a[0], w: a[1], h: a[2], swap: $("#t2vaSwap").value === "1"};
-    render();
-  };
-  $("#t2vaAR").addEventListener("change", applyHdrAR);
-  $("#t2vaSwap").addEventListener("change", applyHdrAR);
-}
 
 function t2vaNote(it){
   const D = effDur();
@@ -2221,9 +2262,13 @@ window.t2DirectSend = async k => {
     try{ await record(w); it.rec_id = w.rec_id; }catch(e){}
   }
   const stat = document.querySelector(`[data-cstat="${k}"]`);
-  const payload = {dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
+  const payload = {dur: durStr(), wf: wfOverrides(),
                    mode: "t2va", content: it.polished, ...comfyFields(it.polished, "t2va")};
-  if (!rvEnabled("t2va")) return comfySend(payload, stat, null);
+  if (!rvEnabled("t2va")){
+    // 不需審查：交給伺服器佇列，網頁可以直接關掉
+    if (stat) stat.textContent = "已排入任務清單";
+    return qEnqueue(payload, {mode: "t2va", title: it.name || it.rawStory || "T2VA", rec_id: it.rec_id || ""});
+  }
   return comfyRunReviewed(payload, {mode: "t2va", content: it.polished, inputs: [], recId: it.rec_id,
     inputLabel: "無輸入圖（直接使用潤飾劇本）",
     reviseFn: async (instruction) => {
@@ -2438,23 +2483,6 @@ function render(){
                  `<img src="${u}" title="圖 ${i+1}" style="aspect-ratio:1;object-fit:cover">`).join("")}</div>`)
           : '<p class="ph">無預覽</p>'}
         <div style="margin-top:6px">${modeTag}${thumbs.length>1?`<span class="hint" style="margin-left:6px">${thumbs.length} 張</span>`:""}</div>
-        <div class="note-wrap"><label>輸出比例（寬:高，預設依圖自動匹配）</label>
-          <div class="arwrap">
-            <div class="arrow">
-              <select onchange="setAR(${k}, this.value)">
-                ${["1:1","2:3","3:4","5:8","9:16","9:21"].map(r => `<option value="${r}" ${(it.ar&&it.ar.preset)===r?"selected":""}>${r}</option>`).join("")}
-                <option value="CUSTOM" ${(it.ar&&it.ar.preset)==="CUSTOM"?"selected":""}>自訂</option>
-              </select>
-              <button class="arswap ${it.ar&&it.ar.swap?"land":""}" onclick="setARSwap(${k})" title="直式／橫式切換">
-                <span class="ph-ic">▯</span>${it.ar&&it.ar.swap?"橫式":"直式"}</button>
-            </div>
-            ${(it.ar&&it.ar.preset)==="CUSTOM" ? `
-            <div class="arrow">
-              <input type="number" min="1" max="8192" value="${it.ar.w}" onchange="setARWH(${k}, this.value, null)" title="比例寬">
-              <span class="arsep">:</span>
-              <input type="number" min="1" max="8192" value="${it.ar.h}" onchange="setARWH(${k}, null, this.value)" title="比例高">
-            </div>` : ""}
-          </div></div>
       </div>
       <div>
         ${isT2 ? `
@@ -2536,44 +2564,6 @@ window.removeItem = k => {
 };
 window.setNote = (k, v) => { if (items[k]) items[k].note = v; };
 window.agrow = t => { t.style.height = "auto"; t.style.height = (t.scrollHeight + 2) + "px"; };
-/* ---- 輸出比例（直式 寬:高 ＋ 橫式切換）；預設依圖片解析度自動匹配 ---- */
-const AR_LIST = [["1:1",1,1],["2:3",2,3],["3:4",3,4],["5:8",5,8],["9:16",9,16],["9:21",9,21]];
-function nearestAR(w, h){
-  if (!w || !h) return {preset:"2:3", w:2, h:3, swap:false};
-  const r = w / h; let best = null;
-  for (const [name, aw, ah] of AR_LIST) for (const swap of [false, true]){
-    const cand = swap ? ah/aw : aw/ah;
-    const d = Math.abs(Math.log(r) - Math.log(cand));
-    if (!best || d < best.d) best = {d, preset:name, w:aw, h:ah, swap};
-  }
-  return {preset:best.preset, w:best.w, h:best.h, swap:best.swap};
-}
-window.setAR = (k, v) => { const it = items[k]; if (!it) return;
-  if (v === "CUSTOM"){ it.ar = {...(it.ar||{w:2,h:3,swap:false}), preset:"CUSTOM"}; }
-  else { const a = AR_LIST.find(x => x[0] === v); it.ar = {preset:v, w:a[1], h:a[2], swap:(it.ar||{}).swap||false}; }
-  it.arTouched = true;   // 手動選擇後，生成時不再用圖片比例覆蓋
-  it.arHdr = false;      // 卡片上個別改過 → T2VA 上方選單變更不再套用到此項目
-  render(); };
-window.setARWH = (k, w, h) => { const it = items[k]; if (!it) return;
-  it.ar = {...(it.ar||{preset:"CUSTOM",w:2,h:3,swap:false})};
-  if (w != null) it.ar.w = Math.max(1, parseInt(w)||1);
-  if (h != null) it.ar.h = Math.max(1, parseInt(h)||1);
-  const hit = AR_LIST.find(x => x[1] === it.ar.w && x[2] === it.ar.h);
-  it.ar.preset = hit ? hit[0] : "CUSTOM";
-  it.arTouched = true;
-  it.arHdr = false;
-  render(); };
-window.setARSwap = k => { const it = items[k]; if (!it) return;
-  it.ar = {...(it.ar||{preset:"2:3",w:2,h:3,swap:false}), swap:!(it.ar||{}).swap};
-  it.arTouched = true;
-  it.arHdr = false;
-  render(); };
-function arPayload(it){
-  if (!it || !it.ar) return null;
-  const name = it.ar.preset === "CUSTOM" ? "CUSTOM"
-    : ({"1:1":"1:1 - Square","2:3":"2:3 - Classic","3:4":"3:4 - Photo","5:8":"5:8 - Tall","9:16":"9:16 - Social","9:21":"9:21 - Cinema"})[it.ar.preset];
-  return {preset:name, w:it.ar.w, h:it.ar.h, swap:!!it.ar.swap};
-}
 /* ---- 工作流預設參數（ComfyUI 設定頁） ---- */
 /* 影片時長跟隨目前模板（Director 的 duration）；劇情長度/時間軸與送單都用它 */
 let WF_DUR = 20;
@@ -2673,7 +2663,8 @@ function urlToDataURL(url){
   }).then(b => new Promise((res, rej) => {
     const fr = new FileReader();
     fr.onload = () => res(fr.result);
-    fr.onerror = rej;
+    // 同上：ProgressEvent 沒有 message，改丟帶訊息的 Error 才看得出原因
+    fr.onerror = () => rej(new Error("讀取檔案失敗：" + (fr.error && fr.error.message || "FileReader 錯誤")));
     fr.readAsDataURL(b);
   }));
 }
@@ -2689,7 +2680,6 @@ async function record(it){
         content:it.content,raw:it.raw,zh:it.zh||"",note:it.note||"",thumb:it.thumb,full:it.full||"",
         orig:it.orig||"", more:it.more||[],
         story_raw:it.rawStory||"", story_polished:it.polished||"",
-        ar: it.ar || null,
         attempts:it.attempts||1,shots:it.shots||1,
         ...(() => { const c = it.ctx || genContext(); return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
                      lora: c.lora ? {...c.lora, report:(it.lora||{}).report||null, issues:(it.lora||{}).issues||[]} : null}; })()})});
@@ -2790,7 +2780,7 @@ $("#himport") && ($("#himport").onclick = async () => {
         items.push({mode: "t2va", rawStory: raw, polished: rec.story_polished || "",
                     t2vaTab: rec.story_polished ? 1 : 0,
                     name: raw.replace(/\s+/g, " ").slice(0, 28) + (raw.length > 28 ? "…" : ""),
-                    state: "pending", files: [], previews: [], arTouched: false});
+                    state: "pending", files: [], previews: []});
         n++;
         continue;
       }
@@ -2814,7 +2804,6 @@ $("#himport") && ($("#himport").onclick = async () => {
       n++;
     }catch(e){}
   }
-  items.forEach(arFromPreview);
   setMode(firstMode || "i2va");   // 回到匯入紀錄自己的模式頁
   render();
   $("#run").disabled = !modeItems().length;
@@ -3141,7 +3130,12 @@ refreshLessons();
 refreshRequired();
 loadWfParams();
 renderPrompts();   // 先同步畫出內建，再去伺服器補其他組
-loadPrompts().then(() => { setMode(curMode()); });
+// 共用設定要先取回，之後所有 store.get 才讀得到伺服器上的值（skill 組合、審查設定…）
+loadShared().then(() => {
+  if (typeof applySettings === "function") applySettings();
+  if (typeof rvLoad === "function") rvLoad();
+  return loadPrompts();
+}).then(() => { setMode(curMode()); return loadDraft(); }).then(() => { setMode(curMode()); });
 
 /* ================= ComfyUI 整合 ================= */
 const CAPI = "/api/comfy";
@@ -3184,7 +3178,7 @@ async function comfyPoll(pid, set, btn){
     if (j.state === "queued") set(`排隊中（第 ${j.pos} 位）`);
     else if (j.state === "running") set("生成中…");
     else if (j.state === "done"){
-      const out = (j.outputs || []).find(x => x.endsWith(".mp4")) || "";
+      const out = (j.outputs || []).find(isVideoOut) || "";
       set("完成 ✓ " + out.split("/").pop());
       if (btn) btn.disabled = false;
       if ($("#navMedia")) loadMedia();
@@ -3206,9 +3200,13 @@ window.comfyFromRec = (id, btnEl) => {
   fetch(API + "/" + id).then(async rec0 => {
     const rec = await rec0.json();
     const mode = hMode(rec);
-    const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(), aspect: arPayload(rec),
+    const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(),
                      mode, content: rec.content, ...comfyFields(rec.content, mode)};
-    if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
+    if (!rvEnabled(mode)){
+      if (stat) stat.textContent = "已排入任務清單";
+      qEnqueue(payload, {mode, title: rec.image || rec.content?.slice(0, 40) || "", rec_id: id});
+      return;
+    }
     // 審查啟用：抓紀錄的圖片作為審查輸入（修劇情不支援歷史紀錄路徑，revise 會退為換 seed）
     const inputs = [];
     try{ inputs.push(await urlToDataURL("/api/full/" + id + ".jpg")); }catch(e){}
@@ -3224,10 +3222,13 @@ window.comfyFromItem = (k, btnEl) => {
   const stat = document.querySelector(`[data-cstat="${k}"]`);
   const mode = it.mode || curMode();
   const isT2 = mode === "t2va";
-  const payload = {dur: durStr(), wf: wfOverrides(), aspect: arPayload(it),
+  const payload = {dur: durStr(), wf: wfOverrides(),
                    mode, content: it.content, ...comfyFields(it.content, mode)};
   if (!isT2){ payload.image = it.orig || it.full; payload.more = it.more || []; }
-  if (!rvEnabled(mode)) return comfySend(payload, stat, btnEl);
+  if (!rvEnabled(mode)){
+    if (stat) stat.textContent = "已排入任務清單";
+    return qEnqueue(payload, {mode, title: it.name || "", rec_id: it.rec_id || ""});
+  }
   return comfyRunReviewed(payload, {mode, content: it.content,
     inputs: isT2 ? [] : (it.imgs || [it.full]), recId: it.rec_id,
     inputLabel: isT2 ? "無輸入圖（純文字劇本）"
@@ -3265,6 +3266,175 @@ $("#wfFile").onchange = async e => {
     loadWorkflows();
   }catch(err){ $("#wfSelStat").textContent = "上傳失敗：" + err.message; }
 };
+
+
+
+/* ================= 草稿保留 =================
+   已放進格子、或已加入生成清單但還沒送出的工作，存到伺服器。不小心 F5、換瀏覽器、
+   甚至換一台電腦都能接續。圖片本身走既有的 uploads/（內容雜湊去重），草稿只存 hash，
+   所以同一張圖重複出現不會佔額外空間。 */
+let DRAFT_T = null, DRAFT_READY = false;
+
+async function regUpload(file){
+  const e = await encode(file);
+  const r = await (await fetch("/api/uploads/register", {method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({full: e.b64, thumb: e.thumb, orig: e.orig || null, name: file.name})})).json();
+  return r.hash ? {hash: r.hash, name: file.name} : null;
+}
+async function fileFromHash(h, name){
+  const r = await fetch("/api/uploads/" + h + ".orig.png").catch(() => null);
+  const ok = r && r.ok ? r : await fetch("/api/uploads/" + h + ".jpg");
+  if (!ok || !ok.ok) return null;
+  const b = await ok.blob();
+  return new File([b], name || (h + ".jpg"), {type: b.type || "image/jpeg"});
+}
+function saveDraft(){
+  if (!onServer || !DRAFT_READY) return;
+  clearTimeout(DRAFT_T);
+  DRAFT_T = setTimeout(async () => {
+    const d = {slots: {}, items: [], t2va: $("#t2vaInput") ? $("#t2vaInput").value : ""};
+    try{
+      for (const [m, arr] of Object.entries(SLOTS_BY)){
+        const out = [];
+        for (const sl of (arr || [])){
+          if (!sl || !sl.file) { out.push(null); continue; }
+          if (!sl._hash){ const u = await regUpload(sl.file); sl._hash = u && u.hash; sl._name = sl.file.name; }
+          out.push(sl._hash ? {hash: sl._hash, name: sl._name} : null);
+        }
+        if (out.some(Boolean)) d.slots[m] = out;
+      }
+      for (const it of items){
+        if (it.state === "running") continue;
+        const rec = {mode: it.mode, name: it.name, note: it.note || "",
+                     rawStory: it.rawStory || "", polished: it.polished || "",
+                     skills: it.skills || [], state: it.state, files: []};
+        for (const f of (it.files || [])){
+          if (!f._hash){ const u = await regUpload(f); f._hash = u && u.hash; }
+          if (f._hash) rec.files.push({hash: f._hash, name: f.name});
+        }
+        d.items.push(rec);
+      }
+      await fetch("/api/drafts", {method:"POST", headers:{"Content-Type":"application/json"},
+                                  body: JSON.stringify(d)});
+    }catch(e){}
+  }, 900);
+}
+async function loadDraft(){
+  if (!onServer) return;
+  let d = {};
+  try{ d = await (await fetch("/api/drafts")).json(); }catch(e){ d = {}; }
+  try{
+    for (const [m, arr] of Object.entries(d.slots || {})){
+      const out = [];
+      for (const e of (arr || [])){
+        if (!e || !e.hash){ out.push(null); continue; }
+        const f = await fileFromHash(e.hash, e.name);
+        out.push(f ? {file: f, url: URL.createObjectURL(f), _hash: e.hash, _name: e.name} : null);
+      }
+      SLOTS_BY[m] = out;
+    }
+    for (const rec of (d.items || [])){
+      const files = [];
+      for (const e of (rec.files || [])){
+        const f = await fileFromHash(e.hash, e.name);
+        if (f){ f._hash = e.hash; files.push(f); }
+      }
+      const previews = files.map(f => URL.createObjectURL(f));
+      items.push({mode: rec.mode, files, file: files[0] || null,
+                  name: rec.name || (files.map(f=>f.name).join(" ＋ ")),
+                  state: "pending", note: rec.note || "",
+                  rawStory: rec.rawStory || "", polished: rec.polished || "",
+                  skills: rec.skills || [], t2vaTab: 0,
+                  preview: previews[0] || null, previews});
+    }
+    if (d.t2va && $("#t2vaInput")) $("#t2vaInput").value = d.t2va;
+    if (typeof renderSlots === "function") renderSlots();
+    if (typeof render === "function") render();
+    if ($("#run")) $("#run").disabled = !modeItems().length;
+    updateNavCounts();
+  }catch(e){}
+  DRAFT_READY = true;
+}
+
+/* ================= 任務清單（伺服器端佇列） =================
+   送 ComfyUI 的生成一律排進伺服器的 queue/，所以重新整理、換瀏覽器、換電腦都看得到同一份，
+   關掉網頁工作也會繼續。輪詢只打 /api/queue（伺服器純記憶體回應，不會連 ComfyUI）。 */
+const QAPI = "/api/queue";
+let QROWS_C = [], qTimer = null;
+
+async function loadQueue(){
+  try{
+    const j = await (await fetch(QAPI)).json();
+    QROWS_C = j.rows || [];
+  }catch(e){ QROWS_C = []; }
+  renderQueue();
+  const active = QROWS_C.filter(r => ["queued","submitting","running"].includes(r.state)).length;
+  const nav = $("#navQueue"); if (nav) nav.textContent = active || "";
+  clearTimeout(qTimer);
+  // 有任務在跑就 2 秒一次，閒置時放慢到 10 秒
+  if ($("#v-queue").classList.contains("on")) qTimer = setTimeout(loadQueue, active ? 2000 : 10000);
+}
+function qStateLabel(st){
+  return {queued:"排隊中", submitting:"送出中", running:"生成中",
+          done:"完成", error:"失敗", canceled:"已取消"}[st] || st;
+}
+function renderQueue(){
+  const box = $("#qlist"); if (!box) return;
+  const act = QROWS_C.filter(r => ["queued","submitting","running"].includes(r.state)).length;
+  $("#qcount").textContent = QROWS_C.length ? `${QROWS_C.length} 筆 · 進行中 ${act}` : "";
+  box.innerHTML = QROWS_C.map(r => {
+    const running = ["submitting","running"].includes(r.state);
+    const thumb = r.state === "done" && r.video
+      ? `<video src="${MAPI}/file/${r.video.split("/").map(encodeURIComponent).join("/")}" muted playsinline controls preload="metadata"></video>`
+      : (running && r.has_preview
+         ? (String(r.prev_mime || "").startsWith("video/")
+            ? `<video src="${QAPI}/${r.id}/preview?v=${r.prev_tick || 0}" autoplay loop muted playsinline></video>`
+            : `<img src="${QAPI}/${r.id}/preview?v=${r.prev_tick || 0}" alt="預覽">`)
+         : (r.mode === "t2va" ? "📝" : "🎬"));
+    const pct = (r.progress != null) ? Math.round(r.progress * 100) : null;
+    return `<div class="qrow">
+      <div class="qthumb">${thumb}</div>
+      <div class="qmeta">
+        <div class="qtitle">${esc(r.title || "(未命名)")}</div>
+        <div class="qsub">
+          <span class="qbadge qb-${r.state}">${qStateLabel(r.state)}</span>
+          ${r.mode ? " · " + esc((MODES[r.mode] || r.mode)) : ""}
+          ${r.ts ? " · " + new Date(r.ts * 1000).toLocaleString() : ""}
+        </div>
+        ${r.error ? `<div class="qsub" style="color:var(--warn)">${esc(r.error)}</div>` : ""}
+        ${r.video ? `<div class="qsub">${esc(r.video)}</div>` : ""}
+        ${running ? `<div class="qbar"><i style="width:${pct == null ? 8 : pct}%"></i></div>` : ""}
+        ${running && r.prev_step ? `<div class="qsub">預覽 ${esc(r.prev_step)}</div>` : ""}
+      </div>
+      <div class="row" style="gap:6px;flex-direction:column;align-items:stretch">
+        ${running || r.state === "queued"
+          ? `<button class="ghost mini" onclick="qCancel('${r.id}')">取消</button>` : ""}
+        ${r.state === "done" && r.video
+          ? `<a class="ghost mini" style="text-align:center;text-decoration:none;padding:6px 10px;border:1px solid var(--line);border-radius:8px"
+               href="${MAPI}/file/${r.video.split("/").map(encodeURIComponent).join("/")}?dl=1">下載</a>` : ""}
+        ${["done","error","canceled"].includes(r.state)
+          ? `<button class="ghost mini" onclick="qDelete('${r.id}')">移除</button>` : ""}
+      </div></div>`;
+  }).join("") || '<span class="hint">還沒有任務</span>';
+}
+window.qCancel = async id => { try{ await fetch(`${QAPI}/${id}/cancel`, {method:"POST"}); }catch(e){} loadQueue(); };
+window.qDelete = async id => { try{ await fetch(`${QAPI}/${id}`, {method:"DELETE"}); }catch(e){} loadQueue(); };
+$("#qrefresh") && ($("#qrefresh").onclick = loadQueue);
+$("#qclear") && ($("#qclear").onclick = async () => {
+  for (const r of QROWS_C.filter(x => ["done","error","canceled"].includes(x.state)))
+    try{ await fetch(`${QAPI}/${r.id}`, {method:"DELETE"}); }catch(e){}
+  loadQueue();
+});
+
+/* 送 ComfyUI 一律改走佇列：立刻回來，工作交給伺服器。 */
+async function qEnqueue(payload, {mode, title, rec_id} = {}){
+  const idem = (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  const r = await (await fetch(QAPI, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({payload, mode: mode || payload.mode || "", title: title || "", rec_id: rec_id || "", idem})})).json();
+  loadQueue();
+  return r;
+}
 
 /* ================= 媒體庫 ================= */
 const MAPI = "/api/media";
@@ -3553,6 +3723,15 @@ function rvCfg(){
                              t2vaAuto: false, t2vaPass: 7}, c);
   out.modes = out.modes || {};
   return out;
+}
+/* 共用設定取回後重畫審查面板（勾選、分數、重試上限） */
+function rvLoad(){
+  const c = rvCfg();
+  const set = (id, v) => { const el = $(id); if (el) { if (el.type === "checkbox") el.checked = !!v; else el.value = v; } };
+  set("#rvT2va", (c.modes||{}).t2va); set("#rvI2va", (c.modes||{}).i2va);
+  set("#rvFl2va", (c.modes||{}).fl2va); set("#rvL2va", (c.modes||{}).l2va);
+  set("#rvRef2va", (c.modes||{}).ref2va); set("#rvMovie", (c.modes||{}).movie);
+  set("#rvPass", c.passScore); set("#rvRetry", c.retry);
 }
 function rvPersist(){
   const c = {modes: {t2va: $("#rvT2va").checked, i2va: $("#rvI2va").checked, fl2va: $("#rvFl2va").checked,
@@ -4212,7 +4391,7 @@ async function mvVideoStep(i){
   const s = MV.segs[i];
   let inFile = MV.slots[i].file;               // 第 1 段用原圖；其後接上一段實際 last-frame
   if (i > 0 && MV.segs[i - 1].video){
-    const png = MV.segs[i - 1].video.replace(/\.mp4$/i, "-last-frame.png");
+    const png = MV.segs[i - 1].video.replace(VIDEO_RE, "-last-frame.png");
     try{ inFile = await mvFetchFile(png, `seg${i}-in.png`); }
     catch(e){ mvStat(`段 ${i + 1}：⚠ 讀不到上一段 last-frame，改用原分鏡圖銜接`); }
   }
@@ -4318,7 +4497,7 @@ async function mvPollDone(pid){
     let s; try{ s = await (await fetch(CAPI + "/status/" + pid)).json(); }catch(e){ continue; }
     if (s.state === "error") throw new Error("ComfyUI 生成失敗：" + (s.error || ""));
     if (s.state === "done"){
-      const mp4 = (s.outputs || []).find(o => /\.mp4$/i.test(o));
+      const mp4 = (s.outputs || []).find(isVideoOut);
       if (!mp4) throw new Error("完成但找不到輸出 mp4");
       return mp4;
     }
@@ -4459,7 +4638,6 @@ const EN = {
 "整體":"Overall","運鏡分佈":"Camera-move mix",
 "不同的圖本該產生不同的運鏡。若某一種超過 50%，代表模型在套習慣而不是看畫面。":"Different images should yield different camera moves. If one exceeds 50%, the model is following habit instead of the image.",
 "原始輸出":"Raw output","重跑這張":"Re-run this","複製 prompt":"Copy prompt","🎬 送 ComfyUI":"🎬 Send to ComfyUI","無預覽":"No preview",
-"輸出比例（寬:高，預設依圖自動匹配）":"Aspect ratio (W:H, auto-matched to the image by default)","自訂":"Custom",
 "劇情提示（選填，中/英/日皆可）":"Story hint (optional; any language)",
 "（資料夾內沒有 .json）":"(no .json in the folder)","（讀取失敗）":"(failed to read)","還沒有紀錄":"No records yet","僅 1024px":"1024px only",
 "劇情提示（選填，重跑時會一起送給模型）":"Story hint (optional; sent along on rerun)",
@@ -4480,7 +4658,7 @@ const EN = {
 "設定已保存":"Settings saved","已保存":"Saved","已保存 ✔":"Saved ✔","已還原預設":"Reset to default","保存中…":"Saving…","釋放中…":"Freeing…",
 "待生成劇情":"story pending","劇情就緒":"story ready","劇情有錯誤":"story has errors","🎬 影片生成中…":"🎬 Rendering…","⏸ 等待指示中…":"⏸ Waiting for you…","🔧 調整中":"🔧 Adjusting","✅ 已確認":"✅ Confirmed",
 "開啟原圖":"Open original","送 ComfyUI 用全解析度原圖":"Full-resolution original is sent to ComfyUI","這筆只有 1024px 工作副本，送 ComfyUI 會用它":"Only a 1024px working copy exists; it will be sent",
-"以檔名篩選":"filter by filename","移除這張":"Remove","直式／橫式切換":"Portrait / landscape","比例寬":"ratio W","比例高":"ratio H",
+"以檔名篩選":"filter by filename","移除這張":"Remove",
 "留空＝自由創作。輸入提示＝以此為劇情核心，例如：她在雪地裡撿到一隻迷路的小企鵝":"Empty = free creation. A hint becomes the story core, e.g. she finds a lost penguin in the snow",
 "留空＝自由創作":"empty = free creation","勾選後可批次生成 / 批次送 ComfyUI":"check to batch-generate / batch-send",
 "從清單移除這張（不影響已存的歷史紀錄）":"Remove from the list (saved history unaffected)","勾選後可匯入到上傳並處理":"check to import into processing",
@@ -4500,7 +4678,6 @@ const EN = {
 "輸入原始劇情 → AI 潤飾成分鏡劇本 → 生成 H3 Prompt（含翻譯）→ 送 ComfyUI。可輸入多筆加入清單批次處理；全自動/半自動在系統設定的 T2VA 區塊切換。":"Type a raw story → the model polishes it into a storyboard script → generates the H3 prompt (with translation) → sends to ComfyUI. Add multiple stories to the list for batching; switch full/semi-automatic in Settings under T2VA.",
 "📝 原始劇情（任何語言；一筆＝一支影片）":"📝 Raw story (any language; one entry = one video)",
 "輸入你想要的劇情，例如：一位女僕在聖誕夜的咖啡廳裡偷偷佈置驚喜派對，最後被店長發現，兩人一起舉杯。":"Type the story you want, e.g. a maid secretly sets up a surprise party in the cafe on Christmas Eve; the owner finds out and they toast together.",
-"輸出比例":"Aspect","方向":"Orientation","直式":"Portrait","橫式":"Landscape",
 "原始輸入劇情":"Raw story","AI 潤飾後劇本":"Polished script","✨ 潤飾劇情":"✨ Polish story","✨ 潤飾劇情（可選）":"✨ Polish story (optional)",
 "輸入原始劇情 → 生成（官方 skill 直出最終 Prompt）→ 送 ComfyUI。潤飾為可選（想先看/改中文分鏡劇本、或勾「直接使用」時才需要）。可輸入多筆批次處理；全自動/半自動在系統設定切換。":"Type a raw story → Generate (the official skill outputs the final prompt directly) → send to ComfyUI. Polishing is optional (only when you want to preview/edit a Chinese storyboard first, or for direct-use). Batch multiple entries; switch full/semi-automatic in Settings.",
 "📝 生成 Prompt":"📝 Generate prompt","📝 生成 Prompt（重新生成）":"📝 Generate prompt (again)",

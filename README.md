@@ -104,6 +104,9 @@ Movie 專案存在伺服器端，有專屬歷史分類——之後可隨時開�
 
 ## ComfyUI integration ComfyUI 整合
 
+This build targets the **MiniMax H3 v18** workflow and refuses older templates with an explanatory message, since v18 moved the prompt, frame-rate and sizing inputs.
+本版只支援 **MiniMax H3 v18** 工作流，舊版模板會被擋下並說明原因（v18 移動了 prompt、frame rate 與尺寸相關的輸入）。
+
 Pick any workflow .json from your workflow folder (or upload one from the page) and it becomes the template directly — both Save format and Export (API) format are supported, converted server-side without ever needing a prior run in ComfyUI.  
 從工作流資料夾選任一 .json（或直接從網頁上傳）即可成為模板——Save 存檔與 Export (API) 格式都支援，由伺服器端直接轉換，完全不需要先在 ComfyUI 跑過一次。
 
@@ -124,6 +127,33 @@ Pick any workflow .json from your workflow folder (or upload one from the page) 
 
 llama-server and ComfyUI can share one GPU: before prompting, the app frees ComfyUI's VRAM and waits for it to drop; before rendering, it waits for llama's idle unload — verified via nvidia-smi, fully automatic, and identity-aware (consecutive same-target use never waits).
 llama-server 與 ComfyUI 可共用一張 GPU：生成 Prompt 前自動 Free ComfyUI 並等 VRAM 降下，送算圖前等 llama 閒置卸載——透過 nvidia-smi 驗證，全自動，且具身分感知（同對象連續使用不等待）。
+
+---
+
+## Task queue 任務清單
+
+Everything sent to ComfyUI — from any mode — goes into one queue held by the server, not by the page that submitted it. Refresh, close the tab, switch browser or move to another PC: the list is identical and the work keeps running.
+任何模式送去 ComfyUI 的生成都排進伺服器保管的同一份清單，而不是留在按下按鈕的那個分頁。重新整理、關掉網頁、換瀏覽器、換一台電腦，看到的都是同一份，工作也照跑。
+
+- Jobs run strictly one at a time: the dispatcher keeps ComfyUI's own queue at depth 1, so every browser sees the same order and the GPU is never double-booked.  
+  任務嚴格逐一執行：派工把 ComfyUI 自己的佇列維持在深度 1，所以每個瀏覽器看到的順序一致，GPU 也不會被重複佔用。
+- While a job runs the row shows a progress bar and the **live preview** coming out of the sampler; when it finishes the row becomes the playable result.  
+  生成中會顯示進度條與取樣器吐出的**即時預覽**；完成後該列直接變成可播放的成品。
+- Anything already queued survives a server restart too — the queue is on disk, because ComfyUI's own history is in-memory and is wiped whenever ComfyUI restarts.  
+  已排入的任務連伺服器重啟都不會掉——佇列存在磁碟，因為 ComfyUI 自己的歷史是記憶體暫存，它一重啟就清空。
+
+Progress and previews arrive over a single WebSocket the server holds. That is a requirement, not an optimisation: ComfyUI unicasts these events to one client id, so a second connection claiming the same id would silently starve the first.
+進度與預覽由伺服器持有的單一 WebSocket 收取。這是必要條件而非最佳化：ComfyUI 的這些事件是單播給單一 client id，第二條同 id 的連線會讓第一條靜默收不到東西。
+
+---
+
+## Shared settings and saved drafts 設定共用與草稿保留
+
+Settings that describe how generation should behave — generation parameters, review thresholds, the editable system prompts, the active skill combo, the selected prompt set — live on the server, so a new browser or a new machine inherits your setup instead of starting from defaults. Interface language and sidebar state stay per-device, which is where they belong.
+決定生成行為的設定——生成參數、審查門檻、可編輯的 system prompt、啟用的 skill 組合、選用的 prompt 組——存在伺服器端，換瀏覽器或換電腦會直接繼承你的設定，而不是從預設值重來。介面語言與側欄狀態留在本機，那本來就該因裝置而異。
+
+Work you have not sent yet is preserved too: images dropped into slots and cards waiting in the generation list come back after an accidental refresh, and can be picked up from a different PC. Images ride the existing content-hashed upload store, so a draft costs only its hashes.
+還沒送出的工作同樣會保留：放進格子的圖與生成清單裡待處理的卡片，不小心重新整理後會回來，也能在另一台電腦上接續。圖片走既有的內容雜湊上傳庫，草稿只存 hash，不佔額外空間。
 
 ---
 
@@ -183,6 +213,7 @@ Requirements: Windows + Python 3 and a modern browser; ffmpeg is auto-discovered
 | `skills/` | The official MiniMax H3 skills: `h3-prompt-writing` (+ base-en / ref-en guides) and 8 style skills.<br>官方 MiniMax H3 skills：`h3-prompt-writing`（含 base-en／ref-en 指南）與 8 個風格 skills。 |
 | `workflows/` | Bundled MiniMax H3 ComfyUI workflows, usable straight from the dropdown.<br>隨附 MiniMax H3 ComfyUI 工作流，下拉即可選用。 |
 | `ui2api.py` | Converts ComfyUI Save-format workflows into runnable API graphs (subgraphs/bypass supported).<br>將 ComfyUI Save 格式工作流轉成可執行 API 圖（支援子圖／bypass）。 |
+| `queue/`, `settings.json`, `drafts.json` | Server-side state: the job queue, shared settings and unsent drafts (created on first run).<br>伺服器端狀態：任務佇列、共用設定與未送出草稿（首次執行時建立）。 |
 | `start_app.bat` | One-click launcher on port 9998.<br>一鍵啟動（port 9998）。 |
 | `app.html` | Legacy single-page frontend (kept for reference).<br>舊版簡易前端（保留參考）。 |
 

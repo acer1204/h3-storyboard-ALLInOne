@@ -21,3 +21,6 @@ prompts/
 loras/
 movies/
 *.bak
+queue/
+settings.json
+drafts.json
