@@ -222,6 +222,20 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   transition:.13s;position:relative;text-align:left}
 .hcell:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:var(--shadow)}
 .hcell img{width:100%;aspect-ratio:3/4;object-fit:cover;display:block;background:var(--code)}
+.qrow{display:grid;grid-template-columns:132px 1fr auto;gap:12px;align-items:start;
+  border:1px solid var(--line);border-radius:11px;padding:11px;margin-bottom:9px;background:var(--panel)}
+.qrow .qthumb{width:132px;border-radius:8px;overflow:hidden;background:var(--code);
+  aspect-ratio:3/4;display:grid;place-items:center;font-size:26px;color:var(--faint)}
+.qrow .qthumb img,.qrow .qthumb video{width:100%;height:100%;object-fit:cover;display:block}
+.qrow .qmeta{min-width:0}
+.qrow .qtitle{font-size:13.5px;font-weight:600;line-height:1.4;word-break:break-word}
+.qrow .qsub{font-size:11.5px;color:var(--mut);margin-top:3px;font-family:ui-monospace,Consolas,monospace}
+.qbar{height:5px;border-radius:3px;background:var(--code);overflow:hidden;margin-top:7px}
+.qbar i{display:block;height:100%;background:var(--acc);transition:width .3s}
+.qbadge{display:inline-block;font-size:10.5px;padding:1px 7px;border-radius:99px;border:1px solid var(--line)}
+.qb-queued{color:var(--mut)} .qb-running{color:var(--acc);border-color:var(--acc)}
+.qb-done{color:var(--ok);border-color:var(--ok)} .qb-error{color:var(--warn);border-color:var(--warn)}
+.qb-canceled{color:var(--faint)}
 .hcell .cap{padding:5px 8px;font-size:10.5px;color:var(--mut);line-height:1.4;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
 .hcell .cap.t{color:var(--faint);padding-top:0;padding-bottom:7px}
@@ -383,6 +397,10 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <button class="nav sub" data-view="hist" data-hmode="ref2va"><span>· REF2VA</span></button>
     <button class="nav sub" data-view="mvhist"><span>· FL2VA Movie</span><span class="cnt" id="navMvHist"></span></button>
   </div>
+
+  <button class="nav" data-view="queue" data-tip="任務清單">
+    <svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+    <span>任務清單</span><span class="cnt" id="navQueue"></span></button>
 
   <button class="nav" data-view="media" data-tip="ComfyUI 媒體庫">
     <svg viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20M6 4v4M10 4v4M14 4v4M18 4v4"/><path d="m10 12 5 3-5 3z"/></svg>
@@ -551,6 +569,20 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <span class="selinfo" id="upcount"></span>
     </div>
     <div id="upgrid" class="upgrid"></div>
+  </div>
+</section>
+
+<section class="view" id="v-queue">
+  <h1 class="vh">任務清單</h1>
+  <p class="vs">所有送去 ComfyUI 的生成都排在這裡，由伺服器保管。重新整理、換瀏覽器或換電腦都看得到同一份，關掉網頁也會繼續跑。</p>
+
+  <div class="panel">
+    <div class="row" style="margin-bottom:12px">
+      <button class="ghost mini" id="qrefresh">重新整理</button>
+      <button class="ghost mini" id="qclear">清除已完成</button>
+      <span class="status" id="qcount" style="margin:0"></span>
+    </div>
+    <div id="qlist"></div>
   </div>
 </section>
 
@@ -1442,6 +1474,7 @@ function setView(v){
   if (v === "comfy") { loadWfParams(); if (typeof loadComfyCfg === "function") loadComfyCfg(); }
   if (v === "media") loadMedia();
   if (v === "mvhist" && typeof loadMvHist === "function") loadMvHist();
+  if (v === "queue" && typeof loadQueue === "function") loadQueue();
 }
 /* ---- collapsible sidebar ---- */
 const SIDEKEY = "h3.side.collapsed.v1";
@@ -2184,7 +2217,11 @@ window.t2DirectSend = async k => {
   const stat = document.querySelector(`[data-cstat="${k}"]`);
   const payload = {dur: durStr(), wf: wfOverrides(),
                    mode: "t2va", content: it.polished, ...comfyFields(it.polished, "t2va")};
-  if (!rvEnabled("t2va")) return comfySend(payload, stat, null);
+  if (!rvEnabled("t2va")){
+    // 不需審查：交給伺服器佇列，網頁可以直接關掉
+    if (stat) stat.textContent = "已排入任務清單";
+    return qEnqueue(payload, {mode: "t2va", title: it.name || it.rawStory || "T2VA", rec_id: it.rec_id || ""});
+  }
   return comfyRunReviewed(payload, {mode: "t2va", content: it.polished, inputs: [], recId: it.rec_id,
     inputLabel: "無輸入圖（直接使用潤飾劇本）",
     reviseFn: async (instruction) => {
@@ -3113,7 +3150,11 @@ window.comfyFromRec = (id, btnEl) => {
     const mode = hMode(rec);
     const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(),
                      mode, content: rec.content, ...comfyFields(rec.content, mode)};
-    if (!rvEnabled(mode)){ comfySend(payload, stat, btnEl); return; }
+    if (!rvEnabled(mode)){
+      if (stat) stat.textContent = "已排入任務清單";
+      qEnqueue(payload, {mode, title: rec.image || rec.content?.slice(0, 40) || "", rec_id: id});
+      return;
+    }
     // 審查啟用：抓紀錄的圖片作為審查輸入（修劇情不支援歷史紀錄路徑，revise 會退為換 seed）
     const inputs = [];
     try{ inputs.push(await urlToDataURL("/api/full/" + id + ".jpg")); }catch(e){}
@@ -3132,7 +3173,10 @@ window.comfyFromItem = (k, btnEl) => {
   const payload = {dur: durStr(), wf: wfOverrides(),
                    mode, content: it.content, ...comfyFields(it.content, mode)};
   if (!isT2){ payload.image = it.orig || it.full; payload.more = it.more || []; }
-  if (!rvEnabled(mode)) return comfySend(payload, stat, btnEl);
+  if (!rvEnabled(mode)){
+    if (stat) stat.textContent = "已排入任務清單";
+    return qEnqueue(payload, {mode, title: it.name || "", rec_id: it.rec_id || ""});
+  }
   return comfyRunReviewed(payload, {mode, content: it.content,
     inputs: isT2 ? [] : (it.imgs || [it.full]), recId: it.rec_id,
     inputLabel: isT2 ? "無輸入圖（純文字劇本）"
@@ -3170,6 +3214,83 @@ $("#wfFile").onchange = async e => {
     loadWorkflows();
   }catch(err){ $("#wfSelStat").textContent = "上傳失敗：" + err.message; }
 };
+
+
+/* ================= 任務清單（伺服器端佇列） =================
+   送 ComfyUI 的生成一律排進伺服器的 queue/，所以重新整理、換瀏覽器、換電腦都看得到同一份，
+   關掉網頁工作也會繼續。輪詢只打 /api/queue（伺服器純記憶體回應，不會連 ComfyUI）。 */
+const QAPI = "/api/queue";
+let QROWS_C = [], qTimer = null;
+
+async function loadQueue(){
+  try{
+    const j = await (await fetch(QAPI)).json();
+    QROWS_C = j.rows || [];
+  }catch(e){ QROWS_C = []; }
+  renderQueue();
+  const active = QROWS_C.filter(r => ["queued","submitting","running"].includes(r.state)).length;
+  const nav = $("#navQueue"); if (nav) nav.textContent = active || "";
+  clearTimeout(qTimer);
+  // 有任務在跑就 2 秒一次，閒置時放慢到 10 秒
+  if ($("#v-queue").classList.contains("on")) qTimer = setTimeout(loadQueue, active ? 2000 : 10000);
+}
+function qStateLabel(st){
+  return {queued:"排隊中", submitting:"送出中", running:"生成中",
+          done:"完成", error:"失敗", canceled:"已取消"}[st] || st;
+}
+function renderQueue(){
+  const box = $("#qlist"); if (!box) return;
+  const act = QROWS_C.filter(r => ["queued","submitting","running"].includes(r.state)).length;
+  $("#qcount").textContent = QROWS_C.length ? `${QROWS_C.length} 筆 · 進行中 ${act}` : "";
+  box.innerHTML = QROWS_C.map(r => {
+    const running = ["submitting","running"].includes(r.state);
+    const thumb = r.state === "done" && r.video
+      ? `<video src="${MAPI}/file/${r.video.split("/").map(encodeURIComponent).join("/")}" muted playsinline controls preload="metadata"></video>`
+      : (running && r.has_preview
+         ? `<img src="${QAPI}/${r.id}/preview?v=${Date.now()}" alt="預覽">`
+         : (r.mode === "t2va" ? "📝" : "🎬"));
+    const pct = (r.progress != null) ? Math.round(r.progress * 100) : null;
+    return `<div class="qrow">
+      <div class="qthumb">${thumb}</div>
+      <div class="qmeta">
+        <div class="qtitle">${esc(r.title || "(未命名)")}</div>
+        <div class="qsub">
+          <span class="qbadge qb-${r.state}">${qStateLabel(r.state)}</span>
+          ${r.mode ? " · " + esc((MODES[r.mode] || r.mode)) : ""}
+          ${r.ts ? " · " + new Date(r.ts * 1000).toLocaleString() : ""}
+        </div>
+        ${r.error ? `<div class="qsub" style="color:var(--warn)">${esc(r.error)}</div>` : ""}
+        ${r.video ? `<div class="qsub">${esc(r.video)}</div>` : ""}
+        ${running ? `<div class="qbar"><i style="width:${pct == null ? 8 : pct}%"></i></div>` : ""}
+      </div>
+      <div class="row" style="gap:6px;flex-direction:column;align-items:stretch">
+        ${running || r.state === "queued"
+          ? `<button class="ghost mini" onclick="qCancel('${r.id}')">取消</button>` : ""}
+        ${r.state === "done" && r.video
+          ? `<a class="ghost mini" style="text-align:center;text-decoration:none;padding:6px 10px;border:1px solid var(--line);border-radius:8px"
+               href="${MAPI}/file/${r.video.split("/").map(encodeURIComponent).join("/")}?dl=1">下載</a>` : ""}
+        ${["done","error","canceled"].includes(r.state)
+          ? `<button class="ghost mini" onclick="qDelete('${r.id}')">移除</button>` : ""}
+      </div></div>`;
+  }).join("") || '<span class="hint">還沒有任務</span>';
+}
+window.qCancel = async id => { try{ await fetch(`${QAPI}/${id}/cancel`, {method:"POST"}); }catch(e){} loadQueue(); };
+window.qDelete = async id => { try{ await fetch(`${QAPI}/${id}`, {method:"DELETE"}); }catch(e){} loadQueue(); };
+$("#qrefresh") && ($("#qrefresh").onclick = loadQueue);
+$("#qclear") && ($("#qclear").onclick = async () => {
+  for (const r of QROWS_C.filter(x => ["done","error","canceled"].includes(x.state)))
+    try{ await fetch(`${QAPI}/${r.id}`, {method:"DELETE"}); }catch(e){}
+  loadQueue();
+});
+
+/* 送 ComfyUI 一律改走佇列：立刻回來，工作交給伺服器。 */
+async function qEnqueue(payload, {mode, title, rec_id} = {}){
+  const idem = (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  const r = await (await fetch(QAPI, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({payload, mode: mode || payload.mode || "", title: title || "", rec_id: rec_id || "", idem})})).json();
+  loadQueue();
+  return r;
+}
 
 /* ================= 媒體庫 ================= */
 const MAPI = "/api/media";
