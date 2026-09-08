@@ -21,3 +21,4 @@ prompts/
 loras/
 movies/
 *.bak
+queue/

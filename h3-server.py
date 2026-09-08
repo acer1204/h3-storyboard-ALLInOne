@@ -66,6 +66,8 @@ PINDEX = os.path.join(PROMPTS, "index.json")
 LORAS = os.path.join(ROOT, "loras")
 LINDEX = os.path.join(LORAS, "index.json")
 MOVIES = os.path.join(ROOT, "movies")
+QUEUE = os.path.join(ROOT, "queue")        # 任務佇列：唯一真相（ComfyUI /history 重啟就清空）
+QINDEX = os.path.join(QUEUE, "index.json")
 MINDEX = os.path.join(MOVIES, "index.json")
 LESSONS_DIR = os.path.join(ROOT, "lessons")
 LESSONS_FILE = os.path.join(LESSONS_DIR, "lessons.json")
@@ -395,6 +397,12 @@ MEDIA_EXT = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktim
              ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
              ".m4a": "audio/mp4"}
 LOCK = threading.Lock()
+# QLOCK 保護記憶體內的佇列快取／進度／預覽；LOCK 仍只保護磁碟索引的讀改寫。
+# 規則：需要兩者時一律先 QLOCK 再 LOCK；兩者都不得在呼叫 ComfyUI 期間持有。
+QLOCK = threading.RLock()
+QROWS = {}   # jid -> row（磁碟的記憶體鏡像）
+QLIVE = {}   # jid -> {progress, stage, prev_step}（僅記憶體，重啟即失）
+QPREV = {}   # jid -> 預覽影像 bytes（僅記憶體）
 COMFY_LAST_STATE = {}   # prompt_id -> last state string, so the console logs transitions, not every poll
 
 
@@ -415,6 +423,7 @@ def ensure():
     os.makedirs(PROMPTS, exist_ok=True)
     os.makedirs(LORAS, exist_ok=True)
     os.makedirs(UPLOADS, exist_ok=True)
+    os.makedirs(QUEUE, exist_ok=True)
     if not os.path.exists(UINDEX):
         save_uindex([])
     if not os.path.exists(INDEX):
@@ -1153,6 +1162,277 @@ def apply_wf_params(g, wf):
             if v is not None:
                 ins["frame_rate"] = v
 
+
+# ---------------------------------------------------------------- queue store
+# 送 ComfyUI 的唯一真相。不能倚賴 ComfyUI 的 /history：那是記憶體字典，一重啟就清空
+# （實測輸出資料夾 2700+ 個檔案，/history 只剩 5 筆）。每筆任務一個 queue/<jid>.json。
+def qcompact(row):
+    return {k: row.get(k) for k in
+            ("id", "ts", "state", "mode", "title", "rec_id", "prompt_id",
+             "video", "first_frame", "error", "t_submit", "t_end")}
+
+
+def qsave(row):
+    """單筆落地 + 重寫索引。呼叫端須持有 QLOCK。"""
+    jid = row["id"]
+    QROWS[jid] = row
+    tmp = os.path.join(QUEUE, jid + ".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(row, f, ensure_ascii=False)
+    os.replace(tmp, os.path.join(QUEUE, jid + ".json"))
+    with LOCK:
+        tmp = QINDEX + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sorted([qcompact(r) for r in QROWS.values()],
+                             key=lambda r: r.get("ts") or 0, reverse=True)[:500],
+                      f, ensure_ascii=False)
+        os.replace(tmp, QINDEX)
+
+
+def qload_all():
+    """啟動時把磁碟任務讀回記憶體；中斷的任務標回可續狀態。"""
+    try:
+        names = os.listdir(QUEUE)
+    except OSError:
+        return
+    with QLOCK:
+        for fn in names:
+            if not fn.endswith(".json") or fn == "index.json":
+                continue
+            try:
+                with open(os.path.join(QUEUE, fn), encoding="utf-8") as f:
+                    r = json.load(f)
+                if isinstance(r, dict) and r.get("id"):
+                    if r.get("state") in ("submitting", "running"):
+                        # 伺服器重啟時仍在跑：有 prompt_id 就交給 reconcile 確認，否則重排
+                        r["state"] = "running" if r.get("prompt_id") else "queued"
+                    QROWS[r["id"]] = r
+            except Exception:
+                pass
+
+
+def qrow(jid):
+    with QLOCK:
+        r = QROWS.get(jid)
+        return dict(r) if r else None
+
+
+def qset(jid, **fields):
+    with QLOCK:
+        r = QROWS.get(jid)
+        if not r:
+            return None
+        r.update(fields)
+        qsave(r)
+        return dict(r)
+
+
+class SubmitError(Exception):
+    def __init__(self, msg, code=502):
+        super().__init__(msg); self.msg = msg; self.code = code
+
+
+def comfy_submit(body):
+    """一筆送單 -> ComfyUI 的 prompt_id。/api/comfy/run 與佇列派工共用，
+    確保兩條路徑的圖片解析、上傳、建圖與參數覆寫完全一致。"""
+    if not isinstance(body, dict):
+        raise SubmitError("body must be an object", 400)
+    if not os.path.exists(COMFY_TEMPLATE):
+        try:
+            if not comfy_capture_template():
+                raise SubmitError("沒有模板：先在 ComfyUI 成功跑一次工作流", 400)
+        except SubmitError:
+            raise
+        except Exception as e:
+            raise SubmitError("ComfyUI 連不上: %s" % e, 502)
+    blob, ext = None, "jpg"
+    run_mode = str(body.get("mode") or "").lower()
+    full_prompt = str(body.get("content") or "")
+    extra_blobs = []
+    rid = str(body.get("rec_id") or "")
+    if rid and ID_RE.match(rid):
+        op, oext = orig_path(HIST, rid)
+        if op:
+            blob, ext = open(op, "rb").read(), oext
+        else:
+            fp = os.path.join(HIST, rid + ".full.jpg")
+            if os.path.exists(fp):
+                blob = open(fp, "rb").read()
+        try:
+            with open(os.path.join(HIST, rid + ".json"), encoding="utf-8") as f:
+                rec0 = json.load(f)
+            if not run_mode:
+                run_mode = str(rec0.get("mode") or "").lower()
+            if not full_prompt:
+                full_prompt = str(rec0.get("content") or "")
+            for n in range(1, int(rec0.get("nmore") or 0) + 1):
+                fp2 = os.path.join(HIST, "%s.x%d.jpg" % (rid, n))
+                if os.path.exists(fp2):
+                    extra_blobs.append(open(fp2, "rb").read())
+        except Exception:
+            pass
+    if blob is None:
+        blob, ext2 = parse_data_image(body.get("image"))
+        if blob is not None:
+            ext = ext2
+    for durl in (body.get("more") or [])[:8]:
+        mb, _ = parse_data_image(durl)
+        if mb:
+            extra_blobs.append(mb)
+    if blob is None and run_mode != "t2va":
+        raise SubmitError("沒有可用的圖片（rec_id 找不到原圖，也沒帶 image）", 400)
+    dur = None
+    md = re.search(r"\d+", str(body.get("dur") or ""))
+    if md:
+        dur = int(md.group(0))
+    try:
+        up_name = None
+        if blob is not None:
+            name = "h3webui_%s.%s" % (new_id(), ext)
+            up_name = comfy_upload(name, blob).get("name", name)
+        extra_names = []
+        for k2, mb in enumerate(extra_blobs):
+            nm2 = "h3webui_%s_x%d.jpg" % (new_id(), k2 + 1)
+            extra_names.append(comfy_upload(nm2, mb).get("name", nm2))
+        flds = split_fields(full_prompt, run_mode)
+        graph, extra = comfy_build(str(body.get("imd") or flds["imd"]),
+                                   str(body.get("soundscape") or flds["soundscape"]),
+                                   str(body.get("music") or flds["music"]),
+                                   up_name, dur,
+                                   body.get("wf"), blob,
+                                   mode=run_mode, extra_names=extra_names, full_prompt=full_prompt)
+        payload = {"prompt": graph, "client_id": "h3-webui"}
+        if extra:
+            payload["extra_data"] = extra
+        r = comfy_api("/prompt", payload, timeout=60)
+    except SubmitError:
+        raise
+    except Exception as e:
+        detail = ""
+        if hasattr(e, "read"):
+            try: detail = e.read().decode("utf-8", "replace")[:500]
+            except Exception: pass
+        raise SubmitError("送出失敗: %s %s" % (e, detail), 502)
+    if "prompt_id" not in r:
+        raise SubmitError("ComfyUI 拒收: %s" % json.dumps(r, ensure_ascii=False)[:500], 502)
+    return r["prompt_id"]
+
+
+
+# ---------------------------------------------------------------- queue worker
+# 單一派工執行緒：ComfyUI 佇列深度固定維持 1，由我們自己排隊。這樣所有瀏覽器看到的
+# 順序一致，而且 GPU 一次只跑一支（llama 與 ComfyUI 的交接仍走既有的協調邏輯）。
+QWAKE = threading.Event()
+
+
+def qenqueue(payload, mode="", title="", rec_id="", idem=""):
+    """建立一筆 queued 任務並喚醒派工。回傳新列。"""
+    with QLOCK:
+        if idem:
+            for r in QROWS.values():
+                if r.get("idem") == idem:
+                    return dict(r)          # 同一次點擊重送：回傳既有列，不重複算
+        jid = new_id()
+        row = {"id": jid, "ts": int(time.time()), "state": "queued",
+               "mode": mode or str(payload.get("mode") or ""), "title": title[:120],
+               "rec_id": rec_id, "idem": idem, "prompt_id": "",
+               "payload": payload, "video": "", "first_frame": "", "error": "",
+               "t_submit": 0, "t_end": 0}
+        qsave(row)
+    QWAKE.set()
+    return dict(row)
+
+
+def _qoutputs(rec):
+    """從 ComfyUI 的 history 紀錄挑出成品影片與首尾幀。"""
+    vid = first = last = ""
+    for _nid, o in (rec.get("outputs") or {}).items():
+        for _k, v in o.items():
+            if not isinstance(v, list):
+                continue
+            for it in v:
+                if not isinstance(it, dict) or "filename" not in it:
+                    continue
+                rel = ((it.get("subfolder", "") + "/" + it["filename"]).lstrip("/")).replace("\\", "/")
+                low = rel.lower()
+                if low.endswith(VIDEO_EXT):
+                    vid = rel
+                elif low.endswith("-first-frame.png"):
+                    first = rel
+                elif low.endswith("-last-frame.png"):
+                    last = rel
+    return vid, first, last
+
+
+def qreconcile(row):
+    """依 prompt_id 向 ComfyUI 問結果，更新任務狀態。回傳 True 表示已結束。"""
+    pid = row.get("prompt_id")
+    if not pid:
+        return False
+    try:
+        hist = comfy_api("/history/" + pid, timeout=20)
+    except Exception:
+        return False
+    rec = (hist or {}).get(pid)
+    if not rec:
+        # 還沒進 history：可能在跑，也可能 ComfyUI 重啟把它弄丟了
+        try:
+            q = comfy_api("/queue", timeout=15)
+            alive = any(str(pid) in json.dumps(x) for x in
+                        (q.get("queue_running") or []) + (q.get("queue_pending") or []))
+        except Exception:
+            alive = True
+        if not alive:
+            qset(row["id"], state="error", error="ComfyUI 已無此任務（可能重啟過）",
+                 t_end=int(time.time()))
+            return True
+        return False
+    st = rec.get("status", {}) or {}
+    err = ""
+    for msg in st.get("messages", []):
+        if msg and msg[0] == "execution_error":
+            err = str((msg[1] or {}).get("exception_message", ""))[:400]
+    if st.get("completed"):
+        vid, first, last = _qoutputs(rec)
+        qset(row["id"], state="done" if vid else "error",
+             video=vid, first_frame=first,
+             error="" if vid else (err or "完成但找不到輸出影片"),
+             t_end=int(time.time()))
+        return True
+    if st.get("status_str") == "error" or err:
+        qset(row["id"], state="error", error=err or "ComfyUI 執行失敗", t_end=int(time.time()))
+        return True
+    return False
+
+
+def qworker():
+    """派工迴圈：一次只讓一支在 ComfyUI 跑，跑完才送下一支。"""
+    while True:
+        try:
+            with QLOCK:
+                running = [dict(r) for r in QROWS.values() if r.get("state") == "running"]
+                queued = sorted([dict(r) for r in QROWS.values() if r.get("state") == "queued"],
+                                key=lambda r: r.get("ts") or 0)
+            for r in running:
+                qreconcile(r)
+            with QLOCK:
+                busy = any(r.get("state") in ("running", "submitting") for r in QROWS.values())
+            if queued and not busy:
+                row = queued[0]
+                qset(row["id"], state="submitting")
+                try:
+                    pid = comfy_submit(row["payload"])
+                    qset(row["id"], state="running", prompt_id=pid, t_submit=int(time.time()))
+                except SubmitError as e:
+                    qset(row["id"], state="error", error=e.msg, t_end=int(time.time()))
+                except Exception as e:
+                    qset(row["id"], state="error", error=str(e)[:300], t_end=int(time.time()))
+        except Exception as e:
+            sys.stderr.write("  queue worker: " + str(e)[:200] + chr(10))
+        QWAKE.wait(3.0)
+        QWAKE.clear()
+
+
 MODE_TO_DIRECTOR = {"t2va": "T2VA", "i2va": "I2VA", "fl2va": "FL2VA", "l2va": "L2VA", "ref2va": "REF2VA"}
 
 
@@ -1542,6 +1822,37 @@ class H(SimpleHTTPRequestHandler):
                     break
             return self.send_json({"count": len(items), "items": items})
 
+        if p == "/api/queue":
+            with QLOCK:
+                rows = sorted([qcompact(r) for r in QROWS.values()],
+                              key=lambda r: r.get("ts") or 0, reverse=True)[:300]
+                for r in rows:
+                    live = QLIVE.get(r["id"]) or {}
+                    r["progress"] = live.get("progress")
+                    r["stage"] = live.get("stage")
+                    r["has_preview"] = r["id"] in QPREV
+            return self.send_json({"now": int(time.time()), "rows": rows})
+
+        m = re.match(r"^/api/queue/([0-9a-f]{8,32})$", p)
+        if m:
+            r = qrow(m.group(1))
+            return self.send_json(r) if r else self.send_json({"error": "not found"}, 404)
+
+        m = re.match(r"^/api/queue/([0-9a-f]{8,32})/preview$", p)
+        if m:
+            with QLOCK:
+                buf = QPREV.get(m.group(1))
+            if not buf:
+                return self.send_json({"error": "no preview"}, 404)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(buf)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try: self.wfile.write(buf)
+            except Exception: pass
+            return
+
         if p == "/api/comfy/params":
             out = {"presets": RES_PRESETS,
                    "fps": None, "resolution_preset": None, "steps": None, "duration": None,
@@ -1886,13 +2197,13 @@ class H(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "bad json: %s" % e}, 400)
             if not isinstance(body, dict):
                 return self.send_json({"error": "empty body"}, 400)
-            LLAMA_INFLIGHT[0] += 1
+            with QLOCK: LLAMA_INFLIGHT[0] += 1
             try:
                 return self.send_json(llama_api("/v1/chat/completions", body, timeout=600))
             except Exception as e:
                 return self.send_json({"error": "llama-server: %s" % e}, 502)
             finally:
-                LLAMA_INFLIGHT[0] -= 1
+                with QLOCK: LLAMA_INFLIGHT[0] = max(0, LLAMA_INFLIGHT[0] - 1)
                 LLAMA_LAST[0] = time.time()
 
         if p == "/api/config":
@@ -2319,93 +2630,49 @@ class H(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "ComfyUI 歷史裡沒有成功的 MiniMaxH3 生成"}, 404)
             return self.send_json(info)
 
-        if p == "/api/comfy/run":
+        if p == "/api/queue":
             try:
                 body = self.read_json()
             except Exception as e:
                 return self.send_json({"error": "bad json: %s" % e}, 400)
             if not isinstance(body, dict):
                 return self.send_json({"error": "body must be an object"}, 400)
-            if not os.path.exists(COMFY_TEMPLATE):
+            row = qenqueue(body.get("payload") if isinstance(body.get("payload"), dict) else body,
+                           mode=str(body.get("mode") or ""),
+                           title=str(body.get("title") or ""),
+                           rec_id=str(body.get("rec_id") or ""),
+                           idem=str(body.get("idem") or ""))
+            return self.send_json({"id": row["id"], "state": row["state"]}, 201)
+
+        m = re.match(r"^/api/queue/([0-9a-f]{8,32})/cancel$", p)
+        if m:
+            r = qrow(m.group(1))
+            if not r:
+                return self.send_json({"error": "not found"}, 404)
+            if r.get("state") in ("done", "error", "canceled"):
+                return self.send_json({"state": r["state"]})
+            if r.get("prompt_id"):
+                try: comfy_api("/queue", {"delete": [r["prompt_id"]]}, timeout=15)
+                except Exception: pass
                 try:
-                    if not comfy_capture_template():
-                        return self.send_json({"error": "沒有模板：先在 ComfyUI 成功跑一次工作流"}, 400)
-                except Exception as e:
-                    return self.send_json({"error": "ComfyUI 連不上: %s" % e}, 502)
-            # 圖片來源：歷史紀錄 id（優先原圖 .orig.*，沒有才用 1024 工作副本）或 dataURL
-            blob, ext = None, "jpg"
-            run_mode = str(body.get("mode") or "").lower()
-            full_prompt = str(body.get("content") or "")
-            extra_blobs = []
-            rid = str(body.get("rec_id") or "")
-            if rid and ID_RE.match(rid):
-                op, oext = orig_path(HIST, rid)
-                if op:
-                    blob, ext = open(op, "rb").read(), oext
-                else:
-                    fp = os.path.join(HIST, rid + ".full.jpg")
-                    if os.path.exists(fp):
-                        blob = open(fp, "rb").read()
-                # 從紀錄補齊：模式、完整 prompt、附加圖（FL2VA 尾幀 / REF2VA 參考圖）
-                try:
-                    with open(os.path.join(HIST, rid + ".json"), encoding="utf-8") as f:
-                        rec0 = json.load(f)
-                    if not run_mode:
-                        run_mode = str(rec0.get("mode") or "").lower()
-                    if not full_prompt:
-                        full_prompt = str(rec0.get("content") or "")
-                    for n in range(1, int(rec0.get("nmore") or 0) + 1):
-                        fp2 = os.path.join(HIST, "%s.x%d.jpg" % (rid, n))
-                        if os.path.exists(fp2):
-                            extra_blobs.append(open(fp2, "rb").read())
-                except Exception:
-                    pass
-            if blob is None:
-                blob, ext2 = parse_data_image(body.get("image"))
-                if blob is not None:
-                    ext = ext2
-            for durl in (body.get("more") or [])[:8]:
-                mb, _ = parse_data_image(durl)
-                if mb:
-                    extra_blobs.append(mb)
-            if blob is None and run_mode != "t2va":
-                return self.send_json({"error": "沒有可用的圖片（rec_id 找不到原圖，也沒帶 image）"}, 400)
-            # 影片秒數："15 seconds" / "15" / 15 -> 15
-            dur = None
-            md = re.search(r"\d+", str(body.get("dur") or ""))
-            if md:
-                dur = int(md.group(0))
+                    with QLOCK:
+                        cur = any(x.get("prompt_id") == r["prompt_id"] and x.get("state") == "running"
+                                  for x in QROWS.values())
+                    if cur: comfy_api("/interrupt", {}, timeout=15)
+                except Exception: pass
+            qset(r["id"], state="canceled", t_end=int(time.time()))
+            QWAKE.set()
+            return self.send_json({"state": "canceled"})
+
+        if p == "/api/comfy/run":
             try:
-                up_name = None
-                if blob is not None:
-                    name = "h3webui_%s.%s" % (new_id(), ext)
-                    up = comfy_upload(name, blob)
-                    up_name = up.get("name", name)
-                extra_names = []
-                for k2, mb in enumerate(extra_blobs):
-                    nm2 = "h3webui_%s_x%d.jpg" % (new_id(), k2 + 1)
-                    up2 = comfy_upload(nm2, mb)
-                    extra_names.append(up2.get("name", nm2))
-                flds = split_fields(full_prompt, run_mode)
-                graph, extra = comfy_build(str(body.get("imd") or flds["imd"]),
-                                           str(body.get("soundscape") or flds["soundscape"]),
-                                           str(body.get("music") or flds["music"]),
-                                           up_name, dur,
-                                           body.get("wf"), blob,
-                                           mode=run_mode, extra_names=extra_names, full_prompt=full_prompt)
-                payload = {"prompt": graph, "client_id": "h3-webui"}
-                if extra:
-                    payload["extra_data"] = extra
-                r = comfy_api("/prompt", payload, timeout=60)
+                body = self.read_json()
             except Exception as e:
-                detail = ""
-                if hasattr(e, "read"):
-                    try: detail = e.read().decode("utf-8", "replace")[:500]
-                    except Exception: pass
-                return self.send_json({"error": "送出失敗: %s %s" % (e, detail)}, 502)
-            if "prompt_id" not in r:
-                return self.send_json({"error": "ComfyUI 拒收: %s" % json.dumps(r, ensure_ascii=False)[:500]}, 502)
-            return self.send_json({"prompt_id": r["prompt_id"]})
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            try:
+                return self.send_json({"prompt_id": comfy_submit(body)})
+            except SubmitError as e:
+                return self.send_json({"error": e.msg}, e.code)
 
         if p == "/api/loras":
             try:
@@ -2650,6 +2917,28 @@ class H(SimpleHTTPRequestHandler):
                 save_lindex([r for r in load_lindex() if r.get("id") != rid])
             return self.send_json({"ok": True})
 
+        m = re.match(r"^/api/queue/([0-9a-f]{8,32})$", pth)
+        if m:
+            jid = m.group(1)
+            with QLOCK:
+                r = QROWS.get(jid)
+                if not r:
+                    return self.send_json({"error": "not found"}, 404)
+                if r.get("state") in ("queued", "submitting", "running"):
+                    return self.send_json({"error": "任務還在進行中，請先取消"}, 409)
+                QROWS.pop(jid, None); QLIVE.pop(jid, None); QPREV.pop(jid, None)
+                try: os.remove(os.path.join(QUEUE, jid + ".json"))
+                except OSError: pass
+                qsave(r) if False else None
+                with LOCK:
+                    tmp = QINDEX + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(sorted([qcompact(x) for x in QROWS.values()],
+                                         key=lambda x: x.get("ts") or 0, reverse=True)[:500],
+                                  f, ensure_ascii=False)
+                    os.replace(tmp, QINDEX)
+            return self.send_json({"ok": True})
+
         m = re.match(r"^/api/prompts/([^/]+)$", pth)
         if m:
             rid = unquote(m.group(1))
@@ -2717,6 +3006,9 @@ def main():
     print("  按 Ctrl+C 停止")
     print("-" * 60)
     try:
+        qload_all()
+        threading.Thread(target=qworker, daemon=True).start()
+        print("  queue    : %d 筆任務，派工已啟動" % len(QROWS))
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\n服務已停止")
