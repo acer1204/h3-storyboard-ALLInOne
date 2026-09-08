@@ -68,6 +68,7 @@ LINDEX = os.path.join(LORAS, "index.json")
 MOVIES = os.path.join(ROOT, "movies")
 QUEUE = os.path.join(ROOT, "queue")        # 任務佇列：唯一真相（ComfyUI /history 重啟就清空）
 QINDEX = os.path.join(QUEUE, "index.json")
+SETTINGS_PATH = os.path.join(ROOT, "settings.json")   # 共用設定（跨瀏覽器／跨電腦一致）
 MINDEX = os.path.join(MOVIES, "index.json")
 LESSONS_DIR = os.path.join(ROOT, "lessons")
 LESSONS_FILE = os.path.join(LESSONS_DIR, "lessons.json")
@@ -1163,6 +1164,41 @@ def apply_wf_params(g, wf):
                 ins["frame_rate"] = v
 
 
+
+# ---------------------------------------------------------------- shared settings
+# 共用設定：以前這些散在各瀏覽器的 localStorage，換一台電腦或換瀏覽器就要重設一遍。
+# 只有純視覺、真的因裝置而異的（介面語言、側欄收合）才留在本機。
+SHARED_DEFAULTS = {
+    "h3.settings.v1": None,     # 生成參數（重試次數、翻譯開關…）
+    "h3.review.v1": None,       # 審查設定（及格分數、重試上限、逐模式開關）
+    "h3.reviewsys.v1": None,    # 審查 system prompt
+    "h3.sp.v1": None,           # 生成 system prompt 相關
+    "h3.t2vasp.v1": None,       # T2VA 潤飾 system prompt
+    "h3.skills.v1": None,       # 啟用的 skill 組合
+    "h3.styleskill.v1": None,   # 舊版單選風格（相容）
+    "h3.prompt.all.v1": None,   # 選用的 prompt 組
+}
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {"rev": 0, "values": {}}
+    except Exception:
+        return {"rev": 0, "values": {}}
+
+
+def save_settings(values, rev):
+    doc = {"rev": rev, "values": values, "ts": time.strftime("%Y-%m-%d %H:%M:%S")}
+    with LOCK:
+        tmp = SETTINGS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, SETTINGS_PATH)
+    return doc
+
+
 # ---------------------------------------------------------------- queue store
 # 送 ComfyUI 的唯一真相。不能倚賴 ComfyUI 的 /history：那是記憶體字典，一重啟就清空
 # （實測輸出資料夾 2700+ 個檔案，/history 只剩 5 筆）。每筆任務一個 queue/<jid>.json。
@@ -1996,6 +2032,9 @@ class H(SimpleHTTPRequestHandler):
             except Exception: pass
             return
 
+        if p == "/api/settings":
+            return self.send_json(load_settings())
+
         if p == "/api/comfy/params":
             out = {"presets": RES_PRESETS,
                    "fps": None, "resolution_preset": None, "steps": None, "duration": None,
@@ -2772,6 +2811,20 @@ class H(SimpleHTTPRequestHandler):
             if not info:
                 return self.send_json({"error": "ComfyUI 歷史裡沒有成功的 MiniMaxH3 生成"}, 404)
             return self.send_json(info)
+
+        if p == "/api/settings":
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            if not isinstance(body, dict) or not isinstance(body.get("values"), dict):
+                return self.send_json({"error": "body 需要 {values:{...}}"}, 400)
+            cur = load_settings()
+            vals = dict(cur.get("values") or {})
+            for k, v in body["values"].items():
+                if k in SHARED_DEFAULTS:
+                    vals[k] = v
+            return self.send_json(save_settings(vals, int(cur.get("rev") or 0) + 1))
 
         if p == "/api/queue":
             try:

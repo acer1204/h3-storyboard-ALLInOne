@@ -864,19 +864,62 @@ const SKEY="h3.settings.v1", SPKEY="h3.sp.v1", VKEY="h3.view.v1";
 const FIELDS={tr:"#tr",
               retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
               wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur"};
+/* 共用設定：這些鍵存在伺服器端 settings.json，換瀏覽器或換電腦都是同一份。
+   其餘（介面語言、側欄收合、目前檢視）留在本機，那些本來就該因裝置而異。
+   讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），寫入同時更新本機與伺服器。 */
+const SHARED_KEYS = new Set(["h3.settings.v1","h3.review.v1","h3.reviewsys.v1","h3.sp.v1",
+                             "h3.t2vasp.v1","h3.skills.v1","h3.styleskill.v1","h3.prompt.all.v1"]);
+let SHARED = {}, sharedTimer = null;
+function pushShared(){
+  clearTimeout(sharedTimer);
+  sharedTimer = setTimeout(() => {
+    if (!onServer) return;
+    fetch("/api/settings", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({values: SHARED})}).catch(() => {});
+  }, 400);
+}
 const store={
-  get(k){try{return localStorage.getItem(k)}catch(e){return null}},
-  set(k,v){try{localStorage.setItem(k,v);return true}catch(e){return false}},
-  del(k){try{localStorage.removeItem(k)}catch(e){}}
+  get(k){
+    if (SHARED_KEYS.has(k) && Object.prototype.hasOwnProperty.call(SHARED, k)){
+      const v = SHARED[k];
+      return v === null || v === undefined ? null : String(v);
+    }
+    try{return localStorage.getItem(k)}catch(e){return null}
+  },
+  set(k,v){
+    if (SHARED_KEYS.has(k)){ SHARED[k] = String(v); pushShared(); }
+    try{localStorage.setItem(k,v);return true}catch(e){return false}
+  },
+  del(k){
+    if (SHARED_KEYS.has(k)){ delete SHARED[k]; pushShared(); }
+    try{localStorage.removeItem(k)}catch(e){}
+  }
 };
+/* 開頁時先取回共用設定；伺服器還沒有的鍵，用本機既有值補上去（一次性遷移）。 */
+async function loadShared(){
+  if (!onServer) return;
+  try{
+    const j = await (await fetch("/api/settings")).json();
+    SHARED = (j && j.values) || {};
+  }catch(e){ SHARED = {}; }
+  let migrated = false;
+  for (const k of SHARED_KEYS){
+    if (Object.prototype.hasOwnProperty.call(SHARED, k) && SHARED[k] != null) continue;
+    let local = null;
+    try{ local = localStorage.getItem(k); }catch(e){}
+    if (local != null){ SHARED[k] = local; migrated = true; }
+  }
+  if (migrated) pushShared();
+}
 /* 伺服器位址不在前端：llama/ComfyUI 位址一律存在伺服器端 config.json，由後端代理連線 */
-(() => {
+function applySettings(){
   const q = new URLSearchParams(location.search);
   for (const [k,el] of Object.entries(FIELDS)) if (q.has(k)) $(el).value = q.get(k);
   let saved={}; try{ saved = JSON.parse(store.get(SKEY)||"{}") }catch(e){}
   for (const [k,el] of Object.entries(FIELDS))
     if (saved[k] != null && saved[k] !== "") $(el).value = saved[k];
-})();
+}
+applySettings();   // 先用本機值畫面不空白；共用設定取回後 loadShared() 會再套一次
 function saveSettings(){
   const o={}; for (const [k,el] of Object.entries(FIELDS)) o[k]=$(el).value;
   const ok = store.set(SKEY, JSON.stringify(o));
@@ -3083,7 +3126,12 @@ refreshLessons();
 refreshRequired();
 loadWfParams();
 renderPrompts();   // 先同步畫出內建，再去伺服器補其他組
-loadPrompts().then(() => { setMode(curMode()); });
+// 共用設定要先取回，之後所有 store.get 才讀得到伺服器上的值（skill 組合、審查設定…）
+loadShared().then(() => {
+  if (typeof applySettings === "function") applySettings();
+  if (typeof rvLoad === "function") rvLoad();
+  return loadPrompts();
+}).then(() => { setMode(curMode()); });
 
 /* ================= ComfyUI 整合 ================= */
 const CAPI = "/api/comfy";
@@ -3582,6 +3630,15 @@ function rvCfg(){
                              t2vaAuto: false, t2vaPass: 7}, c);
   out.modes = out.modes || {};
   return out;
+}
+/* 共用設定取回後重畫審查面板（勾選、分數、重試上限） */
+function rvLoad(){
+  const c = rvCfg();
+  const set = (id, v) => { const el = $(id); if (el) { if (el.type === "checkbox") el.checked = !!v; else el.value = v; } };
+  set("#rvT2va", (c.modes||{}).t2va); set("#rvI2va", (c.modes||{}).i2va);
+  set("#rvFl2va", (c.modes||{}).fl2va); set("#rvL2va", (c.modes||{}).l2va);
+  set("#rvRef2va", (c.modes||{}).ref2va); set("#rvMovie", (c.modes||{}).movie);
+  set("#rvPass", c.passScore); set("#rvRetry", c.retry);
 }
 function rvPersist(){
   const c = {modes: {t2va: $("#rvT2va").checked, i2va: $("#rvI2va").checked, fl2va: $("#rvFl2va").checked,

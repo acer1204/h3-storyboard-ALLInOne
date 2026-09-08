@@ -22,3 +22,4 @@ loras/
 movies/
 *.bak
 queue/
+settings.json
