@@ -1715,11 +1715,13 @@ function setSlot(i, f){
   const S = slotsArr();
   if (S[i] && S[i].url){ try{ URL.revokeObjectURL(S[i].url); }catch(e){} }
   S[i] = f ? {file: f, url: URL.createObjectURL(f)} : null;
+  saveDraft();
 }
 function clearSlots(){
   const S = slotsArr();
   S.forEach(s => { if (s && s.url){ try{ URL.revokeObjectURL(s.url); }catch(e){} } });
   SLOTS_BY[curMode()] = [];
+  saveDraft();
 }
 
 /* ===== 拖曳重排：把 from 格的圖插到 to 格位置（保持其餘相對順序、自動壓實空格） ===== */
@@ -1815,8 +1817,10 @@ function composeSlots(){
   // objectURL 交棒給 item，格子清空但不 revoke
   it.previews = picked.map(x => x.s.url);
   it.preview = it.previews[0];
+  picked.forEach((x, n) => { if (x.s._hash) it.files[n]._hash = x.s._hash; });
   items.push(it);
   SLOTS_BY[curMode()] = [];
+  saveDraft();
   renderSlots();
   render(); $("#run").disabled = !modeItems().length;
   $("#prog").textContent = `${modeItems().length} 筆待處理`;
@@ -3131,7 +3135,7 @@ loadShared().then(() => {
   if (typeof applySettings === "function") applySettings();
   if (typeof rvLoad === "function") rvLoad();
   return loadPrompts();
-}).then(() => { setMode(curMode()); });
+}).then(() => { setMode(curMode()); return loadDraft(); }).then(() => { setMode(curMode()); });
 
 /* ================= ComfyUI 整合 ================= */
 const CAPI = "/api/comfy";
@@ -3263,6 +3267,95 @@ $("#wfFile").onchange = async e => {
   }catch(err){ $("#wfSelStat").textContent = "上傳失敗：" + err.message; }
 };
 
+
+
+/* ================= 草稿保留 =================
+   已放進格子、或已加入生成清單但還沒送出的工作，存到伺服器。不小心 F5、換瀏覽器、
+   甚至換一台電腦都能接續。圖片本身走既有的 uploads/（內容雜湊去重），草稿只存 hash，
+   所以同一張圖重複出現不會佔額外空間。 */
+let DRAFT_T = null, DRAFT_READY = false;
+
+async function regUpload(file){
+  const e = await encode(file);
+  const r = await (await fetch("/api/uploads/register", {method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({full: e.b64, thumb: e.thumb, orig: e.orig || null, name: file.name})})).json();
+  return r.hash ? {hash: r.hash, name: file.name} : null;
+}
+async function fileFromHash(h, name){
+  const r = await fetch("/api/uploads/" + h + ".orig.png").catch(() => null);
+  const ok = r && r.ok ? r : await fetch("/api/uploads/" + h + ".jpg");
+  if (!ok || !ok.ok) return null;
+  const b = await ok.blob();
+  return new File([b], name || (h + ".jpg"), {type: b.type || "image/jpeg"});
+}
+function saveDraft(){
+  if (!onServer || !DRAFT_READY) return;
+  clearTimeout(DRAFT_T);
+  DRAFT_T = setTimeout(async () => {
+    const d = {slots: {}, items: [], t2va: $("#t2vaInput") ? $("#t2vaInput").value : ""};
+    try{
+      for (const [m, arr] of Object.entries(SLOTS_BY)){
+        const out = [];
+        for (const sl of (arr || [])){
+          if (!sl || !sl.file) { out.push(null); continue; }
+          if (!sl._hash){ const u = await regUpload(sl.file); sl._hash = u && u.hash; sl._name = sl.file.name; }
+          out.push(sl._hash ? {hash: sl._hash, name: sl._name} : null);
+        }
+        if (out.some(Boolean)) d.slots[m] = out;
+      }
+      for (const it of items){
+        if (it.state === "running") continue;
+        const rec = {mode: it.mode, name: it.name, note: it.note || "",
+                     rawStory: it.rawStory || "", polished: it.polished || "",
+                     skills: it.skills || [], state: it.state, files: []};
+        for (const f of (it.files || [])){
+          if (!f._hash){ const u = await regUpload(f); f._hash = u && u.hash; }
+          if (f._hash) rec.files.push({hash: f._hash, name: f.name});
+        }
+        d.items.push(rec);
+      }
+      await fetch("/api/drafts", {method:"POST", headers:{"Content-Type":"application/json"},
+                                  body: JSON.stringify(d)});
+    }catch(e){}
+  }, 900);
+}
+async function loadDraft(){
+  if (!onServer) return;
+  let d = {};
+  try{ d = await (await fetch("/api/drafts")).json(); }catch(e){ d = {}; }
+  try{
+    for (const [m, arr] of Object.entries(d.slots || {})){
+      const out = [];
+      for (const e of (arr || [])){
+        if (!e || !e.hash){ out.push(null); continue; }
+        const f = await fileFromHash(e.hash, e.name);
+        out.push(f ? {file: f, url: URL.createObjectURL(f), _hash: e.hash, _name: e.name} : null);
+      }
+      SLOTS_BY[m] = out;
+    }
+    for (const rec of (d.items || [])){
+      const files = [];
+      for (const e of (rec.files || [])){
+        const f = await fileFromHash(e.hash, e.name);
+        if (f){ f._hash = e.hash; files.push(f); }
+      }
+      const previews = files.map(f => URL.createObjectURL(f));
+      items.push({mode: rec.mode, files, file: files[0] || null,
+                  name: rec.name || (files.map(f=>f.name).join(" ＋ ")),
+                  state: "pending", note: rec.note || "",
+                  rawStory: rec.rawStory || "", polished: rec.polished || "",
+                  skills: rec.skills || [], t2vaTab: 0,
+                  preview: previews[0] || null, previews});
+    }
+    if (d.t2va && $("#t2vaInput")) $("#t2vaInput").value = d.t2va;
+    if (typeof renderSlots === "function") renderSlots();
+    if (typeof render === "function") render();
+    if ($("#run")) $("#run").disabled = !modeItems().length;
+    updateNavCounts();
+  }catch(e){}
+  DRAFT_READY = true;
+}
 
 /* ================= 任務清單（伺服器端佇列） =================
    送 ComfyUI 的生成一律排進伺服器的 queue/，所以重新整理、換瀏覽器、換電腦都看得到同一份，

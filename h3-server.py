@@ -69,6 +69,7 @@ MOVIES = os.path.join(ROOT, "movies")
 QUEUE = os.path.join(ROOT, "queue")        # 任務佇列：唯一真相（ComfyUI /history 重啟就清空）
 QINDEX = os.path.join(QUEUE, "index.json")
 SETTINGS_PATH = os.path.join(ROOT, "settings.json")   # 共用設定（跨瀏覽器／跨電腦一致）
+DRAFTS_PATH = os.path.join(ROOT, "drafts.json")       # 未送出的工作（F5／換電腦都能接續）
 MINDEX = os.path.join(MOVIES, "index.json")
 LESSONS_DIR = os.path.join(ROOT, "lessons")
 LESSONS_FILE = os.path.join(LESSONS_DIR, "lessons.json")
@@ -1199,6 +1200,25 @@ def save_settings(values, rev):
     return doc
 
 
+
+def load_drafts():
+    try:
+        with open(DRAFTS_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_drafts(d):
+    with LOCK:
+        tmp = DRAFTS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+        os.replace(tmp, DRAFTS_PATH)
+    return d
+
+
 # ---------------------------------------------------------------- queue store
 # 送 ComfyUI 的唯一真相。不能倚賴 ComfyUI 的 /history：那是記憶體字典，一重啟就清空
 # （實測輸出資料夾 2700+ 個檔案，/history 只剩 5 筆）。每筆任務一個 queue/<jid>.json。
@@ -2035,6 +2055,9 @@ class H(SimpleHTTPRequestHandler):
         if p == "/api/settings":
             return self.send_json(load_settings())
 
+        if p == "/api/drafts":
+            return self.send_json(load_drafts())
+
         if p == "/api/comfy/params":
             out = {"presets": RES_PRESETS,
                    "fps": None, "resolution_preset": None, "steps": None, "duration": None,
@@ -2825,6 +2848,33 @@ class H(SimpleHTTPRequestHandler):
                 if k in SHARED_DEFAULTS:
                     vals[k] = v
             return self.send_json(save_settings(vals, int(cur.get("rev") or 0) + 1))
+
+        if p == "/api/drafts":
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            if not isinstance(body, dict):
+                return self.send_json({"error": "body must be an object"}, 400)
+            return self.send_json(save_drafts(body))
+
+        # 草稿用的圖片：登記進 uploads（內容雜湊去重），草稿只存 hash
+        if p == "/api/uploads/register":
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            full, _ = parse_data_image((body or {}).get("full"))
+            if full is None:
+                return self.send_json({"error": "需要 full 的 dataURL"}, 400)
+            thumb, _ = parse_data_image((body or {}).get("thumb"))
+            orig, oext = parse_data_image((body or {}).get("orig"))
+            try:
+                h = upload_register(full, thumb or b"", str((body or {}).get("name") or "draft.jpg"),
+                                    orig or b"", oext if orig else "")
+            except Exception as e:
+                return self.send_json({"error": str(e)[:200]}, 500)
+            return self.send_json({"hash": h})
 
         if p == "/api/queue":
             try:
