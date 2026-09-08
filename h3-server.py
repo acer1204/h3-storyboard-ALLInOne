@@ -1067,6 +1067,27 @@ RES_PRESETS = ["144p", "240p", "360p", "480p", "540p", "576p", "720p", "900p", "
                "4.75 MP - 2K Pro", "6.50 MP - Production", "8.30 MP - UHD"]
 
 
+def fit_canvas(img_w, img_h, base_w, base_h, mult=16):
+    """依輸入圖的長寬比算出畫布尺寸，像素預算沿用模板的 width*height。
+    v18 的 timeline_data.resolution.aspect="auto" 只有 ComfyUI 的瀏覽器 JS 會執行；
+    我們是直接把 API 圖 POST 給 /prompt，沒有瀏覽器，Director 只會用 width/height
+    這兩個 widget 的字面值。所以「依圖決定比例」必須由這裡算好再寫進去。"""
+    try:
+        img_w, img_h = int(img_w), int(img_h)
+        base_w, base_h = int(base_w), int(base_h)
+    except (TypeError, ValueError):
+        return None
+    if min(img_w, img_h, base_w, base_h) <= 0:
+        return None
+    budget = base_w * base_h                      # 維持模板的畫質檔位（例如 0.52 MP）
+    ratio = img_w / img_h
+    w = (budget * ratio) ** 0.5
+    h = w / ratio if ratio else 0
+    w = max(mult, int(round(w / mult)) * mult)
+    h = max(mult, int(round(h / mult)) * mult)
+    return w, h
+
+
 def apply_wf_params(g, wf):
     """把工作流預設參數寫進節點圖（v18）。缺項就不動模板值。
     比例／畫質／放大解析度一律不碰——它們在 Director 的 timeline_data.resolution，
@@ -1270,7 +1291,13 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
     if not done:
         raise ValueError("模板的 timeline 裡沒有圖片項目")
 
-    # 比例完全交給 v18：timeline_data.resolution.aspect 預設 "auto"，Director 會依輸入圖決定。
+    # 比例：依輸入圖的長寬比重算 Director 的 width/height（像素預算沿用模板）。
+    # 沒有輸入圖（T2VA）就完全不動，直接用模板值。
+    if image_blob:
+        iw, ih = _img_dims(image_blob)
+        fit = fit_canvas(iw, ih, ins.get("width"), ins.get("height")) if (iw and ih) else None
+        if fit:
+            ins["width"], ins["height"] = fit
     apply_wf_params(g, wf)
 
     # 影片秒數：網頁寫 prompt 時用的時長要跟 Director 跑的一致（時間戳才不會超出）
