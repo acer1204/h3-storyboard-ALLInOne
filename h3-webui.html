@@ -226,7 +226,9 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   border:1px solid var(--line);border-radius:11px;padding:11px;margin-bottom:9px;background:var(--panel)}
 .qrow .qthumb{width:132px;border-radius:8px;overflow:hidden;background:var(--code);
   aspect-ratio:3/4;display:grid;place-items:center;font-size:26px;color:var(--faint)}
-.qrow .qthumb img,.qrow .qthumb video{width:100%;height:100%;object-fit:cover;display:block}
+.qrow .qthumb img,.qrow .qthumb video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+.qrow .qthumb video:fullscreen{width:100%;height:100%;object-fit:contain;background:#000}
+.qrow .qthumb video::backdrop{background:#000}
 .qrow .qmeta{min-width:0}
 .qrow .qtitle{font-size:13.5px;font-weight:600;line-height:1.4;word-break:break-word}
 .qrow .qsub{font-size:11.5px;color:var(--mut);margin-top:3px;font-family:ui-monospace,Consolas,monospace}
@@ -236,6 +238,26 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .qb-queued{color:var(--mut)} .qb-running{color:var(--acc);border-color:var(--acc)}
 .qb-done{color:var(--ok);border-color:var(--ok)} .qb-error{color:var(--warn);border-color:var(--warn)}
 .qb-canceled{color:var(--faint)}
+.qsec{font-size:11.5px;color:var(--faint);margin:16px 0 9px;letter-spacing:.05em;
+  font-family:ui-monospace,Consolas,monospace}
+.qrow.qbig{grid-template-columns:260px 1fr auto}
+.qrow.qbig .qthumb{width:260px}
+#qdone{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px}
+.qcard{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+.qcard .qthumb{width:100%;aspect-ratio:3/4;background:var(--code);display:grid;place-items:center;
+  font-size:24px;color:var(--faint)}
+.qcard .qthumb img,.qcard .qthumb video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+.qcard .qthumb video:fullscreen{width:100%;height:100%;object-fit:contain;background:#000}
+.qcard .qfoot{display:flex;align-items:center;gap:5px;padding:5px 7px}
+.qcard .qspacer{flex:1}
+.qcard .qinfo{position:absolute;left:0;right:0;top:0;background:rgba(10,12,16,.9);color:#e9edf3;
+  padding:8px 9px;font-size:11px;line-height:1.55;opacity:0;transition:opacity .13s;pointer-events:none;
+  font-family:ui-monospace,Consolas,monospace;word-break:break-all}
+.qcard:hover .qinfo{opacity:1}
+.qcard .qacts a,.qcard .qacts button{border:1px solid var(--line);background:transparent;color:var(--mut);
+  border-radius:6px;padding:0 6px;font-size:11px;cursor:pointer;text-decoration:none;line-height:1.7;
+  font-family:inherit}
+.qcard .qacts a:hover,.qcard .qacts button:hover{color:var(--acc);border-color:var(--acc)}
 .hcell .cap{padding:5px 8px;font-size:10.5px;color:var(--mut);line-height:1.4;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
 .hcell .cap.t{color:var(--faint);padding-top:0;padding-bottom:7px}
@@ -582,7 +604,10 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <button class="ghost mini" id="qclear">清除已完成</button>
       <span class="status" id="qcount" style="margin:0"></span>
     </div>
-    <div id="qlist"></div>
+    <div id="qactive"></div>
+    <div class="qsec" id="qdonehdr" style="display:none">已完成 · 滑鼠移到卡片上看詳細</div>
+    <div id="qdone"></div>
+    <span class="hint" id="qempty">還沒有任務</span>
   </div>
 </section>
 
@@ -3379,44 +3404,132 @@ function qStateLabel(st){
   return {queued:"排隊中", submitting:"送出中", running:"生成中",
           done:"完成", error:"失敗", canceled:"已取消"}[st] || st;
 }
+const QEL = new Map();               // id -> {el, form}   form: "big" | "card"
+const QACT_ST = ["queued","submitting","running"];
+function qThumbSpec(r){
+  if (r.state === "done" && r.video)
+    return {kind:"video", ctl:true, src:`${MAPI}/file/${r.video.split("/").map(encodeURIComponent).join("/")}`};
+  if (QACT_ST.includes(r.state) && r.has_preview)
+    return {kind: String(r.prev_mime || "").startsWith("video/") ? "video" : "img", ctl:false,
+            src:`${QAPI}/${r.id}/preview?v=${r.prev_tick || 0}`};
+  return {kind:"text", src:(r.mode === "t2va" ? "📝" : "🎬")};
+}
+// 只換 src，不重建元素：重建 <video> 等於把播放中的影片砍掉重來（也會被踢出全螢幕）
+function qSyncThumb(box, spec){
+  if (!box) return;
+  const cur = box.firstElementChild;
+  const kind = !cur ? "text" : (cur.tagName === "VIDEO" ? "video" : cur.tagName === "IMG" ? "img" : "text");
+  if (kind === spec.kind && (spec.kind !== "video" || cur.controls === !!spec.ctl)){
+    if (spec.kind === "text"){ if (box.textContent !== spec.src) box.textContent = spec.src; return; }
+    if (cur.getAttribute("src") !== spec.src) cur.setAttribute("src", spec.src);
+    return;
+  }
+  if (spec.kind === "text"){ box.textContent = spec.src; return; }
+  const el = document.createElement(spec.kind === "video" ? "video" : "img");
+  if (spec.kind === "video"){
+    el.muted = true; el.playsInline = true; el.preload = "metadata";
+    if (spec.ctl) el.controls = true; else { el.autoplay = true; el.loop = true; }
+  } else el.alt = "預覽";
+  el.setAttribute("src", spec.src);
+  box.textContent = ""; box.appendChild(el);
+}
+const qSet = (el, sel, html, show) => {
+  const n = el.querySelector(sel); if (!n) return;
+  if (show === false){ if (n.style.display !== "none") n.style.display = "none"; return; }
+  if (n.style.display === "none") n.style.display = "";
+  if (n.innerHTML !== html) n.innerHTML = html;
+};
+const qWhen = r => r.ts ? new Date(r.ts * 1000).toLocaleString() : "";
+const qModeName = r => r.mode ? esc(MODES[r.mode] || r.mode) : "";
+const qFileURL = r => r.video ? `${MAPI}/file/${r.video.split("/").map(encodeURIComponent).join("/")}` : "";
+
+// 進行中：大卡，預覽看得清楚
+function qMakeBig(id){
+  const el = document.createElement("div");
+  el.className = "qrow qbig"; el.dataset.id = id;
+  el.innerHTML = `<div class="qthumb"></div>
+    <div class="qmeta">
+      <div class="qtitle"></div>
+      <div class="qsub qs-main"></div>
+      <div class="qsub qs-err" style="color:var(--warn);display:none"></div>
+      <div class="qbar"><i></i></div>
+      <div class="qsub qs-prev" style="display:none"></div>
+    </div>
+    <div class="row qacts" style="gap:6px;flex-direction:column;align-items:stretch"></div>`;
+  return el;
+}
+function qUpdateBig(el, r){
+  qSet(el, ".qtitle", esc(r.title || "(未命名)"));
+  qSet(el, ".qs-main", `<span class="qbadge qb-${r.state}">${qStateLabel(r.state)}</span>`
+    + (r.mode ? " · " + qModeName(r) : "") + (r.ts ? " · " + qWhen(r) : ""));
+  qSet(el, ".qs-err", esc(r.error || ""), !!r.error);
+  qSet(el, ".qs-prev", "預覽 " + esc(r.prev_step || ""), !!r.prev_step);
+  const bar = el.querySelector(".qbar");
+  const w = ((r.progress != null) ? Math.round(r.progress * 100) : 8) + "%";
+  if (bar.firstElementChild.style.width !== w) bar.firstElementChild.style.width = w;
+  qSyncThumb(el.querySelector(".qthumb"), qThumbSpec(r));
+  const acts = el.querySelector(".qacts");
+  if (acts.dataset.sig !== r.state){
+    acts.dataset.sig = r.state;
+    acts.innerHTML = `<button class="ghost mini" onclick="qCancel('${r.id}')">取消</button>`;
+  }
+}
+
+// 已完成：小卡，滑過才顯示細節
+function qMakeCard(id){
+  const el = document.createElement("div");
+  el.className = "qcard"; el.dataset.id = id;
+  el.innerHTML = `<div class="qthumb"></div>
+    <div class="qinfo"></div>
+    <div class="qfoot"><span class="qbadge"></span><span class="qspacer"></span><span class="qacts"></span></div>`;
+  return el;
+}
+function qUpdateCard(el, r){
+  qSyncThumb(el.querySelector(".qthumb"), qThumbSpec(r));
+  const b = el.querySelector(".qfoot .qbadge");
+  const cls = "qbadge qb-" + r.state;
+  if (b.className !== cls) b.className = cls;
+  const lbl = qStateLabel(r.state) + (r.mode ? " · " + (MODES[r.mode] || r.mode) : "");
+  if (b.textContent !== lbl) b.textContent = lbl;
+  qSet(el, ".qinfo", `<b>${esc(r.title || "(未命名)")}</b>`
+    + (r.ts ? `<br>${qWhen(r)}` : "")
+    + (r.video ? `<br>${esc(r.video)}` : "")
+    + (r.error ? `<br><span style="color:var(--warn)">${esc(r.error)}</span>` : ""));
+  const acts = el.querySelector(".qfoot .qacts");
+  const sig = r.state + "|" + (r.video || "");
+  if (acts.dataset.sig !== sig){
+    acts.dataset.sig = sig;
+    acts.innerHTML = (r.video ? `<a href="${qFileURL(r)}?dl=1" title="下載">⬇</a>` : "")
+      + `<button onclick="qDelete('${r.id}')" title="移除">✕</button>`;
+  }
+}
+
+function qSync(box, rows, form){
+  const fs = document.fullscreenElement;
+  rows.forEach((r, i) => {
+    let ent = QEL.get(r.id);
+    if (!ent || ent.form !== form){                       // 狀態換邊時才重建，輪詢時不會
+      if (ent) ent.el.remove();
+      ent = {el: form === "big" ? qMakeBig(r.id) : qMakeCard(r.id), form};
+      QEL.set(r.id, ent);
+    }
+    (form === "big" ? qUpdateBig : qUpdateCard)(ent.el, r);
+    // 搬動節點會把全螢幕中的影片踢出來，順序沒變就別碰
+    if (box.children[i] !== ent.el && !(fs && ent.el.contains(fs)))
+      box.insertBefore(ent.el, box.children[i] || null);
+  });
+}
 function renderQueue(){
-  const box = $("#qlist"); if (!box) return;
-  const act = QROWS_C.filter(r => ["queued","submitting","running"].includes(r.state)).length;
-  $("#qcount").textContent = QROWS_C.length ? `${QROWS_C.length} 筆 · 進行中 ${act}` : "";
-  box.innerHTML = QROWS_C.map(r => {
-    const running = ["submitting","running"].includes(r.state);
-    const thumb = r.state === "done" && r.video
-      ? `<video src="${MAPI}/file/${r.video.split("/").map(encodeURIComponent).join("/")}" muted playsinline controls preload="metadata"></video>`
-      : (running && r.has_preview
-         ? (String(r.prev_mime || "").startsWith("video/")
-            ? `<video src="${QAPI}/${r.id}/preview?v=${r.prev_tick || 0}" autoplay loop muted playsinline></video>`
-            : `<img src="${QAPI}/${r.id}/preview?v=${r.prev_tick || 0}" alt="預覽">`)
-         : (r.mode === "t2va" ? "📝" : "🎬"));
-    const pct = (r.progress != null) ? Math.round(r.progress * 100) : null;
-    return `<div class="qrow">
-      <div class="qthumb">${thumb}</div>
-      <div class="qmeta">
-        <div class="qtitle">${esc(r.title || "(未命名)")}</div>
-        <div class="qsub">
-          <span class="qbadge qb-${r.state}">${qStateLabel(r.state)}</span>
-          ${r.mode ? " · " + esc((MODES[r.mode] || r.mode)) : ""}
-          ${r.ts ? " · " + new Date(r.ts * 1000).toLocaleString() : ""}
-        </div>
-        ${r.error ? `<div class="qsub" style="color:var(--warn)">${esc(r.error)}</div>` : ""}
-        ${r.video ? `<div class="qsub">${esc(r.video)}</div>` : ""}
-        ${running ? `<div class="qbar"><i style="width:${pct == null ? 8 : pct}%"></i></div>` : ""}
-        ${running && r.prev_step ? `<div class="qsub">預覽 ${esc(r.prev_step)}</div>` : ""}
-      </div>
-      <div class="row" style="gap:6px;flex-direction:column;align-items:stretch">
-        ${running || r.state === "queued"
-          ? `<button class="ghost mini" onclick="qCancel('${r.id}')">取消</button>` : ""}
-        ${r.state === "done" && r.video
-          ? `<a class="ghost mini" style="text-align:center;text-decoration:none;padding:6px 10px;border:1px solid var(--line);border-radius:8px"
-               href="${MAPI}/file/${r.video.split("/").map(encodeURIComponent).join("/")}?dl=1">下載</a>` : ""}
-        ${["done","error","canceled"].includes(r.state)
-          ? `<button class="ghost mini" onclick="qDelete('${r.id}')">移除</button>` : ""}
-      </div></div>`;
-  }).join("") || '<span class="hint">還沒有任務</span>';
+  const act = QROWS_C.filter(r => QACT_ST.includes(r.state));
+  const fin = QROWS_C.filter(r => !QACT_ST.includes(r.state));
+  $("#qcount").textContent = QROWS_C.length ? `${QROWS_C.length} 筆 · 進行中 ${act.length}` : "";
+  const aBox = $("#qactive"), dBox = $("#qdone"); if (!aBox || !dBox) return;
+  qSync(aBox, act, "big");
+  qSync(dBox, fin, "card");
+  const live = new Set(QROWS_C.map(r => r.id));
+  for (const [id, ent] of [...QEL]) if (!live.has(id)){ ent.el.remove(); QEL.delete(id); }
+  $("#qdonehdr").style.display = fin.length ? "" : "none";
+  $("#qempty").style.display = QROWS_C.length ? "none" : "";
 }
 window.qCancel = async id => { try{ await fetch(`${QAPI}/${id}/cancel`, {method:"POST"}); }catch(e){} loadQueue(); };
 window.qDelete = async id => { try{ await fetch(`${QAPI}/${id}`, {method:"DELETE"}); }catch(e){} loadQueue(); };
