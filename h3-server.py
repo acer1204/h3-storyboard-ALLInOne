@@ -52,7 +52,7 @@ H3 Prompt 批次產生器 - 本機服務
   POST   /api/loras             -> 新增或更新 {id?, name, main, subs}
   DELETE /api/loras/<id>        -> 刪除
 """
-import argparse, base64, hashlib, io, json, os, re, subprocess, sys, threading, time
+import argparse, base64, hashlib, io, json, os, re, socket, struct, subprocess, sys, threading, time
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, parse_qs
 
@@ -1433,6 +1433,144 @@ def qworker():
         QWAKE.clear()
 
 
+
+# ---------------------------------------------------------------- comfy websocket
+# ComfyUI 的進度與預覽事件是「單播給單一 clientId」的：同一個 id 開第二條連線，
+# 第一條會靜默收不到東西。所以整台機器只由伺服器開這一條，再分發給所有瀏覽器。
+# clientId 必須與送單時用的 client_id 一致，否則收不到自己送的任務的事件。
+WS_CLIENT_ID = "h3-webui"
+
+
+def _ws_connect():
+    import base64, hashlib
+    u = urlparse(CONFIG["comfy_url"])
+    host = u.hostname or "127.0.0.1"
+    port = u.port or (443 if u.scheme == "https" else 80)
+    key = base64.b64encode(os.urandom(16)).decode()
+    req = ("GET /ws?clientId=%s HTTP/1.1" % WS_CLIENT_ID,
+           "Host: %s:%d" % (host, port), "Upgrade: websocket", "Connection: Upgrade",
+           "Sec-WebSocket-Key: " + key, "Sec-WebSocket-Version: 13", "", "")
+    sock = socket.create_connection((host, port), timeout=15)
+    sock.sendall(("\r\n".join(req)).encode())
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        d = sock.recv(4096)
+        if not d:
+            raise IOError("websocket 握手中斷")
+        buf += d
+    head, rest = buf.split(b"\r\n\r\n", 1)
+    if b"101" not in head.split(b"\r\n")[0]:
+        raise IOError("websocket 握手失敗: %s" % head.split(b"\r\n")[0][:80])
+    return sock, rest
+
+
+def _ws_frames(sock, rest):
+    """產出 (opcode, payload)。只處理伺服器->用戶端方向（不會有 mask）。"""
+    buf = rest
+    while True:
+        while len(buf) < 2:
+            d = sock.recv(65536)
+            if not d:
+                return
+            buf += d
+        b0, b1 = buf[0], buf[1]
+        op = b0 & 0x0F
+        ln = b1 & 0x7F
+        i = 2
+        if ln == 126:
+            while len(buf) < 4:
+                buf += sock.recv(65536)
+            ln = struct.unpack(">H", buf[2:4])[0]; i = 4
+        elif ln == 127:
+            while len(buf) < 10:
+                buf += sock.recv(65536)
+            ln = struct.unpack(">Q", buf[2:10])[0]; i = 10
+        while len(buf) < i + ln:
+            d = sock.recv(65536)
+            if not d:
+                return
+            buf += d
+        yield op, buf[i:i + ln]
+        buf = buf[i + ln:]
+
+
+def _ws_job_for(pid):
+    """prompt_id -> 佇列任務 id。沒帶 prompt_id 的事件套用到目前唯一在跑的那筆。"""
+    with QLOCK:
+        if pid:
+            for r in QROWS.values():
+                if r.get("prompt_id") == pid:
+                    return r["id"]
+            return None
+        running = [r for r in QROWS.values() if r.get("state") == "running"]
+        return running[0]["id"] if len(running) == 1 else None
+
+
+def wsworker():
+    """唯一一條 ComfyUI websocket：把進度與預覽收進記憶體供 /api/queue 分發。"""
+    while True:
+        sock = None
+        try:
+            sock, rest = _ws_connect()
+            cur = None
+            for op, payload in _ws_frames(sock, rest):
+                if op == 8:
+                    break
+                if op == 1:
+                    try:
+                        msg = json.loads(payload.decode("utf-8", "replace"))
+                    except Exception:
+                        continue
+                    t = msg.get("type"); d = msg.get("data") or {}
+                    if t == "executing":
+                        cur = _ws_job_for(d.get("prompt_id")) or cur
+                        if d.get("node") is None and cur:
+                            with QLOCK:
+                                QLIVE.pop(cur, None)
+                            cur = None
+                    elif t == "progress":
+                        jid = _ws_job_for(d.get("prompt_id")) or cur
+                        mx = d.get("max") or 0
+                        if jid and mx:
+                            with QLOCK:
+                                QLIVE[jid] = {"progress": min(1.0, (d.get("value") or 0) / mx),
+                                              "stage": str(d.get("node") or "")}
+                    elif t == "kj_preview_override":
+                        # ModelPreviewOverrideKJ 的即時預覽：base64，mime 可能是 video/mp4 或 image/webp
+                        jid = cur or _ws_job_for(None)
+                        b64 = d.get("image")
+                        if jid and b64:
+                            try:
+                                raw = base64.b64decode(b64)
+                            except Exception:
+                                raw = None
+                            if raw:
+                                with QLOCK:
+                                    QPREV[jid] = (str(d.get("mime") or "image/webp"), raw)
+                                    live = QLIVE.get(jid) or {}
+                                    if d.get("total"):
+                                        live["prev_step"] = "%s/%s" % (d.get("step"), d.get("total"))
+                                    live["prev_tick"] = (live.get("prev_tick") or 0) + 1
+                                    QLIVE[jid] = live
+                    elif t in ("execution_error", "execution_interrupted"):
+                        jid = _ws_job_for(d.get("prompt_id")) or cur
+                        if jid:
+                            with QLOCK:
+                                QLIVE.pop(jid, None); QPREV.pop(jid, None)
+                elif op == 2 and cur:
+                    # ComfyUI 內建的二進位預覽：前 8 bytes 是事件型別與影像格式
+                    if len(payload) > 8:
+                        with QLOCK:
+                            QPREV[cur] = ("image/jpeg", payload[8:])
+        except Exception as e:
+            sys.stderr.write("  comfy ws: " + str(e)[:160] + chr(10))
+        finally:
+            try:
+                if sock: sock.close()
+            except Exception:
+                pass
+        time.sleep(3)     # 斷線後重連
+
 MODE_TO_DIRECTOR = {"t2va": "T2VA", "i2va": "I2VA", "fl2va": "FL2VA", "l2va": "L2VA", "ref2va": "REF2VA"}
 
 
@@ -1830,7 +1968,11 @@ class H(SimpleHTTPRequestHandler):
                     live = QLIVE.get(r["id"]) or {}
                     r["progress"] = live.get("progress")
                     r["stage"] = live.get("stage")
-                    r["has_preview"] = r["id"] in QPREV
+                    prev = QPREV.get(r["id"])
+                    r["has_preview"] = bool(prev)
+                    r["prev_mime"] = prev[0] if prev else None
+                    r["prev_step"] = live.get("prev_step")
+                    r["prev_tick"] = live.get("prev_tick")
             return self.send_json({"now": int(time.time()), "rows": rows})
 
         m = re.match(r"^/api/queue/([0-9a-f]{8,32})$", p)
@@ -1841,11 +1983,12 @@ class H(SimpleHTTPRequestHandler):
         m = re.match(r"^/api/queue/([0-9a-f]{8,32})/preview$", p)
         if m:
             with QLOCK:
-                buf = QPREV.get(m.group(1))
-            if not buf:
+                item = QPREV.get(m.group(1))
+            if not item:
                 return self.send_json({"error": "no preview"}, 404)
+            mime, buf = item
             self.send_response(200)
-            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Type", mime)
             self.send_header("Content-Length", str(len(buf)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -3008,6 +3151,7 @@ def main():
     try:
         qload_all()
         threading.Thread(target=qworker, daemon=True).start()
+        threading.Thread(target=wsworker, daemon=True).start()
         print("  queue    : %d 筆任務，派工已啟動" % len(QROWS))
         srv.serve_forever()
     except KeyboardInterrupt:

@@ -3247,7 +3247,9 @@ function renderQueue(){
     const thumb = r.state === "done" && r.video
       ? `<video src="${MAPI}/file/${r.video.split("/").map(encodeURIComponent).join("/")}" muted playsinline controls preload="metadata"></video>`
       : (running && r.has_preview
-         ? `<img src="${QAPI}/${r.id}/preview?v=${Date.now()}" alt="預覽">`
+         ? (String(r.prev_mime || "").startsWith("video/")
+            ? `<video src="${QAPI}/${r.id}/preview?v=${r.prev_tick || 0}" autoplay loop muted playsinline></video>`
+            : `<img src="${QAPI}/${r.id}/preview?v=${r.prev_tick || 0}" alt="預覽">`)
          : (r.mode === "t2va" ? "📝" : "🎬"));
     const pct = (r.progress != null) ? Math.round(r.progress * 100) : null;
     return `<div class="qrow">
@@ -3262,6 +3264,7 @@ function renderQueue(){
         ${r.error ? `<div class="qsub" style="color:var(--warn)">${esc(r.error)}</div>` : ""}
         ${r.video ? `<div class="qsub">${esc(r.video)}</div>` : ""}
         ${running ? `<div class="qbar"><i style="width:${pct == null ? 8 : pct}%"></i></div>` : ""}
+        ${running && r.prev_step ? `<div class="qsub">預覽 ${esc(r.prev_step)}</div>` : ""}
       </div>
       <div class="row" style="gap:6px;flex-direction:column;align-items:stretch">
         ${running || r.state === "queued"
