@@ -821,6 +821,10 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 /* builtin system prompts live in sidecar .txt files (loaded in loadPrompts) */
 const $ = s => document.querySelector(s);
 const esc = t => (t||"").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+/* v18 的影片輸出是 .webm（container=Auto），不再是 .mp4。凡是「哪個輸出是成品影片」
+   一律用這個判斷，別再寫死副檔名。 */
+const VIDEO_RE = /\.(mp4|webm|mkv|mov)$/i;
+const isVideoOut = f => VIDEO_RE.test(String(f || ""));
 const onServer = location.protocol.startsWith("http");
 
 /* ================= 設定持久化 ================= */
@@ -3085,7 +3089,7 @@ async function comfyPoll(pid, set, btn){
     if (j.state === "queued") set(`排隊中（第 ${j.pos} 位）`);
     else if (j.state === "running") set("生成中…");
     else if (j.state === "done"){
-      const out = (j.outputs || []).find(x => x.endsWith(".mp4")) || "";
+      const out = (j.outputs || []).find(isVideoOut) || "";
       set("完成 ✓ " + out.split("/").pop());
       if (btn) btn.disabled = false;
       if ($("#navMedia")) loadMedia();
@@ -4113,7 +4117,7 @@ async function mvVideoStep(i){
   const s = MV.segs[i];
   let inFile = MV.slots[i].file;               // 第 1 段用原圖；其後接上一段實際 last-frame
   if (i > 0 && MV.segs[i - 1].video){
-    const png = MV.segs[i - 1].video.replace(/\.mp4$/i, "-last-frame.png");
+    const png = MV.segs[i - 1].video.replace(VIDEO_RE, "-last-frame.png");
     try{ inFile = await mvFetchFile(png, `seg${i}-in.png`); }
     catch(e){ mvStat(`段 ${i + 1}：⚠ 讀不到上一段 last-frame，改用原分鏡圖銜接`); }
   }
@@ -4219,7 +4223,7 @@ async function mvPollDone(pid){
     let s; try{ s = await (await fetch(CAPI + "/status/" + pid)).json(); }catch(e){ continue; }
     if (s.state === "error") throw new Error("ComfyUI 生成失敗：" + (s.error || ""));
     if (s.state === "done"){
-      const mp4 = (s.outputs || []).find(o => /\.mp4$/i.test(o));
+      const mp4 = (s.outputs || []).find(isVideoOut);
       if (!mp4) throw new Error("完成但找不到輸出 mp4");
       return mp4;
     }

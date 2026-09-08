@@ -366,7 +366,10 @@ def movie_concat(rel_files):
         raise ValueError("至少要兩段影片")
     outdir = os.path.join(MEDIA_ROOT, "video", "movies")
     os.makedirs(outdir, exist_ok=True)
-    out = os.path.join(outdir, "movie_%s_%dseg.mp4" % (time.strftime("%Y%m%d_%H%M%S"), len(abses)))
+    # 容器要跟片段一致：把 WebM(VP9/Opus) 用 -c copy 塞進 .mp4 會失敗
+    _ext = os.path.splitext(abses[0])[1].lower() or ".mp4"
+    if _ext not in VIDEO_EXT: _ext = ".mp4"
+    out = os.path.join(outdir, "movie_%s_%dseg%s" % (time.strftime("%Y%m%d_%H%M%S"), len(abses), _ext))
     lst = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
     try:
         for ap in abses:
@@ -383,6 +386,9 @@ def movie_concat(rel_files):
             pass
     return os.path.relpath(out, MEDIA_ROOT).replace("\\", "/")
 COMFY_TEMPLATE = os.path.join(ROOT, "comfy-template.json")
+# v18 的 DaSiWa_EnhancedVideoCombine 用 container="Auto"，實際輸出是 .webm，不是 .mp4。
+# 任何「找出成品影片」的判斷都必須認這一組副檔名，不能寫死 .mp4。
+VIDEO_EXT = (".mp4", ".webm", ".mkv", ".mov")
 MEDIA_EXT = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime",
              ".mkv": "video/x-matroska", ".png": "image/png", ".jpg": "image/jpeg",
              ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif",
@@ -1053,7 +1059,7 @@ def comfy_capture_template():
         for k, v in o.items():
             if isinstance(v, list):
                 for it in v:
-                    if isinstance(it, dict) and str(it.get("filename", "")).endswith(".mp4"):
+                    if isinstance(it, dict) and str(it.get("filename", "")).lower().endswith(VIDEO_EXT):
                         out = it["filename"]
     return {"prompt_id": pid, "nodes": len(g), "output": out}
 
@@ -1067,11 +1073,15 @@ RES_PRESETS = ["144p", "240p", "360p", "480p", "540p", "576p", "720p", "900p", "
                "4.75 MP - 2K Pro", "6.50 MP - Production", "8.30 MP - UHD"]
 
 
-def fit_canvas(img_w, img_h, base_w, base_h, mult=16):
+def fit_canvas(img_w, img_h, base_w, base_h, mult=32):
     """依輸入圖的長寬比算出畫布尺寸，像素預算沿用模板的 width*height。
     v18 的 timeline_data.resolution.aspect="auto" 只有 ComfyUI 的瀏覽器 JS 會執行；
     我們是直接把 API 圖 POST 給 /prompt，沒有瀏覽器，Director 只會用 width/height
-    這兩個 widget 的字面值。所以「依圖決定比例」必須由這裡算好再寫進去。"""
+    這兩個 widget 的字面值。所以「依圖決定比例」必須由這裡算好再寫進去。
+
+    對齊必須是 32：VAE 先把邊長 /16 成 latent，模型的 patchify_video 再以 patch_size=2
+    切塊，所以 latent 的長寬都得是偶數。用 16 對齊會產生奇數 latent（例如 656x848 ->
+    41x53），SamplerCustomAdvanced 會丟 "shape ... is invalid for input of size ..."。"""
     try:
         img_w, img_h = int(img_w), int(img_h)
         base_w, base_h = int(base_w), int(base_h)
