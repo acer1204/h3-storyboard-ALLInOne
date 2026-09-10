@@ -4131,6 +4131,14 @@ function mvDraw(){
   /* 輸出片段卡片 */
   $("#mvCards").innerHTML = MV.segs.map((s, i) => {
     const a = MV.slots[i], b = MV.slots[i + 1];
+    /* 第 2 段起真正綁進去的首幀是「上一段算出來的末幀」，不是這裡的分鏡圖——
+       顯示分鏡圖會讓人以為首幀沒生效。有上一段影片就顯示真正那張。 */
+    const prevVid = i > 0 ? ((MV.segs[i - 1] || {}).video || "") : "";
+    const aUrl = prevVid
+      ? "/api/media/file/" + prevVid.replace(/\\/g, "/").replace(VIDEO_RE, "-last-frame.png")
+          .split("/").map(encodeURIComponent).join("/")
+      : (a ? a.url : "");
+    const aTip = prevVid ? "首幀＝上一段實際結尾（接龍用）" : "首幀＝分鏡圖 " + (i + 1);
     const st = s.vstate === "rendering" ? "🎬 影片生成中…"
              : s.vstate === "waiting"   ? "⏸ 等待指示中…"
              : s.vstate === "adjust"    ? "🔧 調整中"
@@ -4159,9 +4167,11 @@ function mvDraw(){
              <button class="mini" onclick="mvContinue(${i})" ${s.video ? "" : "disabled"}>▶ 就用目前影片，繼續</button></div>`;
     return `<div style="border:1px solid var(--line);border-radius:11px;padding:10px">
       <div style="display:flex;gap:4px">
-        ${a ? `<img src="${a.url}" style="width:48%;aspect-ratio:3/4;object-fit:cover;border-radius:7px">` : ""}
-        ${b ? `<img src="${b.url}" style="width:48%;aspect-ratio:3/4;object-fit:cover;border-radius:7px">` : ""}
+        ${aUrl ? `<img src="${aUrl}" title="${aTip}" style="width:48%;aspect-ratio:3/4;object-fit:cover;border-radius:7px${prevVid ? ";outline:1px solid var(--acc);outline-offset:-1px" : ""}">` : ""}
+        ${b ? `<img src="${b.url}" title="尾幀目標＝分鏡圖 ${i + 2}" style="width:48%;aspect-ratio:3/4;object-fit:cover;border-radius:7px">` : ""}
       </div>
+      ${prevVid ? `<div class="hint" style="margin-top:3px;font-size:10.5px">首幀＝上一段實際結尾</div>` : ""}
+      ${s.durWarn ? `<div class="hint" style="margin-top:3px;font-size:10.5px;color:var(--warn)">⚠ ${esc(s.durWarn)}</div>` : ""}
       <div style="margin-top:6px;font-size:13px"><b>段 ${i + 1}</b>（${i + 1}→${i + 2}）　${st}　${vlink}</div>
       ${(() => { const sc = s.verdict ? s.verdict.score : s.ai_score;
         const pb = s.verdict ? (s.verdict.problems || []) : (s.ai_problems || []);
@@ -4220,6 +4230,7 @@ async function mvSave(withImages){
     status: MV.phase, final: MV.final,
     segments: MV.segs.map(s => ({hint: s.hint, beat: s.beat || "", content: s.content, zh: s.zh,
                                  state: s.state, locked: s.locked, video: s.video,
+                                 dur_gen: s.durGen != null ? s.durGen : null,
                                  ai_score: s.verdict ? s.verdict.score : (s.ai_score != null ? s.ai_score : null),
                                  ai_problems: s.verdict ? (s.verdict.problems || []) : (s.ai_problems || []),
                                  takes: (s.takes || []).map(t => ({video: t.video, score: t.score}))}))};
@@ -4277,6 +4288,7 @@ window.mvLoad = async id => {
     $("#mvHint").value = rec.global_hint || "";
     $("#mvPlan").value = rec.global_plan || "";
     MV.segs = (rec.segments || []).map(s => ({...mvNewSeg(), ...s,
+      durGen: s.dur_gen != null ? s.dur_gen : null,
       vstate: (s.locked && s.video) ? "done" : "", v: null}));
     mvSyncSegs(); MV.cur = 0; MV.waiting = -1; MV.manual = false;
     setView("movie"); mvDraw();
@@ -4357,6 +4369,7 @@ async function mvGenSeg(i, force){
   const best = await genWithRetry([eA.b64, eB.b64], userNote({mode: "fl2va", note, w: eA.w, h: eA.h}),
                                   20, 1, t => mvStat(`段 ${i + 1}：${t}`));
   s.content = best.content; s.v = best.v; s.attempts = best.attempts;
+  s.durGen = effDur();          // 劇情裡的時間軸是照這個秒數寫的，送出時要比對
   s.state = best.v.E.length ? "fail" : (best.v.W.length ? "warn" : "ok");
   s._dirty = !!s.video;                        // 已有影片時改了劇情 → 可「用新劇情重跑影片」
   if ($("#tr").value === "1"){
@@ -4400,7 +4413,13 @@ $("#mvGenPrompts").onclick = async () => {
 /* ---- 第②階段：逐段影片（完成一段 → 等待指示） ---- */
 async function mvSubmitVideo(i){
   const s = MV.segs[i];
+  /* 劇情裡的鏡頭時間點（"at the 3.50-second mark"）是生成當下依秒數算出來的；
+     送出時讀的卻是即時值。中間改過秒數就會整段對不上——不擋，但要講出來。 */
+  if (s.durGen != null && s.durGen !== effDur())
+    s.durWarn = `此段劇情是照 ${s.durGen} 秒寫的，現在要用 ${effDur()} 秒送出——時間軸會對不上，建議重生成此段劇情`;
+  else s.durWarn = "";
   s.vstate = "rendering"; MV.busy = true; mvDraw();
+  if (s.durWarn) mvStat(`段 ${i + 1}：⚠ ${s.durWarn}`);
   try{
     const inFile = s._inFile || MV.slots[i].file;
     const encIn = await encode(inFile);
@@ -4539,8 +4558,10 @@ window.mvAdjust = i => {
   mvStat(`段 ${i + 1} 調整中：可「再賭一次」（同劇情換 seed）、或改提示「重生成此段劇情」後「用新劇情重跑影片」`);
   mvDraw();
 };
-window.mvRegamble = i => { if (!MV.busy) mvSubmitVideo(i); };
-window.mvRerunVideo = i => { if (!MV.busy && MV.segs[i]._dirty) mvSubmitVideo(i); };
+/* 一律走 mvVideoStep：_inFile 是 File 物件、mvSave 存不下來，重整後直接叫 mvSubmitVideo
+   會退回原分鏡圖當首幀，接龍就悄悄斷了。mvVideoStep 會從上一段的 video 重新取回實際末幀。 */
+window.mvRegamble = i => { if (!MV.busy) mvVideoStep(i); };
+window.mvRerunVideo = i => { if (!MV.busy && MV.segs[i]._dirty) mvVideoStep(i); };
 
 /* ---- 已確認片段的人工解鎖：重調單段，完成後回鎖，合併一律手動 ---- */
 window.mvUnlockSeg = i => {

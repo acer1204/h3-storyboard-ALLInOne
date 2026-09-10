@@ -2713,6 +2713,8 @@ class H(SimpleHTTPRequestHandler):
                        "content": str(s.get("content") or ""),
                        "zh": str(s.get("zh") or ""),
                        "state": str(s.get("state") or "")[:10],
+                       # 生成這段劇情時用的秒數：時間軸是照它寫的，送出時要比對
+                       "dur_gen": s.get("dur_gen") if isinstance(s.get("dur_gen"), int) else None,
                        "locked": bool(s.get("locked")),
                        "video": str(s.get("video") or "")[:300],
                        "ai_score": s.get("ai_score"),
