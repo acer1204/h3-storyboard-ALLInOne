@@ -71,8 +71,8 @@ Generation runs on the official MiniMax H3 skills bundled in `skills/`: the `h3-
 
 ## FL2VA Movie — chained long film 連續首尾幀長片
 
-Upload 2–12 storyboard images and get one continuous long video: N images become N-1 segments, and each new segment starts from the ACTUAL rendered last frame of the previous one, so motion never jumps between segments.  
-上傳 2～12 張分鏡圖產出一支連續長片：N 張圖＝N−1 個片段，且每個新片段用前一段「實際算圖輸出的最後一幀」當首幀，段落銜接不跳動。
+Upload 2–24 storyboard images and get one continuous long video: N images become N-1 segments, and each new segment starts from the ACTUAL rendered last frame of the previous one, so motion never jumps between segments.  
+上傳 2～24 張分鏡圖產出一支連續長片：N 張圖＝N−1 個片段，且每個新片段用前一段「實際算圖輸出的最後一幀」當首幀，段落銜接不跳動。
 
 ![FL2VA Movie board](docs/img/movie_board.png)
 

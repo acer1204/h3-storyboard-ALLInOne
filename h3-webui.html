@@ -499,7 +499,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 <!-- ============ FL2VA Movie：三階段（劇情 → 影片 → 合併） ============ -->
 <section class="view" id="v-movie">
   <h1 class="vh">FL2VA Movie — 連續首尾幀長片</h1>
-  <p class="vs">① 上傳 2～12 張分鏡 → 下方出現各片段分頁，可各自加提示 → ②「片段劇情生成」先寫好全部劇情（可逐段重生成到滿意）
+  <p class="vs">① 上傳 2～24 張分鏡 → 下方出現各片段分頁，可各自加提示 → ②「片段劇情生成」先寫好全部劇情（可逐段重生成到滿意）
     → ③「劇情影片處理」逐段出片，每段完成後等你按「可繼續」或「需調整」 → ④ 全部確認後「合併片段並顯示」。</p>
 
   <div class="panel">
@@ -4039,7 +4039,7 @@ async function comfyRunReviewed(payload, ctx, statusEl, btn){
 
 /* ================= FL2VA Movie：三階段（片段劇情 → 逐段影片 → 合併） ================= */
 const MV = {
-  id: null, slots: [], pick: 0, MAX: 12,
+  id: null, slots: [], pick: 0, MAX: 24,
   segs: [],           // {hint, content, zh, v, state, locked, video, vstate, attempts}
   cur: 0, phase: "edit", busy: false,
   waiting: -1, final: "",
@@ -4228,7 +4228,11 @@ async function mvSave(withImages){
     const r = await (await fetch("/api/movies", {method: "POST",
       headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})).json();
     if (r.id) MV.id = r.id;
-  }catch(e){}
+    else if (r.error) mvStat("專案存檔失敗：" + r.error);
+  }catch(e){
+    // 24 張分鏡的 body 更接近伺服器的請求上限；靜靜失敗等於整個專案不見
+    mvStat("專案存檔失敗（" + ((e && e.message) || e) + "）——請減少分鏡張數或縮小圖片");
+  }
 }
 async function loadMvHist(){
   if (!onServer) return;
@@ -4682,7 +4686,7 @@ const EN = {
 "✚ 加入生成清單":"✚ Add to list","清空格子":"Clear slots","顯示":"Show","全選":"Select all","重跑顯示中的":"Re-run shown",
 "起始幀":"first frame","結束幀":"last frame","首幀（鎖定）":"first frame (locked)",
 "FL2VA Movie — 連續首尾幀長片":"FL2VA Movie — Chained Long Film",
-"① 上傳 2～12 張分鏡 → 下方出現各片段分頁，可各自加提示 → ②「片段劇情生成」先寫好全部劇情（可逐段重生成到滿意） → ③「劇情影片處理」逐段出片，每段完成後等你按「可繼續」或「需調整」 → ④ 全部確認後「合併片段並顯示」。":"① Upload 2–12 storyboard images → per-segment tabs appear, each accepts its own hint → ② \"Generate stories\" writes every segment first (regenerate any until satisfied) → ③ \"Render videos\" outputs one segment at a time, waiting for \"Continue\" or \"Adjust\" after each → ④ once all confirmed, \"Merge & show\".",
+"① 上傳 2～24 張分鏡 → 下方出現各片段分頁，可各自加提示 → ②「片段劇情生成」先寫好全部劇情（可逐段重生成到滿意） → ③「劇情影片處理」逐段出片，每段完成後等你按「可繼續」或「需調整」 → ④ 全部確認後「合併片段並顯示」。":"① Upload 2–24 storyboard images → per-segment tabs appear, each accepts its own hint → ② \"Generate stories\" writes every segment first (regenerate any until satisfied) → ③ \"Render videos\" outputs one segment at a time, waiting for \"Continue\" or \"Adjust\" after each → ④ once all confirmed, \"Merge & show\".",
 "分鏡圖":"Storyboard","整體劇情提示（選填，作為整體劇情規劃的方向）":"Overall story hint (optional; guides the whole-film plan)",
 "整體劇情（自動規劃：模型先看完全部分鏡圖寫出貫穿全片的劇情，再分配給各片段；可編輯）":"Overall story (auto-planned: the model reads every storyboard image, writes one film-wide plot, then assigns each segment its beat; editable)",
 "🧠 整體劇情規劃":"🧠 Plan story","✍️ 片段劇情生成":"✍️ Generate stories","🎬 劇情影片處理":"🎬 Render videos","🧵 合併片段並顯示":"🧵 Merge & show",

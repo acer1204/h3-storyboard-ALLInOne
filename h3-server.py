@@ -417,6 +417,7 @@ def comfy_note(pid, state, extra=""):
         if state in ("done", "error"):
             COMFY_LAST_STATE.pop(pid, None)
 MAX_BODY = 24 * 1024 * 1024
+MV_MAX_IMAGES = 24            # FL2VA Movie 分鏡張數上限；N 張圖 = N-1 個片段
 ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
 
 
@@ -2556,7 +2557,7 @@ class H(SimpleHTTPRequestHandler):
             n_img = 0
             imgs = body.pop("images", None)
             if isinstance(imgs, list) and imgs:
-                for k, durl in enumerate(imgs[:13]):
+                for k, durl in enumerate(imgs[:MV_MAX_IMAGES]):
                     b, _ = parse_data_image(durl)
                     if b:
                         n_img += 1
@@ -2583,7 +2584,7 @@ class H(SimpleHTTPRequestHandler):
                        # 每次產出的影片（自動重試/再賭/重跑都留下來，可回頭選用）
                        "takes": [{"video": str(t.get("video") or "")[:300], "score": t.get("score")}
                                  for t in (s.get("takes") or []) if isinstance(t, dict)][:20],
-                   } for s in segs[:12]]}
+                   } for s in segs[:MV_MAX_IMAGES]]}
             with LOCK:
                 old = {}
                 fp = os.path.join(MOVIES, rid + ".json")
