@@ -1694,6 +1694,108 @@ def split_ref_fields(c):
     return out if len(found) >= 4 else None
 
 
+# ── latent 路徑護欄 ──────────────────────────────────────────────────────
+# MinimaxH3LatentUpscaler3D 是 LATENT->LATENT，沒有 CONDITIONING 埠，所以它沒辦法
+# 跟著縮放 minimax_keyframes。PackedLayout 依「目標」網格編列 keyframe 的條件列
+# （comfy/ldm/minimax/model.py:305,330），而 keyframe 的 latent 是在 Director 畫布
+# 尺寸下 VAE 編碼的 —— 兩者對不上，就是 model.py:600 那個
+# [798,96] 塞不進 [3192,96] 的 index_put_。minimax_refs 依自己存下的網格編列
+# （model.py:350,375），所以 REF2VA 不受影響。
+GUIDE_CLASSES     = {"MiniMaxH3DirectorGuide"}
+LATENT_RESAMPLERS = {"MinimaxH3LatentUpscaler3D", "LatentUpscale", "LatentUpscaleBy"}
+LATENT_PLUMBING   = {"LTXVSeparateAVLatent", "LTXVConcatAVLatent"}
+SAMPLER_LATENT_IN = "latent_image"
+SWITCH_CLASS      = "DaSiWa_NodeStatusSwitch"
+KEYFRAME_MODES    = {"I2VA", "FL2VA", "L2VA", "Image Inpaint"}
+
+
+def _is_link(v):
+    return (isinstance(v, list) and len(v) == 2
+            and isinstance(v[0], str) and isinstance(v[1], int))
+
+
+def strip_latent_resamplers(g, warn):
+    """把 DirectorGuide 與取樣器之間的 latent 重取樣節點整條旁路掉。
+
+    等同於在 API 圖上重現 ComfyUI 自己的 mode-4 穿透。路徑上沒有重取樣節點時
+    完全不動圖（可逐位元比對）。回傳 (改動, 被移除的節點)。"""
+    changes = []
+    for sid, node in list(g.items()):
+        ref = (node.get("inputs") or {}).get(SAMPLER_LATENT_IN)
+        if not _is_link(ref):
+            continue
+        # 從 latent_image 往回走，走到 guide 為止
+        seen, stack, anchor, resamplers, ok = set(), [ref[0]], None, [], True
+        while stack:
+            nid = stack.pop()
+            if nid in seen:
+                continue
+            seen.add(nid)
+            n = g.get(nid)
+            if n is None:
+                ok = False; break
+            ct = n.get("class_type")
+            if ct in GUIDE_CLASSES:
+                if anchor is None:
+                    anchor = nid
+                elif anchor != nid:
+                    ok = False; break          # 兩個 guide 餵同一個取樣器：不碰
+                continue                        # 絕不越過 guide 往上走
+            if ct in LATENT_RESAMPLERS:
+                resamplers.append(nid)
+            elif ct not in LATENT_PLUMBING:
+                ok = False; break               # 路徑上有不認得的節點：不碰
+            for v in (n.get("inputs") or {}).values():
+                if _is_link(v):
+                    stack.append(v[0])
+        if not resamplers:
+            continue                            # 常態：沒東西要拆
+        if not ok or anchor is None:
+            raise ValueError(
+                "模板在 %s 的 latent 路徑上有 %s，但路徑形狀無法辨識，無法自動旁路。"
+                "請在 ComfyUI 關掉「Latent Upscaler 2x」後重新匯入工作流。"
+                % (sid, ", ".join(sorted({g[r]["class_type"] for r in resamplers}))))
+        # 這條鏈原本吃的是 guide 的哪一個輸出？
+        slots = {v[1] for nid in seen if nid != anchor
+                 for v in (g[nid].get("inputs") or {}).values()
+                 if _is_link(v) and v[0] == anchor}
+        if len(slots) != 1:
+            raise ValueError("無法判斷 %s 要接 %s 的哪個輸出（候選 %s）" % (sid, anchor, sorted(slots)))
+        new_ref = [anchor, slots.pop()]
+        node["inputs"][SAMPLER_LATENT_IN] = new_ref
+        changes.append((sid, ref, new_ref))
+
+    # 清掉被改線後沒人用的節點。DaSiWa_NodeStatusSwitch 的 target_* 是前端專用的
+    # 控制線（nodes_status_switch.py 自己寫著 "Target sockets are frontend-only"），
+    # 不能算成真正的使用。
+    removed = []
+    changed = True
+    while changed:
+        changed = False
+        used = set()
+        for n in g.values():
+            is_sw = n.get("class_type") == SWITCH_CLASS
+            for k, v in (n.get("inputs") or {}).items():
+                if is_sw and str(k).startswith("target_"):
+                    continue
+                if _is_link(v):
+                    used.add(v[0])
+        for nid, n in list(g.items()):
+            if n.get("class_type") in (LATENT_RESAMPLERS | LATENT_PLUMBING) and nid not in used:
+                del g[nid]; removed.append(nid); changed = True
+    # 順手清掉指向已刪節點的前端控制線
+    for n in g.values():
+        if n.get("class_type") != SWITCH_CLASS:
+            continue
+        for k, v in list((n.get("inputs") or {}).items()):
+            if str(k).startswith("target_") and _is_link(v) and v[0] not in g:
+                del n["inputs"][k]
+    if changes:
+        warn.append("latent upscaler 已旁路：%s；移除 %s"
+                    % (", ".join("%s->%s" % (c[0], c[2]) for c in changes), ", ".join(removed)))
+    return changes, removed
+
+
 def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, image_blob=None,
                 mode=None, extra_names=None, full_prompt=None):
     """載模板，換圖與欄位（＋影片秒數），其餘照舊；種子隨機化避免重複送出被去重。
@@ -1826,6 +1928,24 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
             ins["width"], ins["height"] = fit
     apply_wf_params(g, wf)
 
+    # 帶 keyframe 的模式（I2VA/FL2VA/L2VA）一定要把 latent upscaler 拆掉，否則取樣器
+    # 必炸；其餘模式預設也拆——它是在全零的 empty latent 上重取樣，實際效果只是把畫布
+    # 放大到超出模型 768*1344 的訓練預算，長片段還會 OOM。要留就在 wf 傳 latent_upscaler。
+    _eff_mode = dmode or ins.get("mode")
+    _keep_upscaler = bool((wf or {}).get("latent_upscaler")) and _eff_mode not in KEYFRAME_MODES
+    _stripped = []
+    if not _keep_upscaler:
+        _warn = []
+        _chg, _stripped = strip_latent_resamplers(g, _warn)
+        for _w in _warn:
+            sys.stderr.write("  comfy_build: %s%s" % (_w, chr(10)))
+
+    # 送出前護欄：這幾個節點被整理掉就等於「回報成功但沒有影片」
+    _cls = {n.get("class_type") for n in g.values()}
+    for _need in ("MiniMaxH3Director", "DaSiWa_EnhancedVideoCombine", "SamplerCustomAdvanced"):
+        if _need not in _cls:
+            raise ValueError("整理後的節點圖缺少 %s，拒絕送出" % _need)
+
     # 影片秒數：網頁寫 prompt 時用的時長要跟 Director 跑的一致（時間戳才不會超出）
     old_dur = ins.get("duration")
     new_dur = None
@@ -1869,6 +1989,22 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
 
     # UI 工作流（extra_pnginfo.workflow）逐 widget 同步：值完全相同才替換
     wf = ((extra.get("extra_pnginfo") or {}).get("workflow") or {})
+    if _stripped:
+        # 把被拆掉的節點在 UI 圖裡標成 bypass（mode 4），拖回 ComfyUI 才是這支影片真正的跑法
+        _defs = {str(sg.get("id")): sg for sg in ((wf.get("definitions") or {}).get("subgraphs") or [])}
+        _inner = {}                       # 子圖實例 id -> {內部節點 id}
+        for _fid in _stripped:
+            _parts = str(_fid).split(":")
+            _inner.setdefault(":".join(_parts[:-1]) or None, set()).add(_parts[-1])
+        def _mark(nodes, ids):
+            for _n in (nodes or []):
+                if str(_n.get("id")) in ids:
+                    _n["mode"] = 4
+        _mark(wf.get("nodes"), _inner.get(None, set()))
+        for _n in (wf.get("nodes") or []):
+            _sg = _defs.get(str(_n.get("type")))
+            if _sg:
+                _mark(_sg.get("nodes"), _inner.get(str(_n.get("id")), set()))
     for n in wf.get("nodes", []):
         wv = n.get("widgets_values")
         if isinstance(wv, list):
