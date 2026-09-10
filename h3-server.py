@@ -1288,6 +1288,20 @@ class SubmitError(Exception):
         super().__init__(msg); self.msg = msg; self.code = code
 
 
+def _node_errors_text(ne, limit=6):
+    """把 ComfyUI 的 node_errors 攤成幾行看得懂的字：哪個節點、哪個欄位、錯在哪。"""
+    lines = []
+    for nid, info in list(ne.items())[:limit]:
+        info = info or {}
+        lines.append("節點 %s %s" % (nid, info.get("class_type") or ""))
+        for e in (info.get("errors") or [])[:4]:
+            det = e.get("details") or ""
+            lines.append("  - %s%s" % (e.get("message") or "", (": " + det) if det else ""))
+    if len(ne) > limit:
+        lines.append("  …另有 %d 個節點" % (len(ne) - limit))
+    return chr(10).join(lines)[:900]
+
+
 def comfy_submit(body):
     """一筆送單 -> ComfyUI 的 prompt_id。/api/comfy/run 與佇列派工共用，
     確保兩條路徑的圖片解析、上傳、建圖與參數覆寫完全一致。"""
@@ -1371,6 +1385,17 @@ def comfy_submit(body):
         raise SubmitError("送出失敗: %s %s" % (e, detail), 502)
     if "prompt_id" not in r:
         raise SubmitError("ComfyUI 拒收: %s" % json.dumps(r, ensure_ascii=False)[:500], 502)
+    # ComfyUI 對每個輸出節點分開驗證：只要還有一個過關就回 200，被判掉的只寫在 node_errors。
+    # 影片輸出節點被丟掉時，圖照樣「跑完」且回報 success，卻什麼都沒產出——不在這裡擋下來，
+    # 就會變成任務清單上兩秒完成、然後找不到影片的鬼故事。
+    ne = r.get("node_errors") or {}
+    if ne:
+        try:
+            comfy_api("/queue", {"delete": [r["prompt_id"]]}, timeout=15)
+        except Exception:
+            pass
+        raise SubmitError("ComfyUI 判掉了工作流裡的輸出節點，這張圖不會產出影片："
+                          + chr(10) + _node_errors_text(ne), 400)
     return r["prompt_id"]
 
 
@@ -1452,7 +1477,7 @@ def qreconcile(row):
         vid, first, last = _qoutputs(rec)
         qset(row["id"], state="done" if vid else "error",
              video=vid, first_frame=first,
-             error="" if vid else (err or "完成但找不到輸出影片"),
+             error="" if vid else (err or "ComfyUI 回報完成但沒有輸出影片"),
              t_end=int(time.time()))
         return True
     if st.get("status_str") == "error" or err:
@@ -1812,12 +1837,34 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
         pass
 
     swaps = {old_bs_str: ins["builder_state"], old_tl_str: ins["timeline_data"]}
+    # v18 沒有 seed / noise_seed 這兩個輸入了——取樣噪聲來自 DaSiWa_SeedControl，欄位叫
+    # seed_value，所以原本只認那兩個名字的隨機化整個沒生效。那個節點只有在 seed_value
+    # 為 0 時才會自己重骰（IS_CHANGED 其餘一律回 False），而模板裡存的是 ComfyUI 面板
+    # 寫進去的上次 seed，非 0。不換掉它，同一筆紀錄重送就是同一顆 seed、同一支影片，
+    # 歷史紀錄那顆「送 ComfyUI 生成」按鈕想做的抽卡等於沒有作用。
     for nid, node in g.items():
-        for k, v in list(node.get("inputs", {}).items()):
-            if k in ("seed", "noise_seed") and isinstance(v, int):
-                nv = random.randint(0, 2**48)
-                node["inputs"][k] = nv
+        ins_n = node.get("inputs") or {}
+        for k, v in list(ins_n.items()):
+            if k in ("seed", "noise_seed", "seed_value") and isinstance(v, int) and not isinstance(v, bool):
+                nv = random.randint(1, 2**48)   # 不取 0：0 會讓 SeedControl 自己重骰，metadata 就對不上
+                ins_n[k] = nv
                 swaps[v] = nv
+        # 面板狀態跟著新 seed 走，拖回 ComfyUI 時顯示的才是這支影片真正用的那顆
+        st = ins_n.get("seed_control_state")
+        if isinstance(st, str) and isinstance(ins_n.get("seed_value"), int):
+            try:
+                sd = json.loads(st)
+            except (ValueError, TypeError):
+                sd = None
+            if isinstance(sd, dict):
+                cur = str(ins_n["seed_value"])
+                sd["last_seed"] = cur
+                prev = sd.get("recent")
+                prev = [x for x in prev if x != cur] if isinstance(prev, list) else []
+                sd["recent"] = ([cur] + prev)[:20]
+                new_st = json.dumps(sd, ensure_ascii=False)
+                ins_n["seed_control_state"] = new_st
+                swaps[st] = new_st
 
     # UI 工作流（extra_pnginfo.workflow）逐 widget 同步：值完全相同才替換
     wf = ((extra.get("extra_pnginfo") or {}).get("workflow") or {})

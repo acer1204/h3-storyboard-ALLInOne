@@ -12,6 +12,10 @@ UI_ONLY = {"Note", "MarkdownNote", "Reroute", "PrimitiveNode",
 # widget 型輸入（其餘視為連線型）
 WIDGET_TYPES = {"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO", "IMAGEUPLOAD",
                 "NUMBER", "TEXT", "SEED"}
+# v3 動態下拉：自己佔一格，之後還要吃「所選選項」帶出來的巢狀輸入，
+# 巢狀鍵名是 <父>.<子>（ComfyUI 的 finalize_prefix 就是這樣接的）。
+# 格數取決於選中的是哪一個選項，所以只能邊讀值邊走，不能先算出固定的欄位表。
+DYNAMIC_COMBO_TYPE = "COMFY_DYNAMICCOMBO_V3"
 
 
 def _norm_links(links):
@@ -28,7 +32,8 @@ def _norm_links(links):
 
 def _widget_inputs_of(class_type, object_info):
     """依 object_info 的 required+optional 順序，列出會吃 widgets_values 的輸入。
-    回傳 [(name, extra_slots)]；extra_slots=1 表示後面跟一個 control_after_generate 欄。"""
+    回傳 [(name, extra_slots)]；extra_slots=1 表示後面跟一個 control_after_generate 欄。
+    註：動態下拉的格數與值有關，這個函式看不到值，遇到就回報無法靜態展開。"""
     node = object_info.get(class_type)
     if not node:
         return None
@@ -41,6 +46,8 @@ def _widget_inputs_of(class_type, object_info):
             t, opts = spec[0], (spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {})
             if opts.get("forceInput"):
                 continue
+            if isinstance(t, str) and t.upper() == DYNAMIC_COMBO_TYPE:
+                return None
             is_widget = isinstance(t, list) or (isinstance(t, str) and t.upper() in WIDGET_TYPES)
             if not is_widget:
                 continue
@@ -49,23 +56,53 @@ def _widget_inputs_of(class_type, object_info):
     return out
 
 
+def _walk_widgets(inp, vals, i, out, prefix, class_type, warn):
+    """依 object_info 的輸入順序邊讀值邊配對，回傳吃掉的格數。
+    動態下拉先吃自己那格，再依所讀到的選項遞迴吃它的巢狀輸入（鍵名加上 <父>. 前綴）。"""
+    for grp in ("required", "optional"):
+        for name, spec in (inp.get(grp, {}) or {}).items():
+            if i >= len(vals):
+                return i
+            if not isinstance(spec, (list, tuple)) or not spec:
+                continue
+            t, opts = spec[0], (spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {})
+            if opts.get("forceInput"):
+                continue
+            key = (prefix + "." + name) if prefix else name
+            if isinstance(t, str) and t.upper() == DYNAMIC_COMBO_TYPE:
+                chosen = vals[i]
+                out[key] = chosen
+                i += 1
+                picked = None
+                for o in (opts.get("options") or []):
+                    if o.get("key") == chosen:
+                        picked = o
+                        break
+                if picked is None:
+                    warn.append("%s 的 %s 選了 %r，不在 object_info 的選項裡" % (class_type, name, chosen))
+                    continue
+                i = _walk_widgets(picked.get("inputs") or {}, vals, i, out, key, class_type, warn)
+                continue
+            if not (isinstance(t, list) or (isinstance(t, str) and t.upper() in WIDGET_TYPES)):
+                continue
+            out[key] = vals[i]
+            i += 1 + (1 if opts.get("control_after_generate") else 0)   # 跳過 'fixed/randomize' 欄
+    return i
+
+
 def _assign_widgets(class_type, widgets_values, object_info, warn):
     """widgets_values（list）→ {input_name: value}"""
     if not isinstance(widgets_values, list):
         return {}
-    spec = _widget_inputs_of(class_type, object_info)
-    if spec is None:
+    node = object_info.get(class_type)
+    if not node:
         warn.append("object_info 沒有節點類別 %s" % class_type)
         return {}
-    vals, i, out = widgets_values, 0, {}
-    for name, extra in spec:
-        if i >= len(vals):
-            break
-        out[name] = vals[i]
-        i += 1 + extra          # 跳過 control_after_generate 的 'fixed/randomize' 欄
-    if i < len(vals):
+    out = {}
+    i = _walk_widgets(node.get("input", {}) or {}, widgets_values, 0, out, "", class_type, warn)
+    if i < len(widgets_values):
         # 多出來的值多半是前端附加（預覽物件等），記錄但不當錯誤
-        warn.append("%s 有 %d 個未對應的 widget 值（已忽略）" % (class_type, len(vals) - i))
+        warn.append("%s 有 %d 個未對應的 widget 值（已忽略）" % (class_type, len(widgets_values) - i))
     return out
 
 
