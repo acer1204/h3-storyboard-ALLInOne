@@ -238,6 +238,22 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .qb-queued{color:var(--mut)} .qb-running{color:var(--acc);border-color:var(--acc)}
 .qb-done{color:var(--ok);border-color:var(--ok)} .qb-error{color:var(--warn);border-color:var(--warn)}
 .qb-canceled{color:var(--faint)}
+.arbtn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:transparent;
+  color:var(--fg);border-radius:8px;padding:3px 9px;font-size:11.5px;cursor:pointer;font-family:inherit;
+  line-height:1.6}
+.arbtn:hover{border-color:var(--acc);color:var(--acc)}
+.arbtn .arg{font-size:13px;line-height:1;color:var(--mut)}
+.arbtn .aramark{font-size:9.5px;color:var(--faint);border:1px solid var(--line);border-radius:6px;padding:0 4px}
+.arpop{position:absolute;z-index:60;display:flex;gap:10px;background:var(--panel);border:1px solid var(--line);
+  border-radius:11px;padding:10px;box-shadow:var(--shadow)}
+.arpop .arcol{display:flex;flex-direction:column;gap:4px;min-width:84px}
+.arpop .arh{font-size:9.5px;letter-spacing:.08em;color:var(--faint);margin-bottom:2px}
+.arpop .aritem{display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:transparent;
+  color:var(--fg);border-radius:7px;padding:4px 9px;font-size:12px;cursor:pointer;font-family:inherit;
+  text-align:left;white-space:nowrap}
+.arpop .aritem:hover{border-color:var(--acc);color:var(--acc)}
+.arpop .aritem.on{border-color:var(--acc);color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,transparent)}
+.arpop .arg{color:var(--mut)}
 .qsec{font-size:11.5px;color:var(--faint);margin:16px 0 9px;letter-spacing:.05em;
   font-family:ui-monospace,Consolas,monospace}
 .qrow.qbig{grid-template-columns:260px 1fr auto}
@@ -507,6 +523,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div class="slotgrid" id="mvGrid"></div>
     <div class="row">
       <button class="ghost mini" id="mvClear">清空格子</button>
+      <span id="mvArBox"></span>
       <span class="status" id="mvCount" style="margin:0"></span>
     </div>
     <div class="note-wrap" style="margin-top:10px"><label>整體劇情提示（選填，作為整體劇情規劃的方向）</label>
@@ -2470,6 +2487,81 @@ function bilingual(content, zh, note){
       <p>${zh ? hl(zh) : '<span class="hint">—</span>'}</p></div>
   </div>`;
 }
+/* ---------- 輸出比例：每張卡片各自決定，預設跟著自己的圖 ----------
+   v18 模板的 timeline_data.resolution.aspect="auto" 只有 ComfyUI 的瀏覽器 JS 會執行，
+   API 送單不生效，所以比例一律由伺服器的 fit_canvas 換算成 width/height 寫死進去。
+   分組沿用 Director 面板的排法（水平／正方／垂直），選好後像素預算不變。 */
+const AR_GROUPS = [
+  ["GENERAL",    [["auto", "Auto"]]],
+  ["HORIZONTAL", [["5:4"], ["4:3"], ["3:2"], ["16:9"], ["2:1"]]],
+  ["SQUARE",     [["1:1"]]],
+  ["VERTICAL",   [["1:2"], ["9:16"], ["2:3"], ["3:4"], ["4:5"]]],
+];
+const AR_ALL = AR_GROUPS.reduce((a, g) => a.concat(g[1].map(x => x[0])), []).filter(v => v !== "auto");
+const arNum = v => { const p = String(v).split(":").map(Number); return (p[0] > 0 && p[1] > 0) ? p[0] / p[1] : 0; };
+const arGlyph = v => { const n = arNum(v); return n > 1.02 ? "▭" : n < 0.98 ? "▯" : "◻"; };
+function nearestAR(w, h){
+  if (!(w > 0 && h > 0)) return "";
+  const r = w / h;
+  let best = "", bd = Infinity;
+  for (const v of AR_ALL){
+    const d = Math.abs(Math.log(arNum(v) / r));     // 用對數距離，長寬顛倒不會互相靠攏
+    if (d < bd){ bd = d; best = v; }
+  }
+  return best;
+}
+/* auto 時顯示「跟著圖片會變成哪個比例」，一眼看得出實際會輸出什麼 */
+const arEff = it => (it && it.ar && it.ar !== "auto") ? it.ar : nearestAR(it && it.w, it && it.h);
+const arPayload = it => (it && it.ar && it.ar !== "auto") ? {aspect: it.ar} : {};
+function arBtn(k, it, scope){
+  const auto = !it.ar || it.ar === "auto";
+  const eff = arEff(it);
+  return `<button class="arbtn${auto ? " auto" : ""}" onclick="arOpen(event, ${k}, '${scope || "item"}')"
+    title="輸出比例 — ${auto ? "自動跟著圖片" : "手動指定 " + eff}；點一下可改">
+    <span class="arg">${arGlyph(eff)}</span>${eff || "比例"}${auto ? '<span class="aramark">自動</span>' : ""}</button>`;
+}
+function arTargetOf(k, scope){ return scope === "movie" ? MV : items[k]; }
+/* 卡片剛放進清單時還沒編碼過，拿不到 w/h；auto 需要它才顯示得出實際會輸出的比例。
+   用預覽圖非同步補一次，補完重畫。_arDim 當旗標，不會重複觸發。 */
+function arFillDims(){
+  let pending = 0;
+  const done = () => { if (--pending <= 0) render(); };
+  for (const it of items){
+    if ((it.w > 0 && it.h > 0) || it._arDim || !it.preview) continue;
+    it._arDim = 1; pending++;
+    const im = new Image();
+    im.onload = () => { it.w = im.naturalWidth; it.h = im.naturalHeight; done(); };
+    im.onerror = done;
+    im.src = it.preview;
+  }
+}
+window.arOpen = (ev, k, scope) => {
+  ev.stopPropagation();
+  const t = arTargetOf(k, scope);
+  if (!t) return;
+  arClose();
+  const cur = t.ar || "auto";
+  const pop = document.createElement("div");
+  pop.className = "arpop";
+  pop.innerHTML = AR_GROUPS.map(g => `<div class="arcol"><div class="arh">${g[0]}</div>` +
+    g[1].map(x => `<button class="aritem${x[0] === cur ? " on" : ""}" onclick="arSet(${k},'${x[0]}','${scope || "item"}')">`
+      + (x[0] === "auto" ? "" : `<span class="arg">${arGlyph(x[0])}</span>`)
+      + (x[1] || x[0]) + "</button>").join("") + "</div>").join("");
+  document.body.appendChild(pop);
+  const r = ev.currentTarget.getBoundingClientRect();
+  pop.style.left = Math.max(6, Math.min(r.left, window.innerWidth - pop.offsetWidth - 6)) + "px";
+  pop.style.top = (r.bottom + window.scrollY + 4) + "px";
+  setTimeout(() => document.addEventListener("click", arClose, {once: true}), 0);
+};
+function arClose(){ const p = document.querySelector(".arpop"); if (p) p.remove(); }
+window.arSet = (k, v, scope) => {
+  const t = arTargetOf(k, scope);
+  if (t) t.ar = v;
+  arClose();
+  if (scope === "movie"){ mvSave(false); mvDraw(); }
+  else { saveDraft(); render(); }
+};
+
 function render(){
   const ae = document.activeElement;
   const keep = (ae && ae.dataset && ae.dataset.note !== undefined)
@@ -2508,6 +2600,7 @@ function render(){
                  `<img src="${u}" title="圖 ${i+1}" style="aspect-ratio:1;object-fit:cover">`).join("")}</div>`)
           : '<p class="ph">無預覽</p>'}
         <div style="margin-top:6px">${modeTag}${thumbs.length>1?`<span class="hint" style="margin-left:6px">${thumbs.length} 張</span>`:""}</div>
+        <div style="margin-top:6px">${arBtn(k, it, "item")}</div>
       </div>
       <div>
         ${isT2 ? `
@@ -2545,6 +2638,7 @@ function render(){
     if (el){ el.focus(); try{ el.setSelectionRange(keep.a, keep.b); }catch(e){} }
   }
   updateFilterBar();
+  arFillDims();
 }
 function updateSelBtns(){
   const list = modeItems();
@@ -3247,7 +3341,7 @@ window.comfyFromItem = (k, btnEl) => {
   const stat = document.querySelector(`[data-cstat="${k}"]`);
   const mode = it.mode || curMode();
   const isT2 = mode === "t2va";
-  const payload = {dur: durStr(), wf: wfOverrides(),
+  const payload = {dur: durStr(), wf: {...wfOverrides(), ...arPayload(it)},
                    mode, content: it.content, ...comfyFields(it.content, mode)};
   if (!isT2){ payload.image = it.orig || it.full; payload.more = it.more || []; }
   if (!rvEnabled(mode)){
@@ -4039,7 +4133,7 @@ async function comfyRunReviewed(payload, ctx, statusEl, btn){
 
 /* ================= FL2VA Movie：三階段（片段劇情 → 逐段影片 → 合併） ================= */
 const MV = {
-  id: null, slots: [], pick: 0, MAX: 24,
+  id: null, slots: [], pick: 0, MAX: 24, ar: "auto",
   segs: [],           // {hint, content, zh, v, state, locked, video, vstate, attempts}
   cur: 0, phase: "edit", busy: false,
   waiting: -1, final: "",
@@ -4128,6 +4222,20 @@ function mvDraw(){
   $("#mvMergeBtn").disabled = MV.busy || !allLocked;
   $("#mvCardsPanel").style.display = n ? "" : "none";
   $("#mvSegPanel").style.display = n ? "" : "none";
+  /* 比例：整支片共用一個（分鏡圖比例不一致時，尾幀會被等比裁切去配合畫布）。
+     auto 顯示第一張分鏡圖會落在哪個比例——圖的尺寸要非同步讀，讀到再重畫一次。 */
+  const arBox = $("#mvArBox");
+  if (arBox){
+    const s0 = MV.slots[0];
+    if (!s0){ MV.w = MV.h = 0; MV._arFile = null; }
+    else if (MV._arFile !== s0.file){
+      MV._arFile = s0.file;
+      const im = new Image();
+      im.onload = () => { MV.w = im.naturalWidth; MV.h = im.naturalHeight; mvDraw(); };
+      im.src = s0.url;
+    }
+    arBox.innerHTML = MV.slots.length ? arBtn(0, MV, "movie") : "";
+  }
   /* 輸出片段卡片 */
   $("#mvCards").innerHTML = MV.segs.map((s, i) => {
     const a = MV.slots[i], b = MV.slots[i + 1];
@@ -4227,7 +4335,7 @@ async function mvSave(withImages){
   if (!onServer || !MV.segs.length) return;
   const body = {id: MV.id, title: ($("#mvHint").value.trim() || "FL2VA Movie").slice(0, 60),
     global_hint: $("#mvHint").value.trim(), global_plan: $("#mvPlan").value.trim(),
-    status: MV.phase, final: MV.final,
+    status: MV.phase, final: MV.final, aspect: MV.ar || "auto",
     segments: MV.segs.map(s => ({hint: s.hint, beat: s.beat || "", content: s.content, zh: s.zh,
                                  state: s.state, locked: s.locked, video: s.video,
                                  dur_gen: s.durGen != null ? s.durGen : null,
@@ -4287,6 +4395,7 @@ window.mvLoad = async id => {
     MV.id = id; MV.final = rec.final || ""; MV.phase = rec.status || "edit";
     $("#mvHint").value = rec.global_hint || "";
     $("#mvPlan").value = rec.global_plan || "";
+    MV.ar = rec.aspect || "auto";
     MV.segs = (rec.segments || []).map(s => ({...mvNewSeg(), ...s,
       durGen: s.dur_gen != null ? s.dur_gen : null,
       vstate: (s.locked && s.video) ? "done" : "", v: null}));
@@ -4427,7 +4536,8 @@ async function mvSubmitVideo(i){
     await gpuPrepare("comfy", t => mvStat(`段 ${i + 1}：${t}`));
     mvStat(`段 ${i + 1}：送出影片生成…`);
     const payload = {image: encIn.orig || encIn.b64, more: [encB.b64], mode: "fl2va",
-                     content: s.content, dur: durStr(), wf: wfOverrides(),
+                     content: s.content, dur: durStr(),
+                     wf: {...wfOverrides(), ...arPayload(MV)},
                      ...comfyFields(s.content, "fl2va")};
     const r = await (await fetch(CAPI + "/run", {method: "POST",
       headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)})).json();

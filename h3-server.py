@@ -1094,7 +1094,21 @@ NATIVE_SHORT_EDGE = "Native (ShortEdge 768px)"     # Director 的 "auto"：短�
 RES_PRESETS = [NATIVE_SHORT_EDGE] + list(RESOLUTION_MP)
 
 
-def fit_canvas(img_w, img_h, base_w, base_h, preset=None, mult=32):
+ASPECT_RE = re.compile(r"^\s*(\d{1,4})\s*[:/x×]\s*(\d{1,4})\s*$")
+
+
+def aspect_ratio(aspect):
+    """"2:3" -> 0.667。認不得就回 None（代表改用輸入圖的比例）。"""
+    if isinstance(aspect, (int, float)) and aspect > 0:
+        return float(aspect)
+    m = ASPECT_RE.match(str(aspect or ""))
+    if not m:
+        return None
+    w, h = int(m.group(1)), int(m.group(2))
+    return (w / h) if (w > 0 and h > 0) else None
+
+
+def fit_canvas(img_w, img_h, base_w, base_h, preset=None, mult=32, aspect=None):
     """依輸入圖的長寬比算出畫布尺寸，像素預算沿用模板的 width*height。
     v18 的 timeline_data.resolution.aspect="auto" 只有 ComfyUI 的瀏覽器 JS 會執行；
     我們是直接把 API 圖 POST 給 /prompt，沒有瀏覽器，Director 只會用 width/height
@@ -1104,13 +1118,18 @@ def fit_canvas(img_w, img_h, base_w, base_h, preset=None, mult=32):
     切塊，所以 latent 的長寬都得是偶數。用 16 對齊會產生奇數 latent（例如 656x848 ->
     41x53），SamplerCustomAdvanced 會丟 "shape ... is invalid for input of size ..."。"""
     try:
-        img_w, img_h = int(img_w), int(img_h)
+        img_w, img_h = int(img_w or 0), int(img_h or 0)
         base_w, base_h = int(base_w), int(base_h)
     except (TypeError, ValueError):
         return None
-    if min(img_w, img_h, base_w, base_h) <= 0:
+    if min(base_w, base_h) <= 0:
         return None
-    ratio = img_w / img_h
+    # 指定了比例就用它；沒有才回頭看輸入圖（T2VA 沒有圖，只有指定比例時才算得出來）
+    ratio = aspect_ratio(aspect)
+    if ratio is None:
+        if min(img_w, img_h) <= 0:
+            return None
+        ratio = img_w / img_h
     if preset == NATIVE_SHORT_EDGE:               # 短邊固定 768，長邊依比例
         short = 768
         w, h = (short * ratio, short) if ratio >= 1 else (short, short / ratio)
@@ -1120,9 +1139,31 @@ def fit_canvas(img_w, img_h, base_w, base_h, preset=None, mult=32):
         budget = (mp * 1024 * 1024) if mp else (base_w * base_h)
         w = (budget * ratio) ** 0.5
         h = w / ratio if ratio else 0
-    w = max(mult, int(round(w / mult)) * mult)
-    h = max(mult, int(round(h / mult)) * mult)
-    return w, h
+    # 長寬各自取整會把比例帶歪（16:9 的 979x551 -> 992x544 = 1.824，差 2.6%）。
+    # 從鄰近的對齊候選裡挑比例最準的，同分再看誰的像素數貼近預算。
+    # 使用者明確指定比例時放寬搜尋範圍並容忍 ±12% 的像素預算落差——比例是他挑的，
+    # 要優先保住；auto 的「目標比例」本來就是圖片自己，差個 1~2% 看不出來，
+    # 那就守住預算不亂縮。
+    budget = w * h
+    span = (-2, -1, 0, 1, 2) if aspect else (0, 1)
+    tol = 0.12 if aspect else 1.0
+    bw, bh = int(w // mult), int(h // mult)
+    best = None
+    for dw in span:
+        for dh in span:
+            cw = max(mult, (bw + dw) * mult)
+            chh = max(mult, (bh + dh) * mult)
+            area = cw * chh
+            if abs(area / budget - 1.0) > tol:
+                continue
+            err = abs((cw / chh) / ratio - 1.0)
+            key = (round(err, 6), abs(area - budget))
+            if best is None or key < best[0]:
+                best = (key, cw, chh)
+    if best is None:                      # 容忍度把候選全濾掉了：退回單純取整
+        return (max(mult, int(round(w / mult)) * mult),
+                max(mult, int(round(h / mult)) * mult))
+    return best[1], best[2]
 
 
 def apply_wf_params(g, wf):
@@ -1920,10 +1961,11 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
 
     # 比例：依輸入圖的長寬比重算 Director 的 width/height（像素預算沿用模板）。
     # 沒有輸入圖（T2VA）就完全不動，直接用模板值。
-    if image_blob:
-        iw, ih = _img_dims(image_blob)
+    _aspect = (wf or {}).get("aspect")          # 卡片上選的比例；留空＝跟著輸入圖
+    if image_blob or _aspect:
+        iw, ih = _img_dims(image_blob) if image_blob else (0, 0)
         _preset = (wf or {}).get("resolution_preset") or None
-        fit = fit_canvas(iw, ih, ins.get("width"), ins.get("height"), _preset) if (iw and ih) else None
+        fit = fit_canvas(iw, ih, ins.get("width"), ins.get("height"), _preset, aspect=_aspect)
         if fit:
             ins["width"], ins["height"] = fit
     apply_wf_params(g, wf)
@@ -2703,6 +2745,7 @@ class H(SimpleHTTPRequestHandler):
             rec = {"id": rid, "ts": body.get("ts") or time.strftime("%Y-%m-%d %H:%M:%S"),
                    "up_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                    "title": str(body.get("title") or "")[:80],
+                   "aspect": str(body.get("aspect") or "auto")[:12],
                    "global_hint": str(body.get("global_hint") or "")[:2000],
                    "global_plan": str(body.get("global_plan") or "")[:4000],
                    "status": str(body.get("status") or "editing")[:20],
