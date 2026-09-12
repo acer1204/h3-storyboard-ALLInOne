@@ -583,6 +583,30 @@ def parse_data_image(data):
     return blob, ext
 
 
+AUDIO_EXT_BY_MIME = {
+    "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "wav", "audio/x-wav": "wav",
+    "audio/wave": "wav", "audio/ogg": "ogg", "audio/opus": "opus", "audio/flac": "flac",
+    "audio/x-flac": "flac", "audio/aac": "aac", "audio/mp4": "m4a", "audio/x-m4a": "m4a",
+    "audio/webm": "webm",
+}
+MAX_REF_AUDIO = 3          # REF2VA 最多 3 個音訊參考（節點的 validate_reference_limits）
+MAX_REF_FILES = 12         # 圖＋影片＋音訊合計上限
+
+
+def parse_data_audio(data):
+    """'data:audio/mpeg;base64,...' -> (bytes, ext)；不是音訊就回 (None, '')。
+    副檔名要給對：Director 的 load_audio 交給 PyAV 開檔，容器判斷吃得到副檔名。"""
+    if not isinstance(data, str) or not data.startswith("data:audio"):
+        return None, ""
+    try:
+        head, b64 = data.split(",", 1)
+        blob = base64.b64decode(b64)
+    except Exception:
+        return None, ""
+    mime = head[5:].split(";", 1)[0].lower()
+    return blob, AUDIO_EXT_BY_MIME.get(mime, "mp3")
+
+
 def upload_register(full_bytes, thumb_bytes, name, orig_bytes=b"", orig_ext=""):
     """Store an image in the uploads library (idempotent by content hash of the 1024px copy). Returns the hash.
     orig_bytes = the full-resolution original (what ComfyUI should receive); stored once per hash."""
@@ -735,15 +759,16 @@ def llama_api(path, data=None, timeout=600):
     return json.loads(_u.urlopen(req, timeout=timeout).read() or b"{}")
 
 
-def comfy_upload(name, blob):
-    """multipart 上傳圖片到 ComfyUI input 資料夾"""
+def comfy_upload(name, blob, ctype="image/jpeg"):
+    """multipart 上傳檔案到 ComfyUI input 資料夾。
+    /upload/image 不檢查型別也不看副檔名，音訊走同一條路（欄位名仍須是 image）。"""
     import urllib.request as _u
     bnd = "----h3webui%d" % int(time.time() * 1000)
     body = io.BytesIO()
     def w(t): body.write(t if isinstance(t, bytes) else t.encode())
     w(f"--{bnd}\r\n")
     w(f'Content-Disposition: form-data; name="image"; filename="{name}"\r\n')
-    w("Content-Type: image/jpeg\r\n\r\n"); w(blob); w("\r\n")
+    w("Content-Type: %s\r\n\r\n" % ctype); w(blob); w("\r\n")
     w(f"--{bnd}\r\n")
     w('Content-Disposition: form-data; name="overwrite"\r\n\r\ntrue\r\n')
     w(f"--{bnd}--\r\n")
@@ -1391,6 +1416,14 @@ def comfy_submit(body):
         mb, _ = parse_data_image(durl)
         if mb:
             extra_blobs.append(mb)
+    # REF2VA 的參考音訊：節點限 3 個、且必須有圖或影片作伴，總長 15 秒（長度在前端擋）
+    audio_blobs = []
+    for durl in (body.get("audios") or [])[:MAX_REF_AUDIO]:
+        ab, aext = parse_data_audio(durl)
+        if ab:
+            audio_blobs.append((ab, aext))
+    if audio_blobs and run_mode != "ref2va":
+        raise SubmitError("只有 REF2VA 支援參考音訊", 400)
     if blob is None and run_mode != "t2va":
         raise SubmitError("沒有可用的圖片（rec_id 找不到原圖，也沒帶 image）", 400)
     dur = None
@@ -1406,13 +1439,22 @@ def comfy_submit(body):
         for k2, mb in enumerate(extra_blobs):
             nm2 = "h3webui_%s_x%d.jpg" % (new_id(), k2 + 1)
             extra_names.append(comfy_upload(nm2, mb).get("name", nm2))
+        audio_names = []
+        for k3, (ab, aext) in enumerate(audio_blobs):
+            nm3 = "h3webui_%s_a%d.%s" % (new_id(), k3 + 1, aext)
+            audio_names.append(comfy_upload(nm3, ab, "audio/" + aext).get("name", nm3))
+        if audio_names and not (up_name or extra_names):
+            raise SubmitError("參考音訊必須搭配至少一張參考圖", 400)
+        if len(audio_names) + len(extra_names) + (1 if up_name else 0) > MAX_REF_FILES:
+            raise SubmitError("參考素材最多 %d 個（圖＋音訊合計）" % MAX_REF_FILES, 400)
         flds = split_fields(full_prompt, run_mode)
         graph, extra = comfy_build(str(body.get("imd") or flds["imd"]),
                                    str(body.get("soundscape") or flds["soundscape"]),
                                    str(body.get("music") or flds["music"]),
                                    up_name, dur,
                                    body.get("wf"), blob,
-                                   mode=run_mode, extra_names=extra_names, full_prompt=full_prompt)
+                                   mode=run_mode, extra_names=extra_names, full_prompt=full_prompt,
+                                   audio_names=audio_names)
         payload = {"prompt": graph, "client_id": "h3-webui"}
         if extra:
             payload["extra_data"] = extra
@@ -1838,7 +1880,7 @@ def strip_latent_resamplers(g, warn):
 
 
 def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, image_blob=None,
-                mode=None, extra_names=None, full_prompt=None):
+                mode=None, extra_names=None, full_prompt=None, audio_names=None):
     """載模板，換圖與欄位（＋影片秒數），其餘照舊；種子隨機化避免重複送出被去重。
     extra_data（UI 工作流）同步替換相同欄位——save_metadata 嵌進影片的是它。
     mode/extra_names/full_prompt：四模式支援 —— 設 Director 的 mode、重建 timeline 的圖片清單
@@ -1944,7 +1986,14 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
             if dmode == "FL2VA":
                 item["slot"] = k          # 0 = 首幀, 1 = 尾幀
             img_items.append(item)
-        tl["items"] = img_items + keep
+        # 參考音訊接在圖片後面。Director 依 (type_order, slot, index) 排序，
+        # audio 的 type_order 是 2，排在圖片之後；這裡的順序決定 ref_audio_1..N 的編號。
+        aud_items = []
+        for k, nm in enumerate(list(audio_names or [])):
+            aud_items.append({"id": "h3web-aud-%d" % (k + 1), "type": "audio", "value": nm,
+                              "order": len(img_items) + k, "enabled": True,
+                              "trim_start": 0, "trim_end": None, "thumbnail": None})
+        tl["items"] = img_items + aud_items + keep
         done = bool(img_items)
     else:
         done = False

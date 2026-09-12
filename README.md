@@ -43,8 +43,8 @@ The image is the LAST frame; the first frame is unconstrained (locked slot), and
 
 ### REF2VA — reference images 參考圖生影音
 
-1 to 9 reference images define character/object appearance (not frames); outputs the official six-section reference format with `<Subject N>` / `<Picture N>` tokens, per-subject retention levels, and explicit on-screen/off-screen declarations per shot — and all six fields are written into the ComfyUI Director workflow, so reruns inside ComfyUI keep the ref format.
-1～9 張參考圖作為角色/物件外觀依據（非影格），輸出官方六欄位參考格式：`<Subject N>`／`<Picture N>` 代號、每個主體的保留等級、每個 Shot 明確宣告誰入鏡誰不入鏡——且六欄位完整寫入 ComfyUI Director 工作流，拖回 ComfyUI 重跑也維持 ref 格式。
+1 to 9 reference images define character/object appearance (not frames), plus up to 3 reference audio clips (15 seconds total); outputs the official six-section reference format with `<Subject N>` / `<Picture N>` tokens, per-subject retention levels, and explicit on-screen/off-screen declarations per shot — and all six fields are written into the ComfyUI Director workflow, so reruns inside ComfyUI keep the ref format.
+1～9 張參考圖作為角色/物件外觀依據（非影格），另可加最多 3 個參考音訊（總長 15 秒內），輸出官方六欄位參考格式：`<Subject N>`／`<Picture N>` 代號、每個主體的保留等級、每個 Shot 明確宣告誰入鏡誰不入鏡——且六欄位完整寫入 ComfyUI Director 工作流，拖回 ComfyUI 重跑也維持 ref 格式。
 
 ![REF2VA](docs/img/ref2va.png)
 

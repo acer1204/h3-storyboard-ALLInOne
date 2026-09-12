@@ -238,6 +238,20 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .qb-queued{color:var(--mut)} .qb-running{color:var(--acc);border-color:var(--acc)}
 .qb-done{color:var(--ok);border-color:var(--ok)} .qb-error{color:var(--warn);border-color:var(--warn)}
 .qb-canceled{color:var(--faint)}
+.audrow{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:9px;
+  padding:8px;margin-bottom:6px;background:var(--panel)}
+.audrow .an{font-size:11.5px;color:var(--mut);font-family:ui-monospace,Consolas,monospace;flex:none;
+  padding-top:5px;min-width:62px}
+.audrow .ab{flex:1;min-width:0}
+.audrow audio{width:100%;height:30px;display:block}
+.audrow .adesc{width:100%;margin-top:5px;border:1px solid var(--line);border-radius:7px;background:transparent;
+  color:var(--fg);font:inherit;font-size:12px;padding:5px 7px;resize:vertical}
+.audrow .ax{border:1px solid var(--line);background:transparent;color:var(--mut);border-radius:7px;
+  padding:2px 7px;font-size:12px;cursor:pointer;flex:none;font-family:inherit}
+.audrow .ax:hover{color:var(--warn);border-color:var(--warn)}
+.audadd{border:1px dashed var(--line);background:transparent;color:var(--mut);border-radius:9px;
+  padding:7px 12px;font-size:12px;cursor:pointer;font-family:inherit;width:100%}
+.audadd:hover{border-color:var(--acc);color:var(--acc)}
 .arbtn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);background:transparent;
   color:var(--fg);border-radius:8px;padding:3px 9px;font-size:11.5px;cursor:pointer;font-family:inherit;
   line-height:1.6}
@@ -492,6 +506,11 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
   <div id="slotzone" class="hide">
     <div class="slotgrid" id="slotgrid"></div>
+    <div id="audzone" style="display:none">
+      <div class="hint" style="margin:10px 0 6px">🔊 參考音訊（選填，最多 3 個；必須搭配至少一張參考圖，總長 15 秒內）
+        — 模型聽不到聲音，請在每個音訊下方寫清楚它是什麼，它才寫得出 &lt;Audio N&gt;</div>
+      <div id="audgrid"></div>
+    </div>
     <div class="row">
       <button class="mini" id="slotAdd">✚ 加入生成清單</button>
       <button class="ghost mini" id="slotClear">清空格子</button>
@@ -499,6 +518,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     </div>
   </div>
   <input type="file" id="slotfiles" multiple accept="image/*" hidden>
+  <input type="file" id="audfiles" multiple accept="audio/*" hidden>
 
   <div class="fbar" id="fbar" style="display:none">
     <span class="flab">顯示</span>
@@ -992,7 +1012,7 @@ const MODE_INFO = {
           drop:"拖圖到這裡，或點下方格子選圖", dropS:"起始幀、結束幀各一格", min:2, max:2},
   l2va:  {title:"L2VA — 末幀生影音", sub:"圖片＝影片最後一幀（首幀鎖定，由模型自由鋪陳）。一次拖入多張會自動逐張各成一筆。",
           drop:"拖圖到這裡，或點下方格子選圖", dropS:"只有「結束幀」一格可放圖", min:1, max:1, lockFirst:true},
-  ref2va:{title:"REF2VA — 參考圖生影音", sub:"參考圖＝角色/物件外觀依據（非影格），1～9 張組成一筆。輸出六欄位參考格式。",
+  ref2va:{title:"REF2VA — 參考圖生影音", sub:"參考圖＝角色/物件外觀依據（非影格），1～9 張組成一筆；可再加最多 3 個參考音訊（總長 15 秒內）。輸出六欄位參考格式。",
           drop:"拖圖到這裡，或點下方格子選圖", dropS:"點第 N 格選多張圖＝從第 N 格開始依序填入；✕ 移除、再點一次換圖", min:1, max:9},
 };
 function curMode(){ const m = $("#mode").value; return MODES[m] ? m : "i2va"; }
@@ -1801,6 +1821,59 @@ function wireSlotDrag(gridSel, getArr, apply){
     };
   });
 }
+/* ---------- REF2VA 參考音訊（最多 3 個，總長 15 秒，必須搭配至少一張圖） ----------
+   節點端限制在 helper_minimax_h3_director.py 的 validate_reference_limits：
+   圖<=9、影片<=3、音訊<=3、合計<=12、音訊總長<=15s、音訊不能單獨存在。
+   這裡先擋，讓錯誤在按下去之前就講清楚，而不是等 ComfyUI 拒收。 */
+const AUD_MAX = 3, AUD_MAX_SECONDS = 15;
+let AUDS = [];                 // {file, url, name, dur, desc}
+const audTotal = () => AUDS.reduce((a, x) => a + (x.dur || 0), 0);
+function audDuration(url){
+  return new Promise(res => {
+    const a = new Audio();
+    a.preload = "metadata";
+    a.onloadedmetadata = () => res(isFinite(a.duration) ? a.duration : 0);
+    a.onerror = () => res(0);
+    a.src = url;
+  });
+}
+function renderAuds(){
+  const zone = $("#audzone");
+  if (!zone) return;
+  const on = curMode() === "ref2va";
+  zone.style.display = on ? "" : "none";
+  if (!on) return;
+  const box = $("#audgrid");
+  box.innerHTML = AUDS.map((x, i) => `<div class="audrow">
+      <span class="an">&lt;Audio ${i + 1}&gt;</span>
+      <div class="ab">
+        <audio controls preload="metadata" src="${x.url}"></audio>
+        <div class="hint" style="margin-top:3px;font-size:10.5px">${esc(x.name)}${x.dur ? ` · ${x.dur.toFixed(1)}s` : ""}</div>
+        <textarea class="adesc" rows="2" placeholder="這段音訊是什麼？例如：主角的說話音色、雨聲環境音、片頭節奏"
+          oninput="audDesc(${i}, this.value)">${esc(x.desc || "")}</textarea>
+      </div>
+      <button class="ax" onclick="audDel(${i})" title="移除">✕</button>
+    </div>`).join("")
+    + (AUDS.length < AUD_MAX ? `<button class="audadd" onclick="$('#audfiles').click()">＋ 加入音訊（還可 ${AUD_MAX - AUDS.length} 個）</button>` : "")
+    + (AUDS.length ? `<div class="hint" style="margin-top:5px${audTotal() > AUD_MAX_SECONDS ? ";color:var(--warn)" : ""}">總長 ${audTotal().toFixed(1)} / ${AUD_MAX_SECONDS} 秒</div>` : "");
+}
+window.audDesc = (i, v) => { if (AUDS[i]) AUDS[i].desc = v; saveDraft(); };
+window.audDel = i => {
+  const x = AUDS[i];
+  if (x){ try{ URL.revokeObjectURL(x.url); }catch(e){} }
+  AUDS.splice(i, 1); saveDraft(); renderAuds();
+};
+/* 送出前的守門：訊息要講得出所以然，而不是把 ComfyUI 的英文錯誤丟出來 */
+function audCheck(nImg){
+  if (!AUDS.length) return "";
+  if (!nImg) return "參考音訊必須搭配至少一張參考圖（節點端不接受只有音訊）";
+  if (AUDS.length > AUD_MAX) return `參考音訊最多 ${AUD_MAX} 個`;
+  if (nImg + AUDS.length > 12) return `參考素材合計最多 12 個（目前 ${nImg} 圖 + ${AUDS.length} 音訊）`;
+  const t = audTotal();
+  if (t > AUD_MAX_SECONDS) return `音訊總長 ${t.toFixed(1)} 秒，超過 ${AUD_MAX_SECONDS} 秒上限`;
+  return "";
+}
+
 function renderSlots(){
   const zone = $("#slotzone");
   const inf = MODE_INFO[curMode()];
@@ -1820,6 +1893,7 @@ function renderSlots(){
       <span class="slab">${slotLabel(i)}${s ? "" : ""}</span>
     </div>`;
   }).join("");
+  renderAuds();
   document.querySelectorAll("#slotgrid .slot[data-i]").forEach(el => el.onclick = e => {
     if (e.target.closest(".sx")) return;
     slotPick = +el.dataset.i;
@@ -1853,14 +1927,20 @@ function composeSlots(){
   const picked = slotsArr().map((s, i) => s ? {s, i} : null).filter(Boolean);
   const inf = MODE_INFO[curMode()];
   if (picked.length < inf.min){ $("#slotStat").textContent = `此模式至少需要 ${inf.min} 張圖`; return false; }
+  const bad = curMode() === "ref2va" ? audCheck(picked.length) : "";
+  if (bad){ $("#slotStat").textContent = bad; return false; }
   const it = {mode: curMode(), files: picked.map(x => x.s.file), file: picked[0].s.file,
               name: picked.map(x => x.s.file.name).join(" ＋ "), state: "pending",
-              preview: null, previews: []};
+              preview: null, previews: [],
+              auds: curMode() === "ref2va"
+                ? AUDS.map(a => ({name: a.name, dur: a.dur, desc: a.desc, b64: a.b64})) : []};
   // objectURL 交棒給 item，格子清空但不 revoke
   it.previews = picked.map(x => x.s.url);
   it.preview = it.previews[0];
   picked.forEach((x, n) => { if (x.s._hash) it.files[n]._hash = x.s._hash; });
   items.push(it);
+  AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
+  AUDS = [];
   SLOTS_BY[curMode()] = [];
   saveDraft();
   renderSlots();
@@ -1869,8 +1949,27 @@ function composeSlots(){
   updateNavCounts();
   return true;
 }
+$("#audfiles") && ($("#audfiles").onchange = async e => {
+  const fs = [...e.target.files].filter(f => f.type.startsWith("audio/"));
+  e.target.value = "";
+  for (const f of fs){
+    if (AUDS.length >= AUD_MAX) break;
+    const url = URL.createObjectURL(f);
+    const dur = await audDuration(url);
+    const b64 = await new Promise(r => {
+      const fr = new FileReader(); fr.onload = () => r(fr.result); fr.onerror = () => r(""); fr.readAsDataURL(f);
+    });
+    if (!b64){ URL.revokeObjectURL(url); $("#slotStat").textContent = `讀不到音訊：${f.name}`; continue; }
+    AUDS.push({file: f, url, name: f.name, dur, desc: "", b64});
+  }
+  saveDraft(); renderAuds();
+});
 $("#slotAdd").onclick = () => composeSlots();
-$("#slotClear").onclick = () => { clearSlots(); renderSlots(); };
+$("#slotClear").onclick = () => {
+  AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
+  AUDS = [];
+  clearSlots(); renderSlots();
+};
 
 /* Two copies of every image:
      b64  = 1024px JPEG working copy  -> the vision LLM (reads it fine) and thumbnails/history display
@@ -1992,6 +2091,20 @@ function userNote(it){
   else if (mode === "fl2va") t += ` Two reference images are attached in order: <Picture 1> is the first frame, <Picture 2> is the last frame.`;
   else if (mode === "l2va")  t += ` One reference image is attached: it is the LAST frame (<Picture 1>).`;
   else if (mode === "ref2va")t += ` ${nImg} reference picture(s) are attached in order as <Picture 1>..<Picture ${nImg}>.`;
+  /* 參考音訊：模型聽不到聲音，只能告訴它有幾個、各是什麼（使用者寫的），
+     由它按官方指南的 2.4 節建立 <Audio N> 定義並貫穿各欄位。 */
+  const auds = (mode === "ref2va") ? (it.auds || []) : [];
+  if (auds.length){
+    t += ` ${auds.length} reference audio asset(s) are also attached as <Audio 1>..<Audio ${auds.length}>.`
+       + ` You CANNOT hear them — rely on the descriptions below. Define each one in subject_definitions`
+       + ` and keep its label consistent through retention_analysis and detailed_description, exactly as`
+       + ` section 2.4 of the reference guide requires. <Audio N> is numbered independently of <Picture N>.`;
+    auds.forEach((a, i) => {
+      const d = (a.desc || "").trim();
+      t += `
+<Audio ${i + 1}> (${(a.dur || 0).toFixed(1)}s): ${d || "unspecified — treat as a generic reference track and keep its role minimal"}`;
+    });
+  }
   t += ` Analyze the attached image(s) and write the final H3 prompt now, following the reference guide for this mode exactly (including the alignment instruction line where the guide requires one).`;
   const n = (it.note || "").trim();
   if (n) t += `\nStory hint (build the plot around this): "${n}"`;
@@ -2601,6 +2714,7 @@ function render(){
           : '<p class="ph">無預覽</p>'}
         <div style="margin-top:6px">${modeTag}${thumbs.length>1?`<span class="hint" style="margin-left:6px">${thumbs.length} 張</span>`:""}</div>
         <div style="margin-top:6px">${arBtn(k, it, "item")}</div>
+        ${(it.auds || []).length ? `<div class="hint" style="margin-top:6px;font-size:10.5px">🔊 ${it.auds.length} 個參考音訊 · ${it.auds.reduce((a,x)=>a+(x.dur||0),0).toFixed(1)}s<br>${it.auds.map((a,n)=>`&lt;Audio ${n+1}&gt; ${esc((a.desc||"").trim() || a.name)}`).join("<br>")}</div>` : ""}
       </div>
       <div>
         ${isT2 ? `
@@ -3343,6 +3457,8 @@ window.comfyFromItem = (k, btnEl) => {
   const isT2 = mode === "t2va";
   const payload = {dur: durStr(), wf: {...wfOverrides(), ...arPayload(it)},
                    mode, content: it.content, ...comfyFields(it.content, mode)};
+  if (mode === "ref2va" && (it.auds || []).length)
+    payload.audios = it.auds.map(a => a.b64).filter(Boolean);
   if (!isT2){ payload.image = it.orig || it.full; payload.more = it.more || []; }
   if (!rvEnabled(mode)){
     if (stat) stat.textContent = "已排入任務清單";
@@ -3359,7 +3475,8 @@ window.comfyFromItem = (k, btnEl) => {
       const g = isT2
         ? await genOnce([], t2vaNote(it), 20, 1, prev)
         : await genOnce(it.imgs || [it.full],
-            userNote({mode, note: (it.note || "").trim(), w: it.w, h: it.h}), 20, 1, prev);
+            userNote({mode, note: (it.note || "").trim(), w: it.w, h: it.h,
+                      auds: it.auds || []}), 20, 1, prev);   // 審查後重生成也要保留 <Audio N> 宣告
       it.content = g.content; it.v = g.v;
       it.state = g.v.E.length ? "fail" : (g.v.W.length ? "warn" : "ok");
       render();
@@ -3412,7 +3529,8 @@ function saveDraft(){
   if (!onServer || !DRAFT_READY) return;
   clearTimeout(DRAFT_T);
   DRAFT_T = setTimeout(async () => {
-    const d = {slots: {}, items: [], t2va: $("#t2vaInput") ? $("#t2vaInput").value : ""};
+    const d = {slots: {}, items: [], t2va: $("#t2vaInput") ? $("#t2vaInput").value : "",
+               auds: AUDS.map(a => ({name: a.name, dur: a.dur, desc: a.desc, b64: a.b64}))};
     try{
       for (const [m, arr] of Object.entries(SLOTS_BY)){
         const out = [];
@@ -3427,7 +3545,9 @@ function saveDraft(){
         if (it.state === "running") continue;
         const rec = {mode: it.mode, name: it.name, note: it.note || "",
                      rawStory: it.rawStory || "", polished: it.polished || "",
-                     skills: it.skills || [], state: it.state, files: []};
+                     skills: it.skills || [], state: it.state, files: [],
+                     ar: it.ar || "auto",
+                     auds: (it.auds || []).map(a => ({name: a.name, dur: a.dur, desc: a.desc, b64: a.b64}))};
         for (const f of (it.files || [])){
           if (!f._hash){ const u = await regUpload(f); f._hash = u && u.hash; }
           if (f._hash) rec.files.push({hash: f._hash, name: f.name});
@@ -3464,9 +3584,21 @@ async function loadDraft(){
                   name: rec.name || (files.map(f=>f.name).join(" ＋ ")),
                   state: "pending", note: rec.note || "",
                   rawStory: rec.rawStory || "", polished: rec.polished || "",
-                  skills: rec.skills || [], t2vaTab: 0,
+                  skills: rec.skills || [], t2vaTab: 0, ar: rec.ar || "auto",
+                  auds: (rec.auds || []).map(a => ({...a})),
                   preview: previews[0] || null, previews});
     }
+    /* 還沒加入清單、留在音訊格子裡的也要回來；b64 轉回 objectURL 才播得出來 */
+    AUDS = (d.auds || []).map(a => {
+      let url = "";
+      try{
+        const bin = atob(String(a.b64 || "").split(",")[1] || "");
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        url = URL.createObjectURL(new Blob([u8], {type: (String(a.b64).match(/^data:([^;]+)/) || [])[1] || "audio/mpeg"}));
+      }catch(e){}
+      return {file: null, url, name: a.name, dur: a.dur, desc: a.desc, b64: a.b64};
+    }).filter(a => a.url);
     if (d.t2va && $("#t2vaInput")) $("#t2vaInput").value = d.t2va;
     if (typeof renderSlots === "function") renderSlots();
     if (typeof render === "function") render();
