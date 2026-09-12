@@ -1635,6 +1635,43 @@ function camFamily(t){
   return null;    // drift / glide / ease / nudge are NOT in the official table -> caller warns
 }
 
+/* 說話者編號必須依「實際發聲順序」指派（ref-en 5.4 / base-en）：
+   "Assign (Sx) once according to the order of actual vocal events in the target video."
+   模型很容易改用 <Subject N> 的編號來給 (Sx)。掛了參考音訊時這會直接造成聲音張冠李戴——
+   <Audio 1> 宣告成 "(S1) 的音色"，而模型認定的 S1 是第一個開口的人，不是 Subject 1。 */
+function speakerIssues(c){
+  const out = [];
+  const dd = c.match(/detailed_description:?\s*([\s\S]*?)(?:\n\s*overall_soundscape|$)/);
+  const body = dd ? dd[1] : c;
+  const order = [];
+  for (const seg of body.split(/(?=\[Shot\s*\d+\])/)){
+    if (!/<d>/.test(seg)) continue;
+    const shot = (seg.match(/\[Shot\s*(\d+)\]/) || [])[1] || "?";
+    const re = /<d>/g;
+    let m;
+    while ((m = re.exec(seg))){
+      const before = seg.slice(0, m.index);
+      const ids = [...before.matchAll(/\(S(\d)(?:\s*,\s*S?\d)*\)/g)];
+      const sx = ids.length ? ids[ids.length - 1] : null;
+      /* 指南允許的例外只有「BGM／整段配樂裡的人聲提示」，寫法是
+         When <Audio 1> reaches the phrase <d>…。鏡頭敘述本來就常提到 <Audio N>
+         （"using the timbre from <Audio 1>"），窗口開太寬會把真正漏標的也放行。 */
+      const isAudioCue = /<Audio\s*\d+>[^<]{0,90}$/i.test(before);
+      if (sx) order.push(+sx[1]);
+      else if (!isAudioCue) out.push(`[Shot ${shot}] 有台詞卻沒有標說話者 (S#)`);
+    }
+  }
+  const firstSeen = [];
+  for (const s of order) if (!firstSeen.includes(s)) firstSeen.push(s);
+  for (let i = 0; i < firstSeen.length; i++){
+    if (firstSeen[i] !== i + 1){
+      out.push(`說話者編號沒有照發聲順序：第 ${i + 1} 個開口的被標成 (S${firstSeen[i]})，應該是 (S${i + 1})`);
+      break;
+    }
+  }
+  return [...new Set(out)];
+}
+
 function validate(c, target, wantShots){
   /* 官方 skill 版：自訂規則全數移除，只留「傳輸衛生」與「欄位存在性」——
      格式細節交給官方 h3-prompt-writing 指南與模型自我檢查。 */
@@ -1649,6 +1686,9 @@ function validate(c, target, wantShots){
     ? ["subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music"]
     : ["integrated_multimodal_description", "overall_soundscape", "non_diegetic_music"];
   for (const l of labs) if (!c.includes(l)) E.push("缺欄位 " + l);
+
+  /* 說話者編號：掛了音訊時它決定聲音落在誰身上，必須擋；沒掛音訊維持現狀只提醒 */
+  for (const msg of speakerIssues(c)) (VAL_NAUD ? E : W).push(msg);
 
   /* <Audio N> 必須與實際掛上的音訊一致：憑空出現的標籤指向不存在的素材，
      而該有卻沒有的話，掛上去的音訊模型不知道要怎麼用。 */
@@ -2131,7 +2171,12 @@ function userNote(it){
     t += ` ${auds.length} reference audio asset(s) are also attached as <Audio 1>..<Audio ${auds.length}>.`
        + ` You CANNOT hear them — rely on the descriptions below. Define each one in subject_definitions`
        + ` and keep its label consistent through retention_analysis and detailed_description, exactly as`
-       + ` section 2.4 of the reference guide requires. <Audio N> is numbered independently of <Picture N>.`;
+       + ` section 2.4 of the reference guide requires. <Audio N> is numbered independently of <Picture N>.`
+       + ` CRITICAL: (Sx) speaker IDs are assigned by the ORDER OF THE FIRST VOCAL EVENT in the target`
+       + ` video, NOT by <Subject N> numbering - whoever speaks first is (S1) even if they are`
+       + ` <Subject 3>. Bind each <Audio N> to the (Sx) that follows from that order, and give every`
+       + ` <d> line an owning <Subject N> (Sx). Getting this wrong attaches the wrong voice to the`
+       + ` wrong character.`;
     auds.forEach((a, i) => {
       const d = (a.desc || "").trim();
       t += `
