@@ -1825,7 +1825,7 @@ function wireSlotDrag(gridSel, getArr, apply){
    節點端限制在 helper_minimax_h3_director.py 的 validate_reference_limits：
    圖<=9、影片<=3、音訊<=3、合計<=12、音訊總長<=15s、音訊不能單獨存在。
    這裡先擋，讓錯誤在按下去之前就講清楚，而不是等 ComfyUI 拒收。 */
-const AUD_MAX = 3, AUD_MAX_SECONDS = 15;
+const AUD_MAX = 3, AUD_MAX_SECONDS = 15, AUD_MIN_ONE = 2, AUD_MAX_ONE = 15;
 let AUDS = [];                 // {file, url, name, dur, desc}
 const audTotal = () => AUDS.reduce((a, x) => a + (x.dur || 0), 0);
 function audDuration(url){
@@ -1857,7 +1857,14 @@ function renderAuds(){
     + (AUDS.length < AUD_MAX ? `<button class="audadd" onclick="$('#audfiles').click()">＋ 加入音訊（還可 ${AUD_MAX - AUDS.length} 個）</button>` : "")
     + (AUDS.length ? `<div class="hint" style="margin-top:5px${audTotal() > AUD_MAX_SECONDS ? ";color:var(--warn)" : ""}">總長 ${audTotal().toFixed(1)} / ${AUD_MAX_SECONDS} 秒</div>` : "");
 }
-window.audDesc = (i, v) => { if (AUDS[i]) AUDS[i].desc = v; saveDraft(); };
+/* 描述欄每個字都存會把整包音訊 base64 重新序列化上傳（可達數 MB），拖慢又逼近
+   MAX_BODY；改成停手 1.2 秒才寫。 */
+let AUD_DESC_T = null;
+window.audDesc = (i, v) => {
+  if (AUDS[i]) AUDS[i].desc = v;
+  clearTimeout(AUD_DESC_T);
+  AUD_DESC_T = setTimeout(saveDraft, 1200);
+};
 window.audDel = i => {
   const x = AUDS[i];
   if (x){ try{ URL.revokeObjectURL(x.url); }catch(e){} }
@@ -1868,6 +1875,12 @@ function audCheck(nImg){
   if (!AUDS.length) return "";
   if (!nImg) return "參考音訊必須搭配至少一張參考圖（節點端不接受只有音訊）";
   if (AUDS.length > AUD_MAX) return `參考音訊最多 ${AUD_MAX} 個`;
+  for (let i = 0; i < AUDS.length; i++){
+    const d = AUDS[i].dur;
+    if (!(d > 0)) return `第 ${i + 1} 個音訊讀不到長度，換一個檔案（或轉成 mp3/wav）`;
+    if (d < AUD_MIN_ONE || d > AUD_MAX_ONE)
+      return `第 ${i + 1} 個音訊 ${d.toFixed(1)} 秒——每段必須介於 ${AUD_MIN_ONE}~${AUD_MAX_ONE} 秒`;
+  }
   if (nImg + AUDS.length > 12) return `參考素材合計最多 12 個（目前 ${nImg} 圖 + ${AUDS.length} 音訊）`;
   const t = audTotal();
   if (t > AUD_MAX_SECONDS) return `音訊總長 ${t.toFixed(1)} 秒，超過 ${AUD_MAX_SECONDS} 秒上限`;
@@ -1939,8 +1952,10 @@ function composeSlots(){
   it.preview = it.previews[0];
   picked.forEach((x, n) => { if (x.s._hash) it.files[n]._hash = x.s._hash; });
   items.push(it);
-  AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
-  AUDS = [];
+  if (curMode() === "ref2va"){        // AUDS 是全域的，別在別的模式把它清掉
+    AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
+    AUDS = [];
+  }
   SLOTS_BY[curMode()] = [];
   saveDraft();
   renderSlots();
@@ -1950,7 +1965,8 @@ function composeSlots(){
   return true;
 }
 $("#audfiles") && ($("#audfiles").onchange = async e => {
-  const fs = [...e.target.files].filter(f => f.type.startsWith("audio/"));
+  const AUD_EXT = /\.(mp3|wav|flac|m4a|aac|ogg|opus|webm|mp4)$/i;
+  const fs = [...e.target.files].filter(f => f.type.startsWith("audio/") || AUD_EXT.test(f.name));
   e.target.value = "";
   for (const f of fs){
     if (AUDS.length >= AUD_MAX) break;
@@ -1966,8 +1982,10 @@ $("#audfiles") && ($("#audfiles").onchange = async e => {
 });
 $("#slotAdd").onclick = () => composeSlots();
 $("#slotClear").onclick = () => {
-  AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
-  AUDS = [];
+  if (curMode() === "ref2va"){
+    AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
+    AUDS = [];
+  }
   clearSlots(); renderSlots();
 };
 
@@ -4936,7 +4954,7 @@ const EN = {
 "L2VA — 末幀生影音":"L2VA — Last Frame",
 "圖片＝影片最後一幀（首幀鎖定，由模型自由鋪陳）。一次拖入多張會自動逐張各成一筆。":"The image is the video's LAST frame (first frame unconstrained). Dropping several images creates one item each.",
 "REF2VA — 參考圖生影音":"REF2VA — Reference Images",
-"參考圖＝角色/物件外觀依據（非影格），1～9 張組成一筆。輸出六欄位參考格式。":"Reference images define character/object appearance (not frames); 1–9 images form one item. Outputs the six-section reference format.",
+"參考圖＝角色/物件外觀依據（非影格），1～9 張組成一筆；可再加最多 3 個參考音訊（總長 15 秒內）。輸出六欄位參考格式。":"Reference images define character/object appearance (not frames); 1–9 images form one item, plus up to 3 reference audio clips (15 seconds total). Outputs the six-section reference format.",
 "拖圖到這裡，或點下方格子選圖":"Drop images here, or click a slot below",
 "多張＝批次，每張一筆":"multiple images = one batch item each",
 "起始幀、結束幀各一格":"one slot each for first and last frame",

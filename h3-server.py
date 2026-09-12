@@ -1974,11 +1974,13 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
     names = [n for n in ([image_name] + list(extra_names or [])) if n]
     if dmode == "T2VA":
         # 純文字模式：移除圖片項目，其餘（音訊參考等）保留
-        tl["items"] = [it for it in tl.get("items", []) if it.get("type") != "image"]
+        tl["items"] = [it for it in tl.get("items", []) if it.get("type") not in ("image", "audio")]
         done = True
     elif dmode:
         # 重建圖片清單：非圖片項目（音訊參考等）保留原樣
-        keep = [it for it in tl.get("items", []) if it.get("type") != "image"]
+        # 音訊項目由這裡全權重建。模板是從 ComfyUI 抓下來的快照，裡面可能留著上次
+        # 手動排的參考音訊；留著它們會讓 ref_audio_N 的編號跟 prompt 寫的對不上。
+        keep = [it for it in tl.get("items", []) if it.get("type") not in ("image", "audio")]
         img_items = []
         for k, nm in enumerate(names):
             item = {"id": "h3web-img-%d" % (k + 1), "type": "image", "value": nm,
@@ -2189,7 +2191,12 @@ class H(SimpleHTTPRequestHandler):
 
     def read_json(self):
         n = int(self.headers.get("Content-Length") or 0)
-        if n <= 0 or n > MAX_BODY:
+        if n > MAX_BODY:
+            # 連線是 keep-alive 的，未讀的 body 會被當成下一個請求行。不去讀它（可能很大），
+            # 直接標記關閉連線，呼叫端照常回它的錯誤，回完就斷。
+            self.close_connection = True
+            return None
+        if n <= 0:
             return None
         return json.loads(self.rfile.read(n).decode("utf-8"))
 
