@@ -593,6 +593,18 @@ MAX_REF_AUDIO = 3          # REF2VA 最多 3 個音訊參考（節點的 validat
 MAX_REF_FILES = 12         # 圖＋影片＋音訊合計上限
 
 
+def hist_purge(rid):
+    """刪掉一筆歷史紀錄的所有檔案。
+    原本是固定副檔名清單，漏掉了附圖 .x{n}.jpg（REF2VA 最多 8 個）與音訊 .a{n}.*，
+    每刪一筆就留下一堆孤兒。rid 已經過 ID_RE 檢查，用 glob 掃乾淨。"""
+    import glob as _g
+    for fp in _g.glob(os.path.join(HIST, rid + ".*")):
+        try:
+            os.remove(fp)
+        except OSError:
+            pass
+
+
 def parse_data_audio(data):
     """'data:audio/mpeg;base64,...' -> (bytes, ext)；不是音訊就回 (None, '')。
     副檔名要給對：Director 的 load_audio 交給 PyAV 開檔，容器判斷吃得到副檔名。"""
@@ -1383,6 +1395,7 @@ def comfy_submit(body):
         except Exception as e:
             raise SubmitError("ComfyUI 連不上: %s" % e, 502)
     blob, ext = None, "jpg"
+    rec_audio_blobs = []
     run_mode = str(body.get("mode") or "").lower()
     full_prompt = str(body.get("content") or "")
     extra_blobs = []
@@ -1406,6 +1419,11 @@ def comfy_submit(body):
                 fp2 = os.path.join(HIST, "%s.x%d.jpg" % (rid, n))
                 if os.path.exists(fp2):
                     extra_blobs.append(open(fp2, "rb").read())
+            # 音訊也要一起回來，否則 prompt 裡的 <Audio N> 會指向不存在的東西
+            for a in (rec0.get("audio") or [])[:MAX_REF_AUDIO]:
+                fp3 = os.path.join(HIST, "%s.a%s.%s" % (rid, a.get("n"), a.get("ext") or "mp3"))
+                if os.path.exists(fp3):
+                    rec_audio_blobs.append((open(fp3, "rb").read(), a.get("ext") or "mp3"))
         except Exception:
             pass
     if blob is None:
@@ -1422,6 +1440,8 @@ def comfy_submit(body):
         ab, aext = parse_data_audio(durl)
         if ab:
             audio_blobs.append((ab, aext))
+    if not audio_blobs:
+        audio_blobs = rec_audio_blobs
     if audio_blobs and run_mode != "ref2va":
         raise SubmitError("只有 REF2VA 支援參考音訊", 400)
     if blob is None and run_mode != "t2va":
@@ -2410,6 +2430,21 @@ class H(SimpleHTTPRequestHandler):
             self.wfile.write(b)
             return
 
+        m = re.match(r"^/api/audio/([^/]+)/(\d{1,2})\.([a-z0-9]{1,5})$", p)
+        if m:
+            rid = unquote(m.group(1))
+            fp = (os.path.join(HIST, "%s.a%s.%s" % (rid, m.group(2), m.group(3)))
+                  if ID_RE.match(rid) else None)
+            if not fp or not os.path.exists(fp):
+                return self.send_json({"error": "not found"}, 404)
+            b = open(fp, "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Type", "audio/" + m.group(3))
+            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Accept-Ranges", "none")
+            self.end_headers()
+            return self.wfile.write(b)
+
         m = re.match(r"^/api/extra/([^/]+)/(\d{1,2})\.jpg$", p)
         if m:
             rid = unquote(m.group(1))
@@ -3331,10 +3366,31 @@ class H(SimpleHTTPRequestHandler):
                 except Exception:
                     more_n -= 1
 
+        # REF2VA 參考音訊：檔案存成 <rid>.a{n}.<ext>，描述與長度存進紀錄。
+        # 不存的話，之後從歷史重送會少掉音訊，但 prompt 裡的 <Audio N> 還在——
+        # ComfyUI 不會報錯，只會悄悄算出一支不一樣的影片。
+        aud_meta = []
+        for a in (body.pop("auds", None) or [])[:MAX_REF_AUDIO]:
+            if not isinstance(a, dict):
+                continue
+            ab, aext = parse_data_audio(a.get("b64"))
+            if not ab:
+                continue
+            n = len(aud_meta) + 1
+            try:
+                with open(os.path.join(HIST, "%s.a%d.%s" % (rid, n, aext)), "wb") as f:
+                    f.write(ab)
+            except Exception:
+                continue
+            aud_meta.append({"n": n, "ext": aext, "name": str(a.get("name") or "")[:120],
+                             "dur": a.get("dur"), "desc": str(a.get("desc") or "")[:500]})
+
         rec = {
             "id": rid,
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "nmore": more_n,
+            "naudio": len(aud_meta),
+            "audio": aud_meta,
             "image": str(body.get("image", ""))[:200],
             "dur": str(body.get("dur", ""))[:40],
             "state": str(body.get("state", ""))[:20],
@@ -3366,7 +3422,8 @@ class H(SimpleHTTPRequestHandler):
                 json.dump(rec, f, ensure_ascii=False, indent=1)
             rows = load_index()
             rows.insert(0, {k: rec[k] for k in
-                            ("id", "ts", "image", "dur", "state", "elapsed_s", "mode", "upload_id", "nmore")}
+                            ("id", "ts", "image", "dur", "state", "elapsed_s", "mode", "upload_id",
+                             "nmore", "naudio")}
                         | {"rating": ""}
                         | {"nerr": len(rec["errors"]), "nwarn": len(rec["warnings"]),
                            "full": os.path.exists(os.path.join(HIST, rid + ".full.jpg")),
@@ -3412,9 +3469,7 @@ class H(SimpleHTTPRequestHandler):
                     rows = load_index()
                     victims = [r["id"] for r in rows if r.get("upload_id") == h]
                     for rid in victims:
-                        for ext in (".json", ".jpg", ".full.jpg", ".orig.jpg", ".orig.png", ".orig.webp"):
-                            try: os.remove(os.path.join(HIST, rid + ext))
-                            except OSError: pass
+                        hist_purge(rid)
                     if victims:
                         save_index([r for r in rows if r.get("upload_id") != h])
                 # else: unlink only. History records keep their own image copy AND their upload_id, so they
@@ -3488,9 +3543,7 @@ class H(SimpleHTTPRequestHandler):
         if not ID_RE.match(rid):
             return self.send_json({"error": "bad id"}, 400)
         with LOCK:
-            for ext in (".json", ".jpg", ".full.jpg", ".orig.jpg", ".orig.png", ".orig.webp"):
-                try: os.remove(os.path.join(HIST, rid + ext))
-                except OSError: pass
+            hist_purge(rid)
             save_index([r for r in load_index() if r.get("id") != rid])
         return self.send_json({"ok": True})
 

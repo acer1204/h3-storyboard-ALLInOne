@@ -1650,6 +1650,19 @@ function validate(c, target, wantShots){
     : ["integrated_multimodal_description", "overall_soundscape", "non_diegetic_music"];
   for (const l of labs) if (!c.includes(l)) E.push("缺欄位 " + l);
 
+  /* <Audio N> 必須與實際掛上的音訊一致：憑空出現的標籤指向不存在的素材，
+     而該有卻沒有的話，掛上去的音訊模型不知道要怎麼用。 */
+  if (isRef){
+    const hasTok = /<Audio\s*\d+>/i.test(c);
+    if (hasTok && !VAL_NAUD) E.push("沒有掛參考音訊，但 prompt 出現 <Audio N>");
+    else if (!hasTok && VAL_NAUD) E.push(`掛了 ${VAL_NAUD} 個參考音訊，但 prompt 沒有定義 <Audio N>`);
+    else if (VAL_NAUD){
+      const mx = Math.max(0, ...(c.match(/<Audio\s*(\d+)>/gi) || [])
+                                 .map(x => +(x.match(/\d+/) || [0])[0]));
+      if (mx > VAL_NAUD) E.push(`prompt 用到 <Audio ${mx}>，但只掛了 ${VAL_NAUD} 個音訊`);
+    }
+  }
+
   let body = "";
   const m = isRef
     ? c.match(/detailed_description:?\s*([\s\S]*?)\s*overall_soundscape/)
@@ -2100,6 +2113,7 @@ function frameLine(w, h){
 }
 function wantShotsFor(n){ return 1; }
 /* 官方 skill 版使用者訊息：模式與時長由 UI 供值（取代 agent 的問答步驟），其餘交給官方指南 */
+let VAL_NAUD = 0;   // 這次生成掛了幾個參考音訊；validate 用它判斷 <Audio N> 該不該存在
 function userNote(it){
   const mode = (it.mode || curMode());
   const D = effDur();
@@ -2112,6 +2126,7 @@ function userNote(it){
   /* 參考音訊：模型聽不到聲音，只能告訴它有幾個、各是什麼（使用者寫的），
      由它按官方指南的 2.4 節建立 <Audio N> 定義並貫穿各欄位。 */
   const auds = (mode === "ref2va") ? (it.auds || []) : [];
+  VAL_NAUD = auds.length;
   if (auds.length){
     t += ` ${auds.length} reference audio asset(s) are also attached as <Audio 1>..<Audio ${auds.length}>.`
        + ` You CANNOT hear them — rely on the descriptions below. Define each one in subject_definitions`
@@ -2123,6 +2138,9 @@ function userNote(it){
 <Audio ${i + 1}> (${(a.dur || 0).toFixed(1)}s): ${d || "unspecified — treat as a generic reference track and keep its role minimal"}`;
     });
   }
+  if (mode === "ref2va" && !auds.length)
+    t += ` NO audio asset is attached. The guide documents <Audio N>, but there is nothing for it to`
+       + ` refer to here — do NOT use <Audio N> anywhere in the output, in any section.`;
   t += ` Analyze the attached image(s) and write the final H3 prompt now, following the reference guide for this mode exactly (including the alignment instruction line where the guide requires one).`;
   const n = (it.note || "").trim();
   if (n) t += `\nStory hint (build the plot around this): "${n}"`;
@@ -2930,6 +2948,7 @@ async function record(it){
         errors:it.v?it.v.E:[],warnings:it.v?it.v.W:[],
         content:it.content,raw:it.raw,zh:it.zh||"",note:it.note||"",thumb:it.thumb,full:it.full||"",
         orig:it.orig||"", more:it.more||[],
+        auds:(it.auds||[]).map(a=>({name:a.name, dur:a.dur, desc:a.desc, b64:a.b64})),
         story_raw:it.rawStory||"", story_polished:it.polished||"",
         attempts:it.attempts||1,shots:it.shots||1,
         ...(() => { const c = it.ctx || genContext(); return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
@@ -3050,7 +3069,7 @@ $("#himport") && ($("#himport").onclick = async () => {
       const previews = files.map(f => URL.createObjectURL(f));
       items.push({mode, files, file: files[0],
                   name: files.map(f => f.name).join(" ＋ "), state: "pending",
-                  preview: previews[0], previews,
+                  preview: previews[0], previews, auds: await audsFromRec(rec),
                   note: rec.note || "", shots: rec.shots || undefined});
       n++;
     }catch(e){}
@@ -3199,11 +3218,28 @@ window.openRec = async id => {
   $("#modal").classList.add("on");
 };
 
+/* 把一筆紀錄的參考音訊讀回 data URL（重新生成要重新存一份、匯入清單要還原成可播放的） */
+async function audsFromRec(rec){
+  const out = [];
+  for (const a of (rec.audio || [])){
+    try{
+      const r = await fetch(`/api/audio/${rec.id}/${a.n}.${a.ext || "mp3"}`);
+      if (!r.ok) continue;
+      const b = await r.blob();
+      const b64 = await new Promise(res => {
+        const fr = new FileReader(); fr.onload = () => res(fr.result); fr.onerror = () => res(""); fr.readAsDataURL(b);
+      });
+      if (b64) out.push({name: a.name || `audio-${a.n}`, dur: a.dur, desc: a.desc || "", b64});
+    }catch(e){}
+  }
+  return out;
+}
+
 /* 依 id 取回原圖重跑一次，結果另存為新的一筆，回傳新 id（T2VA 用潤飾劇本重跑，無圖） */
 async function regenerate(rec, note, shots, onStep){
   const step = onStep || (() => {});
   const isT2 = hMode(rec) === "t2va";
-  let imgs = [], full = "", thumb = "", utext;
+  let imgs = [], full = "", thumb = "", utext, recAuds = [];
   if (isT2){
     utext = t2vaNote({polished: rec.story_polished || "", rawStory: rec.story_raw || rec.content || ""});
   } else {
@@ -3220,7 +3256,12 @@ async function regenerate(rec, note, shots, onStep){
       im.onerror = () => res({w: 0, h: 0});
       im.src = full;
     });
-    utext = userNote({mode: hMode(rec), note: note || "", w: dim.w, h: dim.h});
+    /* 音訊要跟著回來：不帶的話新 prompt 會少掉 <Audio N> 定義，
+       而原始紀錄的 prompt 裡卻還有，兩邊對不上。 */
+    recAuds = (rec.audio || []).map((a, i) => ({name: a.name || `audio-${i + 1}`,
+                                                dur: a.dur, desc: a.desc || ""}));
+    utext = userNote({mode: hMode(rec), note: note || "", w: dim.w, h: dim.h,
+                      imgs, files: imgs, auds: recAuds});
   }
   const target = 20;
 
@@ -3253,7 +3294,7 @@ async function regenerate(rec, note, shots, onStep){
     body: JSON.stringify({image:rec.image, dur:durStr(), state, elapsed_s:+elapsed,
       usage:j.usage||{}, errors:v.E, warnings:v.W, content, raw, zh, note, thumb, full,
       story_raw: rec.story_raw || "", story_polished: rec.story_polished || "",
-      orig_from: rec.id, more: imgs.slice(1),
+      orig_from: rec.id, more: imgs.slice(1), auds: await audsFromRec(rec),
       attempts:best.attempts, shots:1,
       ...(() => { const c = ctxSnap; return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
                    lora: c.lora ? {...c.lora, report:(la.lora||{}).report||null, issues:(la.lora||{}).issues||[]} : null}; })()})})).json();
