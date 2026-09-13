@@ -727,6 +727,65 @@ def media_path(rel):
     return fp
 
 
+# ── 成品縮圖快取 ────────────────────────────────────────────────────────
+# 首幀 PNG 是全解析度的（實測平均 2.6 MB，931 個檔案共 2.4 GB）。
+# 任務清單一頁上百張卡片，直接送原檔等於要傳幾百 MB，捲動時就一片黑。
+# 這裡用 ffmpeg 壓成 320px 寬的 JPEG 存起來，之後直接命中快取。
+MEDIA_THUMBS = os.path.join(ROOT, "thumbs")
+THUMB_W = 320
+THUMB_LOCK = threading.RLock()
+_thumb_busy = {}
+
+
+def media_thumb(rel):
+    """回傳縮圖檔路徑；沒有就用 ffmpeg 生一張。來源優先用首幀 PNG，
+    沒有首幀就直接從影片第一格抓。失敗回 None，呼叫端退回原檔。"""
+    src = media_path(rel)
+    if not src or not os.path.isfile(src):
+        # 傳進來的是影片路徑時，先試它的首幀 PNG
+        base = os.path.splitext(rel)[0]
+        for cand in (base + "-first-frame.png",):
+            src = media_path(cand)
+            if src and os.path.isfile(src):
+                break
+        else:
+            return None
+    try:
+        st = os.stat(src)
+        key = hashlib.sha1(("%s|%d|%d|%d" % (src, st.st_size, int(st.st_mtime), THUMB_W))
+                           .encode("utf-8")).hexdigest()
+    except OSError:
+        return None
+    out = os.path.join(MEDIA_THUMBS, key + ".jpg")
+    if os.path.exists(out):
+        return out
+    with THUMB_LOCK:
+        if os.path.exists(out):
+            return out
+        if _thumb_busy.get(key):
+            return None                     # 另一個請求正在生，這次先退回原檔
+        _thumb_busy[key] = True
+    try:
+        ff = find_ffmpeg()
+        if not ff:
+            return None
+        os.makedirs(MEDIA_THUMBS, exist_ok=True)
+        tmp = out + ".tmp.jpg"
+        r = subprocess.run([ff, "-v", "error", "-y", "-i", src,
+                            "-frames:v", "1", "-vf", "scale=%d:-2" % THUMB_W,
+                            "-q:v", "5", tmp],
+                           capture_output=True, timeout=60)
+        if r.returncode != 0 or not os.path.exists(tmp):
+            return None
+        os.replace(tmp, out)
+        return out
+    except Exception:
+        return None
+    finally:
+        with THUMB_LOCK:
+            _thumb_busy.pop(key, None)
+
+
 def media_list(limit=1000):
     rows = []
     root = os.path.realpath(MEDIA_ROOT)
@@ -2594,6 +2653,23 @@ class H(SimpleHTTPRequestHandler):
             if data is None:
                 return self.send_json({"error": "媒體資料夾不存在: " + MEDIA_ROOT}, 404)
             return self.send_json(data)
+
+        m = re.match(r"^/api/media/thumb/(.+)$", p)
+        if m:
+            rel = unquote(m.group(1))
+            tp = media_thumb(rel)
+            if tp and os.path.isfile(tp):
+                b = open(tp, "rb").read()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(b)))
+                self.send_header("Cache-Control", "public, max-age=604800")
+                self.end_headers()
+                return self.wfile.write(b)
+            fp = media_path(rel)              # 生不出縮圖就退回原檔，總比空白好
+            if fp and os.path.isfile(fp):
+                return self.send_media(fp, False)
+            return self.send_json({"error": "not found"}, 404)
 
         m = re.match(r"^/api/media/file/(.+)$", p)
         if m:

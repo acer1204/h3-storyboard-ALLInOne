@@ -4243,7 +4243,7 @@ function qUpdateBig(el, r){
    而不是塞一個 <video preload="metadata"> ——後者每次重畫都要抓取並解碼，
    而且瀏覽器對同時載入的媒體元素有併發上限，數量一多就一片載不出來。 */
 const qPoster = r => r.video
-  ? "/api/media/file/" + r.video.replace(/\\/g, "/").replace(VIDEO_RE, "-first-frame.png")
+  ? "/api/media/thumb/" + r.video.replace(/\\/g, "/").replace(VIDEO_RE, "-first-frame.png")
       .split("/").map(encodeURIComponent).join("/")
   : "";
 function qMakeCard(id){
