@@ -2669,7 +2669,7 @@ async function runOne(it){
     }catch(e){ it.zh = "（翻譯失敗："+e.message+"）"; }
     it.state2 = null;
   }
-  render(); record(it);
+  render(); record(it); saveDraft();   // 劇情生成完也要進草稿，重整才不會白跑
 }
 
 /* ================= T2VA：文字生影音 ================= */
@@ -2758,6 +2758,7 @@ $("#t2vaAdd").onclick = () => {
               });
   $("#t2vaInput").value = "";
   $("#t2vaModeHint").textContent = "";
+  saveDraft();
   render(); $("#run").disabled = !modeItems().length;
   $("#prog").textContent = `${modeItems().length} 筆待處理`;
   updateNavCounts();
@@ -2809,7 +2810,7 @@ async function t2vaGen(it){
     }catch(e){ it.zh = "（翻譯失敗：" + e.message + "）"; }
     it.state2 = null;
   }
-  render(); record(it);
+  render(); record(it); saveDraft();   // 劇情生成完也要進草稿，重整才不會白跑
 }
 
 async function runOneT2VA(it){
@@ -3126,10 +3127,13 @@ function render(){
     let inner="";
     if (it.state==="error") inner=`<pre>${esc(it.err)}</pre>`;
     else if (it.content){
-      const iss=[...it.v.E.map(e=>`<li class="e">${esc(e)}</li>`),
-                 ...it.v.W.map(w=>`<li class="w">${esc(w)}</li>`),
-                 ...((it.v.I||[]).map(x=>`<li class="i">${esc(x)}</li>`))].join("");
-      const chips = it.v.pairs.map((p,i)=>`<span class="chip">${esc(it.v.moves[i])} · ${p}</span>`).join("");
+      const V = it.v || {};          // 還原的草稿可能沒有完整的驗證結構
+      const VE = V.E || [], VW = V.W || [], VI = V.I || [],
+            VP = V.pairs || [], VM = V.moves || [];
+      const iss=[...VE.map(e=>`<li class="e">${esc(e)}</li>`),
+                 ...VW.map(w=>`<li class="w">${esc(w)}</li>`),
+                 ...VI.map(x=>`<li class="i">${esc(x)}</li>`)].join("");
+      const chips = VP.map((p,i)=>`<span class="chip">${esc(VM[i] || "")} · ${p}</span>`).join("");
       inner = `${iss?`<ul class="issues">${iss}</ul>`:""}<div class="chips">${chips}</div>
         ${loraBadges(it.lora)}${bilingual(it.content, it.zh, it.state2)}
         <details><summary>原始輸出</summary><pre>${esc(it.raw)}</pre></details>
@@ -3229,6 +3233,7 @@ window.removeItem = k => {
   const it = items[k]; if (!it || it.state === "running") return;
   if (it.preview) URL.revokeObjectURL(it.preview);
   items.splice(k, 1);
+  saveDraft();                     // 不存的話重整一次又全部回來
   render();
   $("#run").disabled = !modeItems().length;
   updateNavCounts();
@@ -3274,7 +3279,7 @@ window.editItem = k => {
   const st = $("#slotStat"); if (st) st.textContent = "已放回格子 — 調整完再按「加入生成清單」";
   const z = $("#slotzone") || $("#t2vaZone"); if (z) z.scrollIntoView({behavior: "smooth", block: "center"});
 };
-window.setNote = (k, v) => { if (items[k]) items[k].note = v; };
+window.setNote = (k, v) => { if (items[k]){ items[k].note = v; saveDraft(); } };
 window.agrow = t => { t.style.height = "auto"; t.style.height = (t.scrollHeight + 2) + "px"; };
 /* ---- 工作流預設參數（ComfyUI 設定頁） ---- */
 /* 影片時長跟隨目前模板（Director 的 duration）；劇情長度/時間軸與送單都用它 */
@@ -3510,14 +3515,28 @@ $("#himport") && ($("#himport").onclick = async () => {
         }catch(e){}
       }
       const previews = files.map(f => URL.createObjectURL(f));
+      let impV = null;
+      if (rec.content){                    // 依這筆自己的模式重驗，狀態徽章才正確
+        const prevMode = $("#mode").value;
+        $("#mode").value = mode;
+        try{ impV = validate(rec.content, 20, rec.shots || 1); }catch(e){ impV = null; }
+        $("#mode").value = prevMode;
+      }
+      const impState = rec.content
+        ? (impV && impV.E.length ? "fail" : (impV && impV.W.length ? "warn" : "ok"))
+        : "pending";
       items.push({mode, files, file: files[0],
-                  name: files.map(f => f.name).join(" ＋ "), state: "pending",
+                  name: files.map(f => f.name).join(" ＋ "),
                   preview: previews[0], previews, auds: await audsFromRec(rec),
-                  note: rec.note || "", shots: rec.shots || undefined});
+                  note: rec.note || "", shots: rec.shots || undefined,
+                  /* 匯入等於「拿這筆回來改」，劇情不帶過來就要重跑一次 LLM */
+                  content: rec.content || "", zh: rec.zh || "", rec_id: rec.id,
+                  v: impV, state: impState});
       n++;
     }catch(e){}
   }
   setMode(firstMode || "i2va");   // 回到匯入紀錄自己的模式頁
+  saveDraft();
   render();
   $("#run").disabled = !modeItems().length;
   $("#prog").textContent = `${modeItems().length} 筆待處理`;
@@ -4049,6 +4068,10 @@ function saveDraft(){
                      rawStory: it.rawStory || "", polished: it.polished || "",
                      skills: it.skills || [], state: it.state, files: [],
                      ar: it.ar || "auto",
+                     /* 生成好的 prompt 也要留著。沒存的話重整一次就要重跑 LLM，
+                        那是好幾分鐘與一次 GPU 佔用。 */
+                     content: it.content || "", zh: it.zh || "",
+                     shots: it.shots || 1, attempts: it.attempts || 1,
                      auds: (it.auds || []).map(a => ({name: a.name, dur: a.dur, desc: a.desc, b64: a.b64}))};
         for (const f of (it.files || [])){
           if (!f._hash){ const u = await regUpload(f); f._hash = u && u.hash; }
@@ -4082,9 +4105,21 @@ async function loadDraft(){
         if (f){ f._hash = e.hash; files.push(f); }
       }
       const previews = files.map(f => URL.createObjectURL(f));
+      const restored = rec.content || "";
+      let rv = null;
+      if (restored){                       // 重新驗一次，狀態與錯誤提示才跟得上目前規則
+        const prevMode = $("#mode").value;
+        $("#mode").value = rec.mode || prevMode;
+        try{ rv = validate(restored, 20, rec.shots || 1); }catch(e){ rv = null; }
+        $("#mode").value = prevMode;
+      }
       items.push({mode: rec.mode, files, file: files[0] || null,
                   name: rec.name || (files.map(f=>f.name).join(" ＋ ")),
-                  state: "pending", note: rec.note || "",
+                  content: restored, zh: rec.zh || "", v: rv,
+                  shots: rec.shots || 1, attempts: rec.attempts || 1,
+                  state: restored ? (rv && rv.E.length ? "fail" : (rv && rv.W.length ? "warn" : "ok"))
+                                  : "pending",
+                  note: rec.note || "",
                   rawStory: rec.rawStory || "", polished: rec.polished || "",
                   skills: rec.skills || [], t2vaTab: 0, ar: rec.ar || "auto",
                   auds: (rec.auds || []).map(a => ({...a})),
