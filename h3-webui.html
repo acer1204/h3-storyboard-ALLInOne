@@ -2086,7 +2086,11 @@ function samOpen(i){
   if (!s || !s.file) return;
   SAM.slot = i; SAM.file = s.file; SAM.pts = []; SAM.neg = false; SAM.out = null; SAM.bg = "";
   const im = new Image();
-  im.onload = () => { SAM.img = im; samDraw(); $("#samWrap").style.display = "flex"; samStatus(); };
+  im.onload = () => {
+    SAM.img = im;
+    $("#samWrap").style.display = "flex";        // 要先顯示：隱藏中的元素量不到尺寸
+    requestAnimationFrame(() => { samDraw(); samStatus(); });
+  };
   im.onerror = () => alert("這張圖讀不開");
   im.src = s.url;
 }
@@ -2096,7 +2100,12 @@ function samDraw(){
   const cv = $("#samCv"), im = SAM.img;
   if (!cv || !im) return;
   const box = $("#samStage").getBoundingClientRect();
-  const sc = Math.min((box.width - 24) / im.naturalWidth, (box.height - 24) / im.naturalHeight, 1);
+  if (box.width < 40 || box.height < 40){        // 版面還沒定案，下一幀再來
+    return requestAnimationFrame(samDraw);
+  }
+  /* 上限 4 倍：小圖不放大的話會浮在一大片空白中間，點也點不準 */
+  const fit = Math.min((box.width - 24) / im.naturalWidth, (box.height - 24) / im.naturalHeight);
+  const sc = Math.max(0.05, Math.min(fit, 4));
   cv.width = Math.round(im.naturalWidth * sc);
   cv.height = Math.round(im.naturalHeight * sc);
   const g = cv.getContext("2d");
@@ -2114,7 +2123,10 @@ function samDraw(){
 }
 function samStatus(){
   const n = SAM.pts.filter(p => p.l).length, m = SAM.pts.length - n;
-  $("#samInfo").textContent = `綠點 ${n} · 紅點 ${m}` + (SAM.busy ? " · 處理中…" : "");
+  const im = SAM.img, cv = $("#samCv");
+  const dim = im ? `${im.naturalWidth}×${im.naturalHeight}` : "";
+  const z = (im && cv && cv.dataset.scale) ? ` · ${Math.round(+cv.dataset.scale * 100)}%` : "";
+  $("#samInfo").textContent = `${dim}${z} · 綠點 ${n} · 紅點 ${m}` + (SAM.busy ? " · 處理中…" : "");
   $("#samRun").disabled = SAM.busy || !SAM.pts.some(p => p.l);
   $("#samApply").disabled = SAM.busy || !SAM.out;
   $("#samNeg").textContent = SAM.neg ? "− 排除（紅點）" : "＋ 保留（綠點）";
@@ -2258,6 +2270,9 @@ $("#audfiles") && ($("#audfiles").onchange = async e => {
     AUDS.push({file: f, url, name: f.name, dur, desc: "", b64});
   }
   saveDraft(); renderAuds();
+});
+window.addEventListener("resize", () => {
+  if ($("#samWrap") && $("#samWrap").style.display === "flex"){ samDraw(); samStatus(); }
 });
 $("#samX") && ($("#samX").onclick = samClose);
 $("#samCv") && ($("#samCv").onclick = samClick);
