@@ -307,22 +307,29 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   font-family:ui-monospace,Consolas,monospace}
 .qrow.qbig{grid-template-columns:260px 1fr auto}
 .qrow.qbig .qthumb{width:260px}
-#qdone{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:10px}
-.qcard{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
-.qcard .qthumb{width:100%;aspect-ratio:3/4;background:var(--code);display:grid;place-items:center;
-  font-size:24px;color:var(--faint)}
-.qcard .qthumb img,.qcard .qthumb video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
-.qcard .qthumb video:fullscreen{width:100%;height:100%;object-fit:contain;background:#000}
-.qcard .qfoot{display:flex;align-items:center;gap:5px;padding:5px 7px}
+#qdone{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:13px}
+.qcard{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;
+  background:var(--panel);transition:.13s}
+.qcard:hover{border-color:var(--acc);transform:translateY(-2px);box-shadow:var(--shadow)}
+.qcard .qthumb{position:relative;width:100%;aspect-ratio:3/4;background:var(--code);
+  display:grid;place-items:center;font-size:24px;color:var(--faint)}
+.qcard .qthumb.noimg::before{content:"🎬"}
+.qcard .qthumb img,.qcard .qthumb video{position:absolute;inset:0;width:100%;height:100%;
+  object-fit:contain;display:block;background:#000}
+.qcard .qthumb video{z-index:1}
+.qcard .qtag{position:absolute;top:6px;left:6px;z-index:2;font-size:10px;line-height:1.6;
+  padding:1px 7px;border-radius:99px;background:rgba(10,12,16,.74);border:1px solid transparent;
+  backdrop-filter:blur(2px);pointer-events:none;max-width:calc(100% - 12px);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qcard .qfoot{display:flex;align-items:center;gap:5px;padding:5px 7px;min-height:30px}
 .qcard .qspacer{flex:1}
-.qcard .qinfo{position:absolute;left:0;right:0;top:0;background:rgba(10,12,16,.9);color:#e9edf3;
-  padding:8px 9px;font-size:11px;line-height:1.55;opacity:0;transition:opacity .13s;pointer-events:none;
-  font-family:ui-monospace,Consolas,monospace;word-break:break-all}
-.qcard:hover .qinfo{opacity:1}
+.qcard .qerr{font-size:10px;color:var(--warn);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;max-width:120px}
 .qcard .qacts a,.qcard .qacts button{border:1px solid var(--line);background:transparent;color:var(--mut);
-  border-radius:6px;padding:0 6px;font-size:11px;cursor:pointer;text-decoration:none;line-height:1.7;
+  border-radius:6px;padding:1px 8px;font-size:12px;cursor:pointer;text-decoration:none;line-height:1.7;
   font-family:inherit}
 .qcard .qacts a:hover,.qcard .qacts button:hover{color:var(--acc);border-color:var(--acc)}
+@media(max-width:640px){#qdone{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}}
 .hcell .cap{padding:5px 8px;font-size:10.5px;color:var(--mut);line-height:1.4;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
 .hcell .cap.t{color:var(--faint);padding-top:0;padding-bottom:7px}
@@ -4193,31 +4200,60 @@ function qUpdateBig(el, r){
 }
 
 // 已完成：小卡，滑過才顯示細節
+/* 成品的首幀在算圖時就存好了（<檔名>-first-frame.png）。用它當封面，
+   而不是塞一個 <video preload="metadata"> ——後者每次重畫都要抓取並解碼，
+   而且瀏覽器對同時載入的媒體元素有併發上限，數量一多就一片載不出來。 */
+const qPoster = r => r.video
+  ? "/api/media/file/" + r.video.replace(/\\/g, "/").replace(VIDEO_RE, "-first-frame.png")
+      .split("/").map(encodeURIComponent).join("/")
+  : "";
 function qMakeCard(id){
   const el = document.createElement("div");
   el.className = "qcard"; el.dataset.id = id;
-  el.innerHTML = `<div class="qthumb"></div>
-    <div class="qinfo"></div>
-    <div class="qfoot"><span class="qbadge"></span><span class="qspacer"></span><span class="qacts"></span></div>`;
+  el.innerHTML = `<div class="qthumb"><span class="qtag"></span></div>
+    <div class="qfoot"><span class="qerr"></span><span class="qspacer"></span><span class="qacts"></span></div>`;
+  /* 滑入才建立 <video>、滑出就丟掉——丟掉等於下次從 0 秒開始，不必手動 seek */
+  el.addEventListener("mouseenter", () => {
+    const r = QROWS_C.find(x => x.id === el.dataset.id);
+    if (!r || !r.video) return;
+    const th = el.querySelector(".qthumb");
+    if (th.querySelector("video")) return;
+    const v = document.createElement("video");
+    v.src = qFileURL(r); v.muted = true; v.autoplay = true; v.loop = true;
+    v.playsInline = true; v.preload = "auto"; v.className = "qplay";
+    th.appendChild(v);
+    v.play().catch(() => {});
+  });
+  el.addEventListener("mouseleave", () => {
+    const v = el.querySelector(".qthumb video");
+    if (v){ try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){} v.remove(); }
+  });
   return el;
 }
 function qUpdateCard(el, r){
-  qSyncThumb(el.querySelector(".qthumb"), qThumbSpec(r));
-  const b = el.querySelector(".qfoot .qbadge");
-  const cls = "qbadge qb-" + r.state;
-  if (b.className !== cls) b.className = cls;
+  const th = el.querySelector(".qthumb");
+  const src = qPoster(r);
+  let img = th.querySelector("img");
+  if (src){
+    if (!img){ img = document.createElement("img"); img.loading = "lazy"; img.alt = "";
+               th.insertBefore(img, th.firstChild); }
+    if (img.getAttribute("src") !== src) img.setAttribute("src", src);
+  } else if (img){ img.remove(); }
+  th.classList.toggle("noimg", !src);
+
+  const tag = th.querySelector(".qtag");
+  const cls = "qtag qb-" + r.state;
+  if (tag.className !== cls) tag.className = cls;
   const lbl = qStateLabel(r.state) + (r.mode ? " · " + (MODES[r.mode] || r.mode) : "");
-  if (b.textContent !== lbl) b.textContent = lbl;
-  qSet(el, ".qinfo", `<b>${esc(r.title || "(未命名)")}</b>`
-    + (r.ts ? `<br>${qWhen(r)}` : "")
-    + (r.video ? `<br>${esc(r.video)}` : "")
-    + (r.error ? `<br><span style="color:var(--warn)">${esc(r.error)}</span>` : ""));
+  if (tag.textContent !== lbl) tag.textContent = lbl;
+
+  qSet(el, ".qerr", esc(r.error || ""), !!r.error);
   const acts = el.querySelector(".qfoot .qacts");
   const sig = r.state + "|" + (r.video || "");
   if (acts.dataset.sig !== sig){
     acts.dataset.sig = sig;
-    acts.innerHTML = (r.video ? `<a href="${qFileURL(r)}?dl=1" title="下載">⬇</a>` : "")
-      + `<button onclick="qDelete('${r.id}')" title="移除">✕</button>`;
+    acts.innerHTML = (r.video ? `<a href="${qFileURL(r)}?dl=1">⬇</a>` : "")
+      + `<button onclick="qDelete('${r.id}')">✕</button>`;
   }
 }
 
