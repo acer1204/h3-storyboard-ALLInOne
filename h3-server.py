@@ -53,6 +53,7 @@ H3 Prompt 批次產生器 - 本機服務
   DELETE /api/loras/<id>        -> 刪除
 """
 import argparse, base64, hashlib, io, json, os, re, socket, struct, subprocess, sys, threading, time
+import urllib.request
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, parse_qs
 
@@ -1382,6 +1383,76 @@ def _node_errors_text(ne, limit=6):
     return chr(10).join(lines)[:900]
 
 
+# ---------------------------------------------------------------- SAM2 點選去背
+# 獨立環境（E:/h3-sam2）跑一支小服務，按需啟動、閒置自動卸模型與結束。
+# 分開的理由：它跟 ComfyUI 搶同一張卡，不用時要能把 VRAM 整個放掉；
+# 而且不該為了省磁碟去動 ComfyUI 那個環境的 numpy/opencv。
+SAM2_DIR = os.environ.get("SAM2_DIR", r"E:/h3-sam2")
+SAM2_PORT = int(os.environ.get("SAM2_PORT", "9996"))
+SAM2_URL = "http://127.0.0.1:%d" % SAM2_PORT
+SAM2_PY = os.path.join(SAM2_DIR, ".venv", "Scripts", "python.exe")
+SAM2_APP = os.path.join(SAM2_DIR, "sam2_service.py")
+SAM2_LOCK = threading.RLock()
+
+
+def sam2_installed():
+    return os.path.exists(SAM2_PY) and os.path.exists(SAM2_APP)
+
+
+def sam2_ping(timeout=2):
+    try:
+        with urllib.request.urlopen(SAM2_URL + "/health", timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def sam2_ensure(wait=40):
+    """服務沒在跑就拉起來。它自己閒置 15 分鐘會結束，所以這裡要能重複拉。"""
+    h = sam2_ping()
+    if h:
+        return h
+    if not sam2_installed():
+        raise SubmitError("SAM2 環境還沒安裝（預期在 %s）" % SAM2_DIR, 501)
+    with SAM2_LOCK:
+        h = sam2_ping()
+        if h:
+            return h
+        try:
+            subprocess.Popen([SAM2_PY, SAM2_APP], cwd=SAM2_DIR,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except Exception as e:
+            raise SubmitError("SAM2 服務啟動失敗: %s" % e, 500)
+        t0 = time.time()
+        while time.time() - t0 < wait:
+            time.sleep(0.6)
+            h = sam2_ping()
+            if h:
+                return h
+    raise SubmitError("SAM2 服務啟動逾時", 504)
+
+
+def sam2_gpu_block():
+    """GPU 忙就擋下來（除非使用者在設定裡開放同時使用）。
+    不排隊——編輯圖片時沒人想等算圖跑完。回傳擋下的理由，空字串＝放行。"""
+    try:
+        vals = (load_settings() or {}).get("values") or {}
+        g = vals.get("h3.settings.v1")
+        if isinstance(g, str):
+            g = json.loads(g)
+        if str((g or {}).get("samBusy") or "") == "1":
+            return ""                      # 使用者允許同時使用
+    except Exception:
+        pass
+    if LLAMA_INFLIGHT[0] > 0:
+        return "LLM 正在生成劇情，GPU 忙碌中"
+    if comfy_busy():
+        return "ComfyUI 正在算圖，GPU 忙碌中"
+    return ""
+
+
+
 def comfy_submit(body):
     """一筆送單 -> ComfyUI 的 prompt_id。/api/comfy/run 與佇列派工共用，
     確保兩條路徑的圖片解析、上傳、建圖與參數覆寫完全一致。"""
@@ -2649,6 +2720,12 @@ class H(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self.send_json({"error": str(e)}, 502)
 
+        if p == "/api/sam2/status":
+            h = sam2_ping()
+            return self.send_json({"installed": sam2_installed(), "running": bool(h),
+                                   "loaded": bool(h and h.get("loaded")),
+                                   "blocked": sam2_gpu_block(), "dir": SAM2_DIR})
+
         if p == "/api/gpu":
             return self.send_json(gpu_mem())
 
@@ -3230,6 +3307,31 @@ class H(SimpleHTTPRequestHandler):
             qset(r["id"], state="canceled", t_end=int(time.time()))
             QWAKE.set()
             return self.send_json({"state": "canceled"})
+
+        if p == "/api/sam2/segment":
+            body = self.read_json()
+            if not isinstance(body, dict):
+                return self.send_json({"error": "empty body"}, 400)
+            why = sam2_gpu_block()
+            if why:
+                return self.send_json({"error": why + "——去背已暫停。"
+                                                "要同時使用請到「系統設定 → 連線與生成」開啟。",
+                                       "blocked": True}, 409)
+            try:
+                sam2_ensure()
+            except SubmitError as e:
+                return self.send_json({"error": e.msg}, e.code)
+            try:
+                req = urllib.request.Request(SAM2_URL + "/segment", method="POST",
+                                             data=json.dumps(body).encode("utf-8"),
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=180) as r:
+                    return self.send_json(json.loads(r.read().decode("utf-8")))
+            except urllib.error.HTTPError as e:
+                try: return self.send_json(json.loads(e.read().decode("utf-8")), e.code)
+                except Exception: return self.send_json({"error": "SAM2 回應異常"}, 502)
+            except Exception as e:
+                return self.send_json({"error": "SAM2 連線失敗: %s" % str(e)[:200]}, 502)
 
         if p == "/api/comfy/run":
             try:

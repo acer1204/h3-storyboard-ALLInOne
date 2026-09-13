@@ -243,6 +243,20 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .xedit:hover{border-color:var(--acc);color:var(--acc)}
 .xedit:disabled{opacity:.35;cursor:not-allowed}
 .xedit + .xdel{margin-left:5px}
+#samWrap{display:none;position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.66);
+  align-items:center;justify-content:center;padding:24px}
+#samBox{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);
+  width:min(1100px,96vw);height:min(860px,92vh);display:flex;flex-direction:column;overflow:hidden}
+#samBox .samhd{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--line)}
+#samBox .samhd b{font-size:13.5px}
+#samBox .samhd .hint{flex:1;font-size:11px}
+#samStage{flex:1;display:grid;place-items:center;background:
+  repeating-conic-gradient(var(--code) 0 25%,transparent 0 50%) 50%/18px 18px;overflow:auto;padding:12px}
+#samCv{cursor:crosshair;border-radius:8px;max-width:100%;box-shadow:0 2px 14px rgba(0,0,0,.35)}
+#samBox .samft{display:flex;align-items:center;gap:8px;padding:11px 14px;border-top:1px solid var(--line);
+  flex-wrap:wrap}
+#samBox .samft .hint{font-size:11px;font-family:ui-monospace,Consolas,monospace}
+#samBox .mini.warn{border-color:var(--warn);color:var(--warn)}
 .slotmenu{position:absolute;z-index:70;min-width:190px;background:var(--panel);border:1px solid var(--line);
   border-radius:11px;padding:6px;box-shadow:var(--shadow)}
 .slotmenu .smhd{font-size:10.5px;color:var(--faint);padding:4px 8px 6px;border-bottom:1px solid var(--line);
@@ -551,6 +565,31 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <input type="file" id="slotfiles" multiple accept="image/*" hidden>
   <input type="file" id="audfiles" multiple accept="audio/*" hidden>
 
+  <div id="samWrap">
+    <div id="samBox">
+      <div class="samhd">
+        <b>✂ 快速去背</b>
+        <span class="hint">點圖片加點：<b style="color:#2ecc71">綠＝保留</b>、<b style="color:#e74c3c">紅＝排除</b>。先點主體，結果不理想再用紅點修掉多餘的部分。</span>
+        <button class="ghost mini" id="samX">關閉</button>
+      </div>
+      <div id="samStage"><canvas id="samCv"></canvas></div>
+      <div class="samft">
+        <button class="mini" id="samNeg">＋ 保留（綠點）</button>
+        <button class="ghost mini" id="samUndo">↶ 退一點</button>
+        <button class="ghost mini" id="samReset">清空</button>
+        <span style="flex:1"></span>
+        <label class="small" style="display:flex;align-items:center;gap:6px">背景
+          <select id="samBg" class="no-i18n" style="width:auto;padding:3px 6px">
+            <option value="">透明</option><option value="#808080">中性灰</option>
+            <option value="#ffffff">白</option><option value="#000000">黑</option>
+          </select></label>
+        <span class="hint" id="samInfo"></span>
+        <button class="mini" id="samRun">▶ 執行去背</button>
+        <button id="samApply" disabled>✔ 套用到格子</button>
+      </div>
+    </div>
+  </div>
+
   <div class="fbar" id="fbar" style="display:none">
     <span class="flab">顯示</span>
     <span id="fchips"></span>
@@ -762,7 +801,14 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div><label>重試目標</label><select id="retrylvl">
         <option value="ok">完全通過（無警告）</option>
         <option value="noerr" selected>無錯誤即可</option></select></div>
+      <div><label>🖼 SAM2 去背與 GPU 共用</label><select id="samBusy">
+        <option value="0" selected>LLM／ComfyUI 忙碌時停用</option>
+        <option value="1">允許同時使用（VRAM 夠大再開）</option></select></div>
     </div>
+    <p class="hint">去背跟算圖搶同一張卡。預設在生成劇情或算影片時停用——不排隊，直接擋下並告知，
+      因為編輯圖片時沒人想等算圖跑完。VRAM 充裕的機器可以改成允許同時使用。
+      服務按需啟動，閒置 3 分鐘卸掉模型、15 分鐘整支結束，不用時不佔 VRAM。
+      <span id="samStat" class="no-i18n"></span></p>
     <p class="hint" style="margin-top:10px">生成結果不符合重試目標時自動重新生成，直到符合或用完次數，
       並保留其中最好的一次。設 0 關閉。</p>
     <div class="row" style="margin-top:16px">
@@ -956,7 +1002,8 @@ const onServer = location.protocol.startsWith("http");
 const SKEY="h3.settings.v1", SPKEY="h3.sp.v1", VKEY="h3.view.v1";
 const FIELDS={tr:"#tr",
               retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
-              wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur"};
+              wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur",
+              samBusy:"#samBusy"};
 /* 共用設定：這些鍵存在伺服器端 settings.json，換瀏覽器或換電腦都是同一份。
    其餘（介面語言、側欄收合、目前檢視）留在本機，那些本來就該因裝置而異。
    讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），寫入同時更新本機與伺服器。 */
@@ -2029,6 +2076,94 @@ slotMenuAdd({id: "replace", label: "🔁 換這張圖", hint: "重新選一張�
 slotMenuAdd({id: "remove", label: "✕ 移除這格", hint: "清空這個格子",
              run: i => { setSlot(i, null); renderSlots(); }});
 
+/* ---------- SAM2 點選去背 ----------
+   綠點 = 要保留的東西，紅點 = 排除（ClipForge 那版只有綠點，紅點是這裡補的）。
+   座標一律換算回原圖像素再送後端；顯示用的縮放不能影響結果。 */
+const SAM = {file: null, slot: -1, img: null, pts: [], neg: false, busy: false, out: null, bg: ""};
+
+function samOpen(i){
+  const s = slotsArr()[i];
+  if (!s || !s.file) return;
+  SAM.slot = i; SAM.file = s.file; SAM.pts = []; SAM.neg = false; SAM.out = null; SAM.bg = "";
+  const im = new Image();
+  im.onload = () => { SAM.img = im; samDraw(); $("#samWrap").style.display = "flex"; samStatus(); };
+  im.onerror = () => alert("這張圖讀不開");
+  im.src = s.url;
+}
+function samClose(){ $("#samWrap").style.display = "none"; SAM.img = null; SAM.out = null; }
+
+function samDraw(){
+  const cv = $("#samCv"), im = SAM.img;
+  if (!cv || !im) return;
+  const box = $("#samStage").getBoundingClientRect();
+  const sc = Math.min((box.width - 24) / im.naturalWidth, (box.height - 24) / im.naturalHeight, 1);
+  cv.width = Math.round(im.naturalWidth * sc);
+  cv.height = Math.round(im.naturalHeight * sc);
+  const g = cv.getContext("2d");
+  g.clearRect(0, 0, cv.width, cv.height);
+  g.drawImage(SAM.out || im, 0, 0, cv.width, cv.height);
+  for (const p of SAM.pts){
+    const x = p.x * sc, y = p.y * sc;
+    g.beginPath(); g.arc(x, y, 7, 0, 6.284);
+    g.fillStyle = p.l ? "rgba(46,204,113,.92)" : "rgba(231,76,60,.92)";
+    g.fill(); g.lineWidth = 2; g.strokeStyle = "#fff"; g.stroke();
+    g.fillStyle = "#fff"; g.font = "bold 11px system-ui"; g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(p.l ? "+" : "−", x, y);
+  }
+  cv.dataset.scale = String(sc);
+}
+function samStatus(){
+  const n = SAM.pts.filter(p => p.l).length, m = SAM.pts.length - n;
+  $("#samInfo").textContent = `綠點 ${n} · 紅點 ${m}` + (SAM.busy ? " · 處理中…" : "");
+  $("#samRun").disabled = SAM.busy || !SAM.pts.some(p => p.l);
+  $("#samApply").disabled = SAM.busy || !SAM.out;
+  $("#samNeg").textContent = SAM.neg ? "− 排除（紅點）" : "＋ 保留（綠點）";
+  $("#samNeg").className = "mini" + (SAM.neg ? " warn" : "");
+}
+function samClick(ev){
+  if (SAM.busy) return;
+  const cv = $("#samCv"), r = cv.getBoundingClientRect(), sc = +cv.dataset.scale || 1;
+  const x = (ev.clientX - r.left) / sc, y = (ev.clientY - r.top) / sc;
+  if (x < 0 || y < 0 || x > SAM.img.naturalWidth || y > SAM.img.naturalHeight) return;
+  SAM.pts.push({x, y, l: SAM.neg ? 0 : 1});
+  SAM.out = null;                       // 點有變，舊結果作廢
+  samDraw(); samStatus();
+}
+async function samRun(){
+  if (SAM.busy || !SAM.pts.some(p => p.l)) return;
+  SAM.busy = true; samStatus();
+  try{
+    const b64 = await new Promise((res, rej) => {
+      const fr = new FileReader(); fr.onload = () => res(fr.result);
+      fr.onerror = () => rej(new Error("讀檔失敗")); fr.readAsDataURL(SAM.file);
+    });
+    const r = await (await fetch("/api/sam2/segment", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({image: b64, bg: SAM.bg || null,
+        points: SAM.pts.map(p => [Math.round(p.x), Math.round(p.y)]),
+        labels: SAM.pts.map(p => p.l)})})).json();
+    if (r.error){ $("#samInfo").textContent = r.error; SAM.busy = false; samStatus(); return; }
+    const im = new Image();
+    im.onload = () => { SAM.out = im; SAM.busy = false; samDraw(); samStatus();
+                        $("#samInfo").textContent += ` · 覆蓋 ${(r.covered*100).toFixed(0)}% · ${r.elapsed}s`; };
+    im.src = r.png;
+  }catch(e){
+    $("#samInfo").textContent = "去背失敗：" + (e.message || e);
+    SAM.busy = false; samStatus();
+  }
+}
+/* 套用：把結果寫回格子。PNG 帶 alpha，後面的 encode() 會處理。 */
+async function samApply(){
+  if (!SAM.out) return;
+  const blob = await (await fetch(SAM.out.src)).blob();
+  const name = (SAM.file.name || "image").replace(/\.[^.]+$/, "") + "-cutout.png";
+  setSlot(SAM.slot, new File([blob], name, {type: "image/png"}));
+  renderSlots(); saveDraft(); samClose();
+}
+slotMenuAdd({id: "sam2", label: "✂ 快速去背（SAM2）",
+             hint: "點綠點選要保留的、紅點排除，GPU 推論",
+             run: i => samOpen(i)});
+
 function renderSlots(){
   const zone = $("#slotzone");
   const inf = MODE_INFO[curMode()];
@@ -2124,6 +2259,23 @@ $("#audfiles") && ($("#audfiles").onchange = async e => {
   }
   saveDraft(); renderAuds();
 });
+$("#samX") && ($("#samX").onclick = samClose);
+$("#samCv") && ($("#samCv").onclick = samClick);
+$("#samNeg") && ($("#samNeg").onclick = () => { SAM.neg = !SAM.neg; samStatus(); });
+$("#samUndo") && ($("#samUndo").onclick = () => { SAM.pts.pop(); SAM.out = null; samDraw(); samStatus(); });
+$("#samReset") && ($("#samReset").onclick = () => { SAM.pts = []; SAM.out = null; samDraw(); samStatus(); });
+$("#samBg") && ($("#samBg").onchange = e => { SAM.bg = e.target.value; SAM.out = null; samDraw(); samStatus(); });
+$("#samRun") && ($("#samRun").onclick = samRun);
+$("#samApply") && ($("#samApply").onclick = samApply);
+$("#samWrap") && ($("#samWrap").onclick = e => { if (e.target.id === "samWrap") samClose(); });
+document.addEventListener("keydown", e => {
+  if ($("#samWrap") && $("#samWrap").style.display === "flex"){
+    if (e.key === "Escape") samClose();
+    if (e.key === "Shift") { SAM.neg = true; samStatus(); }     // 按住 Shift 暫時切紅點
+  }
+});
+document.addEventListener("keyup", e => { if (e.key === "Shift" && SAM.neg){ SAM.neg = false; samStatus(); } });
+
 $("#refRuleOn") && ($("#refRuleOn").onchange = () => { refRuleSave(); refRuleDraw(); });
 $("#refRuleBg") && ($("#refRuleBg").oninput = () => { refRuleSave(); });
 $("#slotAdd").onclick = () => composeSlots();
