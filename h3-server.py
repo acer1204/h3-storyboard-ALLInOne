@@ -1590,7 +1590,9 @@ def qenqueue(payload, mode="", title="", rec_id="", idem=""):
                 if r.get("idem") == idem:
                     return dict(r)          # 同一次點擊重送：回傳既有列，不重複算
         jid = new_id()
-        row = {"id": jid, "ts": int(time.time()), "state": "queued",
+        # 秒級精度不夠：批次送出時好幾筆會落在同一秒，排序就變成隨機。
+        # 存浮點秒，前端才排得出真正的先後。
+        row = {"id": jid, "ts": round(time.time(), 3), "state": "queued",
                "mode": mode or str(payload.get("mode") or ""), "title": title[:120],
                "rec_id": rec_id, "idem": idem, "prompt_id": "",
                "payload": payload, "video": "", "first_frame": "", "error": "",

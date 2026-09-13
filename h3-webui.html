@@ -307,6 +307,9 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   font-family:ui-monospace,Consolas,monospace}
 .qrow.qbig{grid-template-columns:260px 1fr auto}
 .qrow.qbig .qthumb{width:260px}
+#qView{position:fixed;inset:0;z-index:95;background:rgba(0,0,0,.9);display:flex;
+  align-items:center;justify-content:center}
+#qView video{max-width:96vw;max-height:96vh;background:#000;outline:none}
 #qdone{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:13px}
 .qcard{position:relative;border:1px solid var(--line);border-radius:10px;overflow:hidden;
   background:var(--panel);transition:.13s}
@@ -720,7 +723,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <span class="status" id="qcount" style="margin:0"></span>
     </div>
     <div id="qactive"></div>
-    <div class="qsec" id="qdonehdr" style="display:none">已完成 · 滑鼠移到卡片上看詳細</div>
+    <div class="qsec" id="qdonehdr" style="display:none">已完成 · 滑鼠移到卡片上預覽（靜音）· 雙擊全螢幕播放（含聲音）</div>
     <div id="qdone"></div>
     <span class="hint" id="qempty">還沒有任務</span>
   </div>
@@ -2337,6 +2340,7 @@ $("#samEye") && ($("#samEye").onclick = () => { SAM.preview = !SAM.preview; samD
 $("#samApply") && ($("#samApply").onclick = samApply);
 $("#samWrap") && ($("#samWrap").onclick = e => { if (e.target.id === "samWrap") samClose(); });
 document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && document.getElementById("qView")) qViewClose();
   if ($("#samWrap") && $("#samWrap").style.display === "flex"){
     if (e.key === "Escape") samClose();
     if (e.key === "Shift") { SAM.neg = true; samStatus(); }     // 按住 Shift 暫時切紅點
@@ -4228,7 +4232,39 @@ function qMakeCard(id){
     const v = el.querySelector(".qthumb video");
     if (v){ try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){} v.remove(); }
   });
+  /* 滑入預覽是靜音無控制列的，要聽聲音與全螢幕就雙擊。
+     dblclick 本身是使用者手勢，requestFullscreen 才允許。 */
+  el.addEventListener("dblclick", () => {
+    const r = QROWS_C.find(x => x.id === el.dataset.id);
+    if (r && r.video) qViewOpen(r);
+  });
   return el;
+}
+function qViewOpen(r){
+  qViewClose();
+  const wrap = document.createElement("div");
+  wrap.id = "qView";
+  const v = document.createElement("video");
+  v.src = qFileURL(r); v.controls = true; v.autoplay = true; v.playsInline = true;
+  wrap.appendChild(v);
+  wrap.onclick = e => { if (e.target === wrap) qViewClose(); };
+  document.body.appendChild(wrap);
+  v.play().catch(() => {});
+  const fs = v.requestFullscreen || v.webkitRequestFullscreen;
+  if (fs) fs.call(v).catch(() => {});          // 被擋下就退回大視窗播放
+  document.addEventListener("fullscreenchange", qViewFsExit);
+}
+function qViewFsExit(){
+  if (!document.fullscreenElement) qViewClose();
+}
+function qViewClose(){
+  document.removeEventListener("fullscreenchange", qViewFsExit);
+  const w = document.getElementById("qView");
+  if (!w) return;
+  const v = w.querySelector("video");
+  if (v){ try{ v.pause(); v.removeAttribute("src"); v.load(); }catch(e){} }
+  w.remove();
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }
 function qUpdateCard(el, r){
   const th = el.querySelector(".qthumb");
@@ -4273,8 +4309,12 @@ function qSync(box, rows, form){
   });
 }
 function renderQueue(){
-  const act = QROWS_C.filter(r => QACT_ST.includes(r.state));
-  const fin = QROWS_C.filter(r => !QACT_ST.includes(r.state));
+  /* 進行中依排入順序（先排先跑，下一個要跑的在最前）；
+     已完成依「完成時間」新到舊——批次送出時 ts 會擠在同一秒，用它排等於沒排。 */
+  const act = QROWS_C.filter(r => QACT_ST.includes(r.state))
+                     .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  const fin = QROWS_C.filter(r => !QACT_ST.includes(r.state))
+                     .sort((a, b) => ((b.t_end || b.ts || 0) - (a.t_end || a.ts || 0)));
   $("#qcount").textContent = QROWS_C.length ? `${QROWS_C.length} 筆 · 進行中 ${act.length}` : "";
   const aBox = $("#qactive"), dBox = $("#qdone"); if (!aBox || !dBox) return;
   qSync(aBox, act, "big");
