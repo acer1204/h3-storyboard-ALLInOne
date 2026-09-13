@@ -1257,6 +1257,7 @@ SHARED_DEFAULTS = {
     "h3.skills.v1": None,       # 啟用的 skill 組合
     "h3.styleskill.v1": None,   # 舊版單選風格（相容）
     "h3.prompt.all.v1": None,   # 選用的 prompt 組
+    "h3.refrule.v1": None,      # REF2VA：參考圖只當外觀依據的疊加規則
 }
 
 

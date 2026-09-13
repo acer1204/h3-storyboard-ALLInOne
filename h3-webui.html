@@ -238,6 +238,27 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .qb-queued{color:var(--mut)} .qb-running{color:var(--acc);border-color:var(--acc)}
 .qb-done{color:var(--ok);border-color:var(--ok)} .qb-error{color:var(--warn);border-color:var(--warn)}
 .qb-canceled{color:var(--faint)}
+.xedit{margin-left:auto;flex:none;width:26px;height:26px;line-height:1;border:1px solid var(--line);
+  border-radius:7px;background:none;color:var(--faint);cursor:pointer;font-size:12px}
+.xedit:hover{border-color:var(--acc);color:var(--acc)}
+.xedit:disabled{opacity:.35;cursor:not-allowed}
+.xedit + .xdel{margin-left:5px}
+.slotmenu{position:absolute;z-index:70;min-width:190px;background:var(--panel);border:1px solid var(--line);
+  border-radius:11px;padding:6px;box-shadow:var(--shadow)}
+.slotmenu .smhd{font-size:10.5px;color:var(--faint);padding:4px 8px 6px;border-bottom:1px solid var(--line);
+  margin-bottom:5px;font-family:ui-monospace,Consolas,monospace;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis;max-width:240px}
+.slotmenu .smit{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;
+  border:none;background:transparent;color:var(--fg);border-radius:7px;padding:7px 9px;font-size:12.5px;
+  cursor:pointer;font-family:inherit;text-align:left}
+.slotmenu .smit:hover:not(:disabled){background:color-mix(in srgb,var(--acc) 12%,transparent);color:var(--acc)}
+.slotmenu .smit:disabled{opacity:.4;cursor:not-allowed}
+.slotmenu .smwhy{font-size:10px;color:var(--faint)}
+.refrule{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;
+  padding:9px 12px;cursor:pointer;background:var(--panel)}
+.refrule input{width:15px;height:15px;accent-color:var(--acc);margin:2px 0 0;flex:none}
+.refrule b{font-size:12.5px;font-weight:600;display:block}
+.refrule.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 7%,transparent)}
 .audrow{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:9px;
   padding:8px;margin-bottom:6px;background:var(--panel)}
 .audrow .an{font-size:11.5px;color:var(--mut);font-family:ui-monospace,Consolas,monospace;flex:none;
@@ -490,6 +511,16 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <button class="ghost" id="clear">清空清單</button>
   </div>
   <p class="status" id="prog" style="margin:0 0 10px"></p>
+
+  <div id="refRules" style="display:none;margin:0 0 10px">
+    <label class="refrule"><input type="checkbox" id="refRuleOn">
+      <span><b>參考圖只當外觀依據</b>
+        <span class="hint" style="font-size:10.5px">不鎖構圖、不沿用背景 — 分鏡圖用來定角色長相，鏡頭安排交給模型</span></span></label>
+    <div id="refRuleBody" style="display:none;margin-top:6px">
+      <textarea class="note" id="refRuleBg" rows="2"
+        placeholder="背景改由文字描述（選填）。例如：日式和室，榻榻米、深色木樑、紙拉門，暖色調室內光。留空＝只解除綁定，不指定場景"></textarea>
+    </div>
+  </div>
 
   <div id="drop"><b id="dropB">把圖片拖進來，或點此選檔</b><span id="dropS">依檔名排序，一次跑一張</span></div>
   <input type="file" id="files" multiple accept="image/*" hidden>
@@ -930,7 +961,8 @@ const FIELDS={tr:"#tr",
    其餘（介面語言、側欄收合、目前檢視）留在本機，那些本來就該因裝置而異。
    讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），寫入同時更新本機與伺服器。 */
 const SHARED_KEYS = new Set(["h3.settings.v1","h3.review.v1","h3.reviewsys.v1","h3.sp.v1",
-                             "h3.t2vasp.v1","h3.skills.v1","h3.styleskill.v1","h3.prompt.all.v1"]);
+                             "h3.t2vasp.v1","h3.skills.v1","h3.styleskill.v1","h3.prompt.all.v1",
+                             "h3.refrule.v1"]);
 let SHARED = {}, sharedTimer = null;
 function pushShared(){
   clearTimeout(sharedTimer);
@@ -1942,6 +1974,61 @@ function audCheck(nImg){
   return "";
 }
 
+/* ---------- 格子圖片的右鍵／長按選單 ----------
+   行動裝置沒有右鍵，用 500ms 長按代替；長按後要吃掉隨後的 click，
+   否則會順手觸發「換圖」把選單白開一場。 */
+const SLOTMENU = [];          // {id, label, hint, enabled(i), run(i)}
+function slotMenuAdd(item){ SLOTMENU.push(item); }
+function slotMenuClose(){ const m = document.querySelector(".slotmenu"); if (m) m.remove(); }
+function slotMenuOpen(ev, i){
+  ev.preventDefault(); ev.stopPropagation();
+  const S = slotsArr();
+  if (!S[i]) return;                       // 空格子沒東西可操作
+  slotMenuClose();
+  const items = SLOTMENU.filter(x => !x.hide || !x.hide(i));
+  if (!items.length) return;
+  const m = document.createElement("div");
+  m.className = "slotmenu";
+  m.innerHTML = `<div class="smhd">格子 ${i + 1} · ${esc(S[i].file ? S[i].file.name : "")}</div>`
+    + items.map((x, k) => {
+        const off = x.enabled && !x.enabled(i);
+        return `<button class="smit" ${off ? "disabled" : ""} data-k="${k}"
+          title="${esc(x.hint || "")}">${x.label}${off && x.why ? `<span class="smwhy">${esc(x.why(i))}</span>` : ""}</button>`;
+      }).join("");
+  document.body.appendChild(m);
+  const x = Math.min(ev.clientX, window.innerWidth - m.offsetWidth - 8);
+  const y = Math.min(ev.clientY + window.scrollY, window.scrollY + window.innerHeight - m.offsetHeight - 8);
+  m.style.left = Math.max(6, x) + "px";
+  m.style.top = Math.max(6, y) + "px";
+  m.querySelectorAll(".smit").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const it = items[+b.dataset.k];
+    slotMenuClose();
+    if (it && !(it.enabled && !it.enabled(i))) it.run(i);
+  });
+  setTimeout(() => document.addEventListener("click", slotMenuClose, {once: true}), 0);
+}
+/* 綁在每個有圖的格子上；renderSlots 每次重畫都要重綁 */
+function wireSlotMenu(){
+  document.querySelectorAll("#slotgrid .slot[data-i]").forEach(el => {
+    const i = +el.dataset.i;
+    el.oncontextmenu = e => slotMenuOpen(e, i);
+    let t = null, moved = false, sup = false;
+    el.addEventListener("touchstart", e => {
+      moved = false;
+      t = setTimeout(() => { if (!moved){ sup = true; slotMenuOpen(e.touches[0], i); } }, 500);
+    }, {passive: true});
+    el.addEventListener("touchmove", () => { moved = true; clearTimeout(t); }, {passive: true});
+    el.addEventListener("touchend", () => clearTimeout(t));
+    el.addEventListener("click", e => { if (sup){ sup = false; e.stopPropagation(); e.preventDefault(); } }, true);
+  });
+}
+/* 內建項目：之後的影像工具（去背等）用 slotMenuAdd 往這裡掛 */
+slotMenuAdd({id: "replace", label: "🔁 換這張圖", hint: "重新選一張放進這個格子",
+             run: i => { slotPick = i; $("#slotfiles").click(); }});
+slotMenuAdd({id: "remove", label: "✕ 移除這格", hint: "清空這個格子",
+             run: i => { setSlot(i, null); renderSlots(); }});
+
 function renderSlots(){
   const zone = $("#slotzone");
   const inf = MODE_INFO[curMode()];
@@ -1962,6 +2049,8 @@ function renderSlots(){
     </div>`;
   }).join("");
   renderAuds();
+  refRuleDraw();
+  wireSlotMenu();
   document.querySelectorAll("#slotgrid .slot[data-i]").forEach(el => el.onclick = e => {
     if (e.target.closest(".sx")) return;
     slotPick = +el.dataset.i;
@@ -2035,6 +2124,8 @@ $("#audfiles") && ($("#audfiles").onchange = async e => {
   }
   saveDraft(); renderAuds();
 });
+$("#refRuleOn") && ($("#refRuleOn").onchange = () => { refRuleSave(); refRuleDraw(); });
+$("#refRuleBg") && ($("#refRuleBg").oninput = () => { refRuleSave(); });
 $("#slotAdd").onclick = () => composeSlots();
 $("#slotClear").onclick = () => {
   if (curMode() === "ref2va"){
@@ -2155,6 +2246,47 @@ function frameLine(w, h){
 }
 function wantShotsFor(n){ return 1; }
 /* 官方 skill 版使用者訊息：模式與時長由 UI 供值（取代 agent 的問答步驟），其餘交給官方指南 */
+/* ---------- REF2VA：把參考圖限定為「外觀依據」的疊加規則 ----------
+   指南把參考圖分三種用法：影格錨點、分鏡規劃、純外觀依據（2.2 節）。
+   模型每次選哪一種是隨機的——同一組素材兩次生成可能一次給 storyboard 條目、
+   一次不給。這個開關把它釘在第三種，並切斷背景綁定。 */
+const REFRULE_KEY = "h3.refrule.v1";
+function refRuleCfg(){
+  try{ const o = JSON.parse(store.get(REFRULE_KEY) || "{}"); return {on: !!o.on, bg: o.bg || ""}; }
+  catch(e){ return {on: false, bg: ""}; }
+}
+function refRuleSave(){
+  store.set(REFRULE_KEY, JSON.stringify({on: $("#refRuleOn").checked, bg: $("#refRuleBg").value}));
+}
+function refRuleDraw(){
+  const box = $("#refRules"); if (!box) return;
+  box.style.display = curMode() === "ref2va" ? "" : "none";
+  const c = refRuleCfg();
+  $("#refRuleOn").checked = c.on;
+  $("#refRuleBg").value = c.bg;
+  $("#refRuleBody").style.display = c.on ? "" : "none";
+  $("#refRuleOn").closest(".refrule").classList.toggle("on", c.on);
+}
+/* 這段直接進 user turn 的結尾——模型對結尾的注意力比 23KB 指南中段強得多 */
+function refRuleText(){
+  const c = refRuleCfg();
+  if (!c.on) return "";
+  let t = "\n\nREFERENCE USAGE (overrides any conflicting guidance): the attached pictures are"
+        + " APPEARANCE references only — the same character seen in different expressions, poses"
+        + " and angles. Do NOT treat any of them as a shot's first frame, keyframe, last frame or"
+        + " composition anchor, and do NOT create standalone <Picture N> entries for them; cite each"
+        + " image inside the <Subject N> definition it describes. Shot composition, framing, camera"
+        + " placement and movement are yours to decide from the story.";
+  const bg = (c.bg || "").trim();
+  t += bg
+    ? ` Do NOT build an environment subject out of the pictures. The setting is: ${bg}.`
+      + " Render it from this description, not from the pictures' backgrounds."
+    : " Do NOT build an environment subject out of the pictures, and do not carry their backgrounds"
+      + " into the target video; compose the setting yourself from the story.";
+  t += " If the background must appear in retention_analysis at all, mark it weak_reference.";
+  return t;
+}
+
 let VAL_NAUD = 0;   // 這次生成掛了幾個參考音訊；validate 用它判斷 <Audio N> 該不該存在
 function userNote(it){
   const mode = (it.mode || curMode());
@@ -2189,6 +2321,7 @@ function userNote(it){
     t += ` NO audio asset is attached. The guide documents <Audio N>, but there is nothing for it to`
        + ` refer to here — do NOT use <Audio N> anywhere in the output, in any section.`;
   t += ` Analyze the attached image(s) and write the final H3 prompt now, following the reference guide for this mode exactly (including the alignment instruction line where the guide requires one).`;
+  if (mode === "ref2va") t += refRuleText();     // 拖放區上方那個開關
   const n = (it.note || "").trim();
   if (n) t += `\nStory hint (build the plot around this): "${n}"`;
   return t;
@@ -2821,7 +2954,7 @@ function render(){
         <div class="note-wrap" style="margin:0 0 8px"><label>劇情提示（選填，中/英/日皆可）</label>
           <textarea class="note" data-note="${k}" rows="3" placeholder="留空＝自由創作。輸入提示＝以此為劇情核心，例如：她在雪地裡撿到一隻迷路的小企鵝"
             oninput="setNote(${k}, this.value); agrow(this)">${esc(it.note||"")}</textarea></div>`}
-        <div class="hd"><input type="checkbox" class="selck" ${it.sel?"checked":""} onclick="toggleSel(${k}, this.checked)" title="勾選後可批次生成 / 批次送 ComfyUI"><span class="badge ${b[0]}">${b[1]}</span><span class="name">${esc(it.name)}</span>${it.state2?`<span class="meta" style="margin:0;color:var(--warn)">${esc(it.state2)}</span>`:""}<button class="xdel" onclick="removeItem(${k})" ${it.state==="running"?"disabled":""} title="從清單移除這張（不影響已存的歷史紀錄）">✕</button></div>
+        <div class="hd"><input type="checkbox" class="selck" ${it.sel?"checked":""} onclick="toggleSel(${k}, this.checked)" title="勾選後可批次生成 / 批次送 ComfyUI"><span class="badge ${b[0]}">${b[1]}</span><span class="name">${esc(it.name)}</span>${it.state2?`<span class="meta" style="margin:0;color:var(--warn)">${esc(it.state2)}</span>`:""}<button class="xedit" onclick="editItem(${k})" ${it.state==="running"?"disabled":""} title="放回上方格子重新調整圖片／音訊，這張卡片會被移除">✎</button><button class="xdel" onclick="removeItem(${k})" ${it.state==="running"?"disabled":""} title="從清單移除這張（不影響已存的歷史紀錄）">✕</button></div>
       ${it.elapsed?`<div class="meta"><span>${it.elapsed}s</span>
         <span>${it.usage.completion_tokens||0} tokens</span>
         <span>${(it.timings.predicted_per_second||0).toFixed(0)} t/s</span>
@@ -2877,6 +3010,45 @@ window.removeItem = k => {
   updateNavCounts();
   $("#prog").textContent = modeItems().length ? `${modeItems().length} 筆` : "";
   if (!modeItems().length){ $("#conv").style.display = "none"; $("#fbar").style.display = "none"; }
+};
+/* 放回上方格子重新調整。圖片放錯時原本只能整張刪掉重來，很煩。
+   previews 的 objectURL 交棒給格子，所以這裡不能 revoke。 */
+window.editItem = k => {
+  const it = items[k];
+  if (!it || it.state === "running") return;
+  const mode = it.mode || curMode();
+  if (mode !== curMode()) setMode(mode);
+  if (mode === "t2va"){
+    if ($("#t2vaInput")) $("#t2vaInput").value = it.rawStory || "";
+  } else {
+    const cur = slotsArr().filter(Boolean);
+    if (cur.length && !confirm(`上方格子還有 ${cur.length} 張圖，放回去會覆蓋掉。要繼續嗎？`)) return;
+    SLOTS_BY[mode] = (it.files || []).map((f, i) => ({
+      file: f, url: (it.previews || [])[i] || URL.createObjectURL(f), _hash: f._hash, _name: f.name}));
+    if (mode === "ref2va"){
+      AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
+      AUDS = (it.auds || []).map(a => {
+        let url = "";
+        try{
+          const bin = atob(String(a.b64 || "").split(",")[1] || "");
+          const u8 = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+          url = URL.createObjectURL(new Blob([u8],
+            {type: (String(a.b64).match(/^data:([^;]+)/) || [])[1] || "audio/mpeg"}));
+        }catch(e){}
+        return {file: null, url, name: a.name, dur: a.dur, desc: a.desc, b64: a.b64};
+      }).filter(a => a.url);
+    }
+  }
+  items.splice(k, 1);                       // previews 已交棒，不 revoke
+  saveDraft();
+  renderSlots(); render();
+  $("#run").disabled = !modeItems().length;
+  updateNavCounts();
+  $("#prog").textContent = modeItems().length ? `${modeItems().length} 筆` : "";
+  if (!modeItems().length){ $("#conv").style.display = "none"; $("#fbar").style.display = "none"; }
+  const st = $("#slotStat"); if (st) st.textContent = "已放回格子 — 調整完再按「加入生成清單」";
+  const z = $("#slotzone") || $("#t2vaZone"); if (z) z.scrollIntoView({behavior: "smooth", block: "center"});
 };
 window.setNote = (k, v) => { if (items[k]) items[k].note = v; };
 window.agrow = t => { t.style.height = "auto"; t.style.height = (t.scrollHeight + 2) + "px"; };
