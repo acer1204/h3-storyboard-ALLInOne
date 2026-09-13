@@ -569,7 +569,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div id="samBox">
       <div class="samhd">
         <b>✂ 快速去背</b>
-        <span class="hint">點圖片加點：<b style="color:#2ecc71">綠＝保留</b>、<b style="color:#e74c3c">紅＝排除</b>。先點主體，結果不理想再用紅點修掉多餘的部分。</span>
+        <span class="hint">點圖片加點：<b style="color:#2ecc71">綠＝保留</b>（選中區會蓋上綠色）、<b style="color:#e74c3c">紅＝排除</b>（該區綠色消失）。每點一下即時重算，按住 Shift 暫時切紅點。</span>
         <button class="ghost mini" id="samX">關閉</button>
       </div>
       <div id="samStage"><canvas id="samCv"></canvas></div>
@@ -584,7 +584,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
             <option value="#ffffff">白</option><option value="#000000">黑</option>
           </select></label>
         <span class="hint" id="samInfo"></span>
-        <button class="mini" id="samRun">▶ 執行去背</button>
+        <button class="ghost mini" id="samEye" disabled>👁 看成品</button>
+        <button class="ghost mini" id="samRun">↻ 重算</button>
         <button id="samApply" disabled>✔ 套用到格子</button>
       </div>
     </div>
@@ -2079,12 +2080,14 @@ slotMenuAdd({id: "remove", label: "✕ 移除這格", hint: "清空這個格子"
 /* ---------- SAM2 點選去背 ----------
    綠點 = 要保留的東西，紅點 = 排除（ClipForge 那版只有綠點，紅點是這裡補的）。
    座標一律換算回原圖像素再送後端；顯示用的縮放不能影響結果。 */
-const SAM = {file: null, slot: -1, img: null, pts: [], neg: false, busy: false, out: null, bg: ""};
+const SAM = {file: null, slot: -1, img: null, pts: [], neg: false, busy: false,
+             cut: null, bg: "", preview: false};
 
 function samOpen(i){
   const s = slotsArr()[i];
   if (!s || !s.file) return;
-  SAM.slot = i; SAM.file = s.file; SAM.pts = []; SAM.neg = false; SAM.out = null; SAM.bg = "";
+  SAM.slot = i; SAM.file = s.file; SAM.pts = []; SAM.neg = false; SAM.cut = null;
+  SAM.bg = $("#samBg") ? $("#samBg").value : ""; SAM.preview = false;
   const im = new Image();
   im.onload = () => {
     SAM.img = im;
@@ -2094,7 +2097,8 @@ function samOpen(i){
   im.onerror = () => alert("這張圖讀不開");
   im.src = s.url;
 }
-function samClose(){ $("#samWrap").style.display = "none"; SAM.img = null; SAM.out = null; }
+function samClose(){ clearTimeout(SAM_T); $("#samWrap").style.display = "none";
+  SAM.img = null; SAM.cut = null; }
 
 function samDraw(){
   const cv = $("#samCv"), im = SAM.img;
@@ -2110,7 +2114,27 @@ function samDraw(){
   cv.height = Math.round(im.naturalHeight * sc);
   const g = cv.getContext("2d");
   g.clearRect(0, 0, cv.width, cv.height);
-  g.drawImage(SAM.out || im, 0, 0, cv.width, cv.height);
+  if (SAM.preview && SAM.cut){
+    /* 成品預覽：把去背結果疊在選定的底色上 */
+    if (SAM.bg){ g.fillStyle = SAM.bg; g.fillRect(0, 0, cv.width, cv.height); }
+    g.drawImage(SAM.cut, 0, 0, cv.width, cv.height);
+  } else {
+    g.drawImage(im, 0, 0, cv.width, cv.height);
+    if (SAM.cut){
+      /* 綠色覆蓋：把去背結果（只有選中區有 alpha）整片染綠再半透明疊上去。
+         全部走 canvas 合成，不逐像素跑 JS——1152x1728 有兩百萬個像素。 */
+      const t = document.createElement("canvas");
+      t.width = cv.width; t.height = cv.height;
+      const tg = t.getContext("2d");
+      tg.drawImage(SAM.cut, 0, 0, cv.width, cv.height);
+      tg.globalCompositeOperation = "source-in";
+      tg.fillStyle = "#3ddc84";
+      tg.fillRect(0, 0, cv.width, cv.height);
+      g.globalAlpha = 0.45;
+      g.drawImage(t, 0, 0);
+      g.globalAlpha = 1;
+    }
+  }
   for (const p of SAM.pts){
     const x = p.x * sc, y = p.y * sc;
     g.beginPath(); g.arc(x, y, 7, 0, 6.284);
@@ -2128,18 +2152,33 @@ function samStatus(){
   const z = (im && cv && cv.dataset.scale) ? ` · ${Math.round(+cv.dataset.scale * 100)}%` : "";
   $("#samInfo").textContent = `${dim}${z} · 綠點 ${n} · 紅點 ${m}` + (SAM.busy ? " · 處理中…" : "");
   $("#samRun").disabled = SAM.busy || !SAM.pts.some(p => p.l);
-  $("#samApply").disabled = SAM.busy || !SAM.out;
+  $("#samApply").disabled = SAM.busy || !SAM.cut;
+  const eye = $("#samEye");
+  if (eye){
+    eye.disabled = SAM.busy || !SAM.cut;
+    eye.textContent = SAM.preview ? "👁 看遮罩" : "👁 看成品";
+    eye.className = "ghost mini" + (SAM.preview ? " on" : "");
+  }
   $("#samNeg").textContent = SAM.neg ? "− 排除（紅點）" : "＋ 保留（綠點）";
   $("#samNeg").className = "mini" + (SAM.neg ? " warn" : "");
 }
 function samClick(ev){
   if (SAM.busy) return;
   const cv = $("#samCv"), r = cv.getBoundingClientRect(), sc = +cv.dataset.scale || 1;
-  const x = (ev.clientX - r.left) / sc, y = (ev.clientY - r.top) / sc;
+  /* rect 是顯示尺寸、cv.width 是畫布背板尺寸。CSS 的 max-width 一旦生效兩者就不同，
+     只用 dataset.scale 換算會整個偏掉，所以把顯示縮放也乘回去。 */
+  const kx = r.width ? cv.width / r.width : 1, ky = r.height ? cv.height / r.height : 1;
+  const x = (ev.clientX - r.left) * kx / sc, y = (ev.clientY - r.top) * ky / sc;
   if (x < 0 || y < 0 || x > SAM.img.naturalWidth || y > SAM.img.naturalHeight) return;
   SAM.pts.push({x, y, l: SAM.neg ? 0 : 1});
-  SAM.out = null;                       // 點有變，舊結果作廢
   samDraw(); samStatus();
+  samQueue();                           // 推論只要 0.3~0.5 秒，點完就算，不用再按按鈕
+}
+/* 連點時只跑最後一次；正在算就等它回來再補一輪 */
+let SAM_T = null;
+function samQueue(){
+  clearTimeout(SAM_T);
+  SAM_T = setTimeout(() => { if (SAM.busy) samQueue(); else samRun(); }, 140);
 }
 async function samRun(){
   if (SAM.busy || !SAM.pts.some(p => p.l)) return;
@@ -2151,13 +2190,13 @@ async function samRun(){
     });
     const r = await (await fetch("/api/sam2/segment", {method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({image: b64, bg: SAM.bg || null,
+      body: JSON.stringify({image: b64, bg: null,     // 永遠要 alpha 版，底色本地合成
         points: SAM.pts.map(p => [Math.round(p.x), Math.round(p.y)]),
         labels: SAM.pts.map(p => p.l)})})).json();
     if (r.error){ $("#samInfo").textContent = r.error; SAM.busy = false; samStatus(); return; }
     const im = new Image();
-    im.onload = () => { SAM.out = im; SAM.busy = false; samDraw(); samStatus();
-                        $("#samInfo").textContent += ` · 覆蓋 ${(r.covered*100).toFixed(0)}% · ${r.elapsed}s`; };
+    im.onload = () => { SAM.cut = im; SAM.busy = false; samDraw(); samStatus();
+                        $("#samInfo").textContent += ` · 選取 ${(r.covered*100).toFixed(0)}% · ${r.elapsed}s`; };
     im.src = r.png;
   }catch(e){
     $("#samInfo").textContent = "去背失敗：" + (e.message || e);
@@ -2166,8 +2205,13 @@ async function samRun(){
 }
 /* 套用：把結果寫回格子。PNG 帶 alpha，後面的 encode() 會處理。 */
 async function samApply(){
-  if (!SAM.out) return;
-  const blob = await (await fetch(SAM.out.src)).blob();
+  if (!SAM.cut) return;
+  const c = document.createElement("canvas");
+  c.width = SAM.img.naturalWidth; c.height = SAM.img.naturalHeight;
+  const g = c.getContext("2d");
+  if (SAM.bg){ g.fillStyle = SAM.bg; g.fillRect(0, 0, c.width, c.height); }
+  g.drawImage(SAM.cut, 0, 0, c.width, c.height);
+  const blob = await new Promise(r => c.toBlob(r, "image/png"));
   const name = (SAM.file.name || "image").replace(/\.[^.]+$/, "") + "-cutout.png";
   setSlot(SAM.slot, new File([blob], name, {type: "image/png"}));
   renderSlots(); saveDraft(); samClose();
@@ -2277,10 +2321,12 @@ window.addEventListener("resize", () => {
 $("#samX") && ($("#samX").onclick = samClose);
 $("#samCv") && ($("#samCv").onclick = samClick);
 $("#samNeg") && ($("#samNeg").onclick = () => { SAM.neg = !SAM.neg; samStatus(); });
-$("#samUndo") && ($("#samUndo").onclick = () => { SAM.pts.pop(); SAM.out = null; samDraw(); samStatus(); });
-$("#samReset") && ($("#samReset").onclick = () => { SAM.pts = []; SAM.out = null; samDraw(); samStatus(); });
-$("#samBg") && ($("#samBg").onchange = e => { SAM.bg = e.target.value; SAM.out = null; samDraw(); samStatus(); });
+$("#samUndo") && ($("#samUndo").onclick = () => { SAM.pts.pop(); SAM.cut = null;
+  samDraw(); samStatus(); if (SAM.pts.some(p => p.l)) samQueue(); });
+$("#samReset") && ($("#samReset").onclick = () => { SAM.pts = []; SAM.cut = null; samDraw(); samStatus(); });
+$("#samBg") && ($("#samBg").onchange = e => { SAM.bg = e.target.value; samDraw(); samStatus(); });
 $("#samRun") && ($("#samRun").onclick = samRun);
+$("#samEye") && ($("#samEye").onclick = () => { SAM.preview = !SAM.preview; samDraw(); samStatus(); });
 $("#samApply") && ($("#samApply").onclick = samApply);
 $("#samWrap") && ($("#samWrap").onclick = e => { if (e.target.id === "samWrap") samClose(); });
 document.addEventListener("keydown", e => {
