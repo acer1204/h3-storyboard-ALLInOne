@@ -7,22 +7,28 @@
   --bg:#fbfaf8; --panel:#fff; --fg:#1c1a17; --mut:#6f6862; --faint:#9b948c;
   --line:#e5e0d8; --line2:#efebe4; --acc:#b5502a; --ok:#2f6f5e; --warn:#8a6d1f;
   --code:#f5f2ec; --btn:#1c1a17; --btnfg:#fbfaf8; --side:#f4f1ea; --hover:#ece7de;
+  --scroll:#b9b1a1;
   --shadow:0 1px 2px rgba(28,26,23,.04),0 4px 12px rgba(28,26,23,.05);
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
   --bg:#16150f; --panel:#1e1c16; --fg:#eae5dc; --mut:#9b948a; --faint:#6f6a60;
   --line:#312e27; --line2:#272419; --acc:#e08a5f; --ok:#6fbfa4; --warn:#d4b25a;
   --code:#23211a; --btn:#eae5dc; --btnfg:#16150f; --side:#1a1813; --hover:#2a271f;
+  --scroll:#5a5346;
   --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.25);
 }}
 :root[data-theme=dark]{
   --bg:#16150f; --panel:#1e1c16; --fg:#eae5dc; --mut:#9b948a; --faint:#6f6a60;
   --line:#312e27; --line2:#272419; --acc:#e08a5f; --ok:#6fbfa4; --warn:#d4b25a;
   --code:#23211a; --btn:#eae5dc; --btnfg:#16150f; --side:#1a1813; --hover:#2a271f;
+  --scroll:#5a5346;
   --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.25);
 }
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
+/* 捫軸預設是系統淡色，壓在暗底上很突。scrollbar-color 會繼承，
+   掛在 html 上就能一次跟完主題，不用逐個容器寫。 */
+html{scrollbar-color:var(--scroll) transparent}
 body{background:var(--bg);color:var(--fg);
   font:15px/1.7 "Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
   -webkit-text-size-adjust:100%}
