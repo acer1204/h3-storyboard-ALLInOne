@@ -33,6 +33,9 @@ body{background:var(--bg);color:var(--fg);
 .side{background:var(--side);border-right:1px solid var(--line);
   display:flex;flex-direction:column;position:sticky;top:0;height:100vh;padding:14px 10px 22px;overflow:hidden}
 .sidetop{display:flex;align-items:center;gap:8px;margin-bottom:12px;min-height:34px}
+/* 選單項目比螢幕高時要能捲；min-height:0 不能省，flex 項目預設不會縮到
+   比內容還矮，overflow 就永遠不會觸發。頭尾留在外面，收合鈕跟伺服器狀態不會滑走。 */
+.sidenav{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
 .hbg{width:36px;height:34px;flex:none;border:1px solid var(--line);background:var(--panel);border-radius:9px;
   cursor:pointer;display:grid;place-items:center;color:var(--mut);padding:0}
 .hbg:hover{color:var(--fg);border-color:var(--acc)}
@@ -434,7 +437,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     padding:6px 8px;border-right:0;border-top:1px solid var(--line);
     z-index:50;backdrop-filter:blur(8px)}
   .sidetop,.brand,.sidefoot{display:none}
-  #histsub{display:contents}
+  .sidenav,#histsub{display:contents}
   .nav,.app.collapsed .nav{flex:0 0 auto;width:auto;position:relative;flex-direction:column;gap:4px;margin:0;padding:7px 6px;font-size:11px;text-align:center;
     justify-content:center;border-radius:10px;min-width:56px;white-space:nowrap}
   .app.collapsed .nav span:not(.cnt){display:inline}
@@ -461,6 +464,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div class="brand" style="padding:0">H3 Storyboard<small>MiniMax H3 劇情提示詞產生器</small></div>
   </div>
 
+  <div class="sidenav">
   <button class="nav" data-view="run" data-mode="t2va" data-tip="T2VA 文字生影音">
     <svg viewBox="0 0 24 24"><path d="M4 6h16M4 6v2m16-2v2M12 6v14m-3 0h6"/></svg>
     <span>T2VA</span><span class="cnt"></span></button>
@@ -510,6 +514,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <button class="nav" data-view="set" data-tip="系統設定">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
     <span>系統設定</span></button>
+
+  </div>
 
   <div class="sidefoot">
     <div id="sfServer"><span class="dot"></span>尚未檢查</div>
