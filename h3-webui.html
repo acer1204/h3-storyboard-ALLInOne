@@ -31,11 +31,15 @@ body{background:var(--bg);color:var(--fg);
 .app{display:grid;grid-template-columns:236px 1fr;min-height:100vh}
 .app.collapsed{grid-template-columns:60px 1fr}
 .side{background:var(--side);border-right:1px solid var(--line);
-  display:flex;flex-direction:column;position:sticky;top:0;height:100vh;padding:14px 10px 22px;overflow:hidden}
+  display:flex;flex-direction:column;position:sticky;top:0;height:100vh;padding:14px 10px 22px;overflow:hidden;
+  overscroll-behavior:contain}   /* 頭尾兩塊不在可捲區內，滑輪放在那裡滑也不該推動整頁 */
 .sidetop{display:flex;align-items:center;gap:8px;margin-bottom:12px;min-height:34px}
 /* 選單項目比螢幕高時要能捲；min-height:0 不能省，flex 項目預設不會縮到
-   比內容還矮，overflow 就永遠不會觸發。頭尾留在外面，收合鈕跟伺服器狀態不會滑走。 */
-.sidenav{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
+   比內容還矮，overflow 就永遠不會觸發。頭尾留在外面，收合鈕跟伺服器狀態不會滑走。
+   overscroll-behavior 是必須：滑到頂或底之後，滑輪預設會把剩下的量傳給上層，
+   整頁就跟著被捲走。 */
+.sidenav{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;
+  overscroll-behavior:contain}
 .hbg{width:36px;height:34px;flex:none;border:1px solid var(--line);background:var(--panel);border-radius:9px;
   cursor:pointer;display:grid;place-items:center;color:var(--mut);padding:0}
 .hbg:hover{color:var(--fg);border-color:var(--acc)}
