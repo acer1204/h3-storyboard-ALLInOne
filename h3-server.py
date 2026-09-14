@@ -570,6 +570,24 @@ def orig_path(folder, stem):
     return None, ""
 
 
+UPLOAD_HASH_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def upload_blob(h):
+    """依雜湊從上傳庫取圖。優先全解析度原圖，沒有才取 1024px 工作副本
+    （沒有 .orig 就表示當初上傳的圖本來就 ≤ 1024px，工作副本即原圖）。
+    回傳 (bytes, ext)；找不到回傳 (None, "jpg")。"""
+    if not isinstance(h, str) or not UPLOAD_HASH_RE.match(h):
+        return None, "jpg"
+    op, oext = orig_path(UPLOADS, h)
+    if op:
+        return open(op, "rb").read(), oext
+    fp = os.path.join(UPLOADS, h + ".jpg")
+    if os.path.exists(fp):
+        return open(fp, "rb").read(), "jpg"
+    return None, "jpg"
+
+
 def parse_data_image(data):
     """'data:image/png;base64,...' -> (bytes, ext) ; (None, '') if not an image data URL."""
     if not isinstance(data, str) or not data.startswith("data:image"):
@@ -1561,10 +1579,24 @@ def comfy_submit(body):
         blob, ext2 = parse_data_image(body.get("image"))
         if blob is not None:
             ext = ext2
+    if blob is None:
+        # 換一台電腦開同一份草稿時，瀏覽器裡沒有編碼過的 base64，
+        # 只剩草稿裡的上傳庫雜湊。上傳庫存的就是當初 regUpload 送上來的
+        # 同一份原圖，取出來的位元組完全一樣。
+        blob, ext3 = upload_blob(body.get("image_hash"))
+        if blob is not None:
+            ext = ext3
+    more_blobs = []
     for durl in (body.get("more") or [])[:8]:
         mb, _ = parse_data_image(durl)
         if mb:
-            extra_blobs.append(mb)
+            more_blobs.append(mb)
+    if not more_blobs:
+        for h in (body.get("more_hashes") or [])[:8]:
+            mb, _ = upload_blob(h)
+            if mb:
+                more_blobs.append(mb)
+    extra_blobs.extend(more_blobs)
     # REF2VA 的參考音訊：節點限 3 個、且必須有圖或影片作伴，總長 15 秒（長度在前端擋）
     audio_blobs = []
     for durl in (body.get("audios") or [])[:MAX_REF_AUDIO]:
@@ -1576,7 +1608,7 @@ def comfy_submit(body):
     if audio_blobs and run_mode != "ref2va":
         raise SubmitError("只有 REF2VA 支援參考音訊", 400)
     if blob is None and run_mode != "t2va":
-        raise SubmitError("沒有可用的圖片（rec_id 找不到原圖，也沒帶 image）", 400)
+        raise SubmitError("沒有可用的圖片（rec_id、image、上傳庫雜湊都取不到圖）", 400)
     dur = None
     md = re.search(r"\d+", str(body.get("dur") or ""))
     if md:

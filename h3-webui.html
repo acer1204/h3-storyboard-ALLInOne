@@ -3980,7 +3980,13 @@ window.comfyFromItem = (k, btnEl) => {
                    mode, content: it.content, ...comfyFields(it.content, mode)};
   if (mode === "ref2va" && (it.auds || []).length)
     payload.audios = it.auds.map(a => a.b64).filter(Boolean);
-  if (!isT2){ payload.image = it.orig || it.full; payload.more = it.more || []; }
+  if (!isT2){
+    payload.image = it.orig || it.full; payload.more = it.more || [];
+    // 換一台電腦開同一份草稿時，it.orig/it.full 是空的（那兩個只在
+    // 本機跑過 runOne 才有），但圖早就進了伺服器的上傳庫。帶雜湊上去讓它自己取。
+    const hs = (it.files || []).map(f => f._hash).filter(Boolean);
+    if (hs.length){ payload.image_hash = hs[0]; payload.more_hashes = hs.slice(1); }
+  }
   if (!rvEnabled(mode)){
     if (stat) stat.textContent = "已排入任務清單";
     return qEnqueue(payload, {mode, title: it.name || "", rec_id: it.rec_id || ""});
