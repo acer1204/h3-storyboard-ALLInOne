@@ -609,6 +609,13 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
             <option value="">透明</option><option value="#808080">中性灰</option>
             <option value="#ffffff">白</option><option value="#000000">黑</option>
           </select></label>
+        <label class="small" style="display:flex;align-items:center;gap:6px">精修
+          <select id="samRefine" class="no-i18n" style="width:auto;padding:3px 6px">
+            <option value="0">關（原始遮罩）</option>
+            <option value="1">輕（只補小洞）</option>
+            <option value="2" selected>標準</option>
+            <option value="3">強（連細節一起磨）</option>
+          </select></label>
         <span class="hint" id="samInfo"></span>
         <button class="ghost mini" id="samEye" disabled>👁 看成品</button>
         <button class="ghost mini" id="samRun">↻ 重算</button>
@@ -2218,7 +2225,8 @@ async function samRun(){
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({image: b64, bg: null,     // 永遠要 alpha 版，底色本地合成
         points: SAM.pts.map(p => [Math.round(p.x), Math.round(p.y)]),
-        labels: SAM.pts.map(p => p.l)})})).json();
+        labels: SAM.pts.map(p => p.l),
+        refine: $("#samRefine") ? +$("#samRefine").value : 2})})).json();
     if (r.error){ $("#samInfo").textContent = r.error; SAM.busy = false; samStatus(); return; }
     const im = new Image();
     im.onload = () => { SAM.cut = im; SAM.busy = false; samDraw(); samStatus();
@@ -2351,6 +2359,7 @@ $("#samUndo") && ($("#samUndo").onclick = () => { SAM.pts.pop(); SAM.cut = null;
   samDraw(); samStatus(); if (SAM.pts.some(p => p.l)) samQueue(); });
 $("#samReset") && ($("#samReset").onclick = () => { SAM.pts = []; SAM.cut = null; samDraw(); samStatus(); });
 $("#samBg") && ($("#samBg").onchange = e => { SAM.bg = e.target.value; samDraw(); samStatus(); });
+$("#samRefine") && ($("#samRefine").onchange = () => { if (SAM.pts.some(p => p.l)) samRun(); });
 $("#samRun") && ($("#samRun").onclick = samRun);
 $("#samEye") && ($("#samEye").onclick = () => { SAM.preview = !SAM.preview; samDraw(); samStatus(); });
 $("#samApply") && ($("#samApply").onclick = samApply);

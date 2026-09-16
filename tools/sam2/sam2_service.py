@@ -84,8 +84,79 @@ def segment(img_bytes, points, labels):
     except Exception:
         mask = np.asarray(data).any(0)
     if mask.shape != (h, w):
-        mask = cv2.resize(mask.astype("uint8"), (w, h), interpolation=cv2.INTER_NEAREST) > 0
+        # 實測下 ultralytics 已經把遮罩還原成原圖尺寸（847x832 進、847x832 出），
+        # 所以這裡平常不會跑。留著當安全網，並且用雙線性插值再取閾值，
+        # 若哪天真的需要放大，邊界會落在次像素位置而不是方格化。
+        mask = cv2.resize(mask.astype("float32"), (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
     return mask.astype(bool), h, w
+
+
+def _fill_holes(mask, max_px):
+    """被前景包住、且面積小於 max_px 的背景塊補起來。
+    沒用 scipy（這個環境沒裝），改用連通元件：碰到圖邊的背景塊是真的外部，
+    不能填；沒碰到邊的就是洞。大洞保留，那通常是真的鎏空（手臂中間、髮縫）。"""
+    import numpy as np, cv2
+    if max_px <= 0:
+        return mask
+    inv = (~mask).astype("uint8")
+    n, lab, st, _ = cv2.connectedComponentsWithStats(inv, 8)
+    if n <= 1:
+        return mask
+    h, w = mask.shape
+    fill = np.zeros(n, bool)
+    for i in range(1, n):
+        x, y, bw, bh, area = st[i]
+        touches_edge = (x == 0 or y == 0 or x + bw >= w or y + bh >= h)
+        fill[i] = (not touches_edge) and area <= max_px
+    return mask | fill[lab]
+
+
+def _drop_specks(mask, min_px):
+    """與主體分離、面積小於 min_px 的前景碎屑丟掉。主體本身永遠保留，
+    否則選到小物件時會整個被清掉。"""
+    import numpy as np, cv2
+    if min_px <= 0:
+        return mask
+    n, lab, st, _ = cv2.connectedComponentsWithStats(mask.astype("uint8"), 8)
+    if n <= 2:
+        return mask
+    areas = st[1:, cv2.CC_STAT_AREA]
+    biggest = int(areas.argmax()) + 1
+    keep = np.zeros(n, bool)
+    for i in range(1, n):
+        keep[i] = (i == biggest) or st[i, cv2.CC_STAT_AREA] >= min_px
+    return keep[lab]
+
+
+def _smooth(mask, sigma):
+    """模糊再取閾值。磨掉鐘齒，面積幾乎不變（凸的削掉、凹的填平）。"""
+    import cv2
+    if sigma <= 0:
+        return mask
+    return cv2.GaussianBlur(mask.astype("float32"), (0, 0), sigma) > 0.5
+
+
+# 精修強度：(洞上限, 碎屑下限, 平滑 sigma)，前兩項是影像面積的比例，
+# 第三項以 800px 長邊為基準縮放，換張圖才不會強度跡。
+REFINE_LEVELS = {
+    0: (0.0,    0.0,    0.0),
+    1: (0.002,  0.0002, 0.0),
+    2: (0.005,  0.0005, 1.5),
+    3: (0.02,   0.002,  3.0),
+}
+
+
+def refine_mask(mask, level):
+    if not level:
+        return mask
+    hole_r, blob_r, sigma = REFINE_LEVELS.get(int(level), REFINE_LEVELS[2])
+    h, w = mask.shape
+    area = float(h * w)
+    m = _fill_holes(mask, int(area * hole_r))
+    m = _drop_specks(m, int(area * blob_r))
+    m = _smooth(m, sigma * (max(h, w) / 800.0))
+    # 平滑可能又開出小洞，再補一次（便宜）
+    return _fill_holes(m, int(area * hole_r))
 
 
 def cutout_png(img_bytes, mask, bg):
@@ -152,12 +223,17 @@ class H(BaseHTTPRequestHandler):
             lbs = [int(x) for x in (body.get("labels") or [])]
             if not pts or len(pts) != len(lbs):
                 return self._json({"error": "points/labels 數量對不上"}, 400)
+            lvl = body.get("refine")
+            lvl = 2 if lvl is None else int(lvl)
             t0 = time.time()
             mask, h, w = segment(raw, pts, lbs)
+            before = float(mask.mean())
+            mask = refine_mask(mask, lvl)
             png = cutout_png(raw, mask, body.get("bg"))
             import base64 as b64
             return self._json({"png": "data:image/png;base64," + b64.b64encode(png).decode(),
                                "w": w, "h": h, "covered": float(mask.mean()),
+                               "covered_raw": before, "refine": lvl,
                                "elapsed": round(time.time() - t0, 2)})
         except Exception as e:
             return self._json({"error": str(e)[:300]}, 500)
