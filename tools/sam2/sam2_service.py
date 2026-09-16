@@ -57,9 +57,15 @@ def unload():
         return True
 
 
-def segment(img_bytes, points, labels):
+def segment(img_bytes, points, labels, bbox=None):
     """points 是 [[x, y], ...] 的像素座標，labels 1=保留 0=排除。
+    bbox 是 [x0, y0, x1, y1]（XYXY 像素），可單獨用、也可與點並用。
     回傳 (mask_bool_2d, h, w)。
+
+    框會被 ultralytics 拆成兩個角點（labels 2/3）接在 points 前面
+    （predict.py:778-783 的 torch.cat），所以框跟點必須在同一個 batch 維度：
+    一個框配一組點 = 一個物件。框不是硬裁切，一樣是 soft embedding，
+    但對「相鄰兩人選其一」的約束力遠強於負點。
 
     形狀很關鍵：ultralytics 的 predict.py 對扁平的 (N,2) 會做
         points, labels = points[:, None, :], labels[:, None]
@@ -74,8 +80,16 @@ def segment(img_bytes, points, labels):
         raise ValueError("圖片解不開")
     h, w = img.shape[:2]
     m = get_model()
+    kw = {}
+    if points:
+        kw["points"] = [points]
+        kw["labels"] = [labels]
+    if bbox:
+        kw["bboxes"] = [bbox]
+    if not kw:
+        raise ValueError("至少要有一個點或一個框")
     with _lock:
-        res = m(img, points=[points], labels=[labels], verbose=False)
+        res = m(img, verbose=False, **kw)
     if not res or res[0].masks is None:
         return np.zeros((h, w), dtype=bool), h, w
     data = res[0].masks.data
@@ -221,12 +235,22 @@ class H(BaseHTTPRequestHandler):
             raw = base64.b64decode(durl.split(",", 1)[1] if "," in durl else durl)
             pts = [[float(p[0]), float(p[1])] for p in (body.get("points") or [])]
             lbs = [int(x) for x in (body.get("labels") or [])]
-            if not pts or len(pts) != len(lbs):
+            if len(pts) != len(lbs):
                 return self._json({"error": "points/labels 數量對不上"}, 400)
+            bb = body.get("bbox")
+            if isinstance(bb, (list, tuple)) and len(bb) == 4:
+                x0, y0, x1, y1 = (float(v) for v in bb)
+                bb = [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
+                if bb[2] - bb[0] < 2 or bb[3] - bb[1] < 2:
+                    bb = None
+            else:
+                bb = None
+            if not pts and not bb:
+                return self._json({"error": "至少要有一個點或一個框"}, 400)
             lvl = body.get("refine")
             lvl = 2 if lvl is None else int(lvl)
             t0 = time.time()
-            mask, h, w = segment(raw, pts, lbs)
+            mask, h, w = segment(raw, pts, lbs, bb)
             before = float(mask.mean())
             mask = refine_mask(mask, lvl)
             png = cutout_png(raw, mask, body.get("bg"))
