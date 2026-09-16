@@ -2975,8 +2975,7 @@ window.t2DirectSend = async k => {
                    mode: "t2va", content: it.polished, ...comfyFields(it.polished, "t2va")};
   if (!rvEnabled("t2va")){
     // 不需審查：交給伺服器佇列，網頁可以直接關掉
-    if (stat) stat.textContent = "已排入任務清單";
-    return qEnqueue(payload, {mode: "t2va", title: it.name || it.rawStory || "T2VA", rec_id: it.rec_id || ""});
+    return qSend(payload, {mode: "t2va", title: it.name || it.rawStory || "T2VA", rec_id: it.rec_id || ""}, stat);
   }
   return comfyRunReviewed(payload, {mode: "t2va", content: it.polished, inputs: [], recId: it.rec_id,
     inputLabel: "無輸入圖（直接使用潤飾劇本）",
@@ -4070,8 +4069,7 @@ window.comfyFromRec = (id, btnEl) => {
     const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(),
                      mode, content: rec.content, ...comfyFields(rec.content, mode)};
     if (!rvEnabled(mode)){
-      if (stat) stat.textContent = "已排入任務清單";
-      qEnqueue(payload, {mode, title: rec.image || rec.content?.slice(0, 40) || "", rec_id: id});
+      qSend(payload, {mode, title: rec.image || rec.content?.slice(0, 40) || "", rec_id: id}, stat);
       return;
     }
     // 審查啟用：抓紀錄的圖片作為審查輸入（修劇情不支援歷史紀錄路徑，revise 會退為換 seed）
@@ -4101,8 +4099,7 @@ window.comfyFromItem = (k, btnEl) => {
     if (hs.length){ payload.image_hash = hs[0]; payload.more_hashes = hs.slice(1); }
   }
   if (!rvEnabled(mode)){
-    if (stat) stat.textContent = "已排入任務清單";
-    return qEnqueue(payload, {mode, title: it.name || "", rec_id: it.rec_id || ""});
+    return qSend(payload, {mode, title: it.name || "", rec_id: it.rec_id || ""}, stat);
   }
   return comfyRunReviewed(payload, {mode, content: it.content,
     inputs: isT2 ? [] : (it.imgs || [it.full]), recId: it.rec_id,
@@ -4494,9 +4491,56 @@ $("#qclear") && ($("#qclear").onclick = async () => {
 /* 送 ComfyUI 一律改走佇列：立刻回來，工作交給伺服器。 */
 async function qEnqueue(payload, {mode, title, rec_id} = {}){
   const idem = (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
-  const r = await (await fetch(QAPI, {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({payload, mode: mode || payload.mode || "", title: title || "", rec_id: rec_id || "", idem})})).json();
+  const res = await fetch(QAPI, {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({payload, mode: mode || payload.mode || "", title: title || "", rec_id: rec_id || "", idem})});
+  let r = null;
+  try{ r = await res.json(); }catch(e){}
   loadQueue();
+  /* 原本連 res.ok 都沒看就回傳，送單被擋下時呼叫端完全不知情 */
+  if (!res.ok || !r || r.error || !r.id)
+    throw new Error((r && r.error) || ("伺服器回 HTTP " + res.status));
+  return r;
+}
+
+const QTERM = ["done", "error", "canceled"];
+const qSleep = ms => new Promise(r => setTimeout(r, ms));
+/* 盯著一列直到終態。列被刪掉或伺服器重啟時會連續拿不到，別無限等。 */
+async function qWatch(id, onUpdate){
+  let miss = 0;
+  for (;;){
+    let r = null;
+    try{ r = await (await fetch(QAPI + "/" + id)).json(); }catch(e){}
+    /* 不能拿 r.error 當「抓不到」：失敗的列本身就帶著 error 訊息，
+       那正是我們要等的結果。真正的列一定有 state，沒 state 才是沒拿到。 */
+    if (!r || !r.state){
+      if (++miss > 5) return null;
+      await qSleep(2000); continue;
+    }
+    miss = 0;
+    if (onUpdate) onUpdate(r);
+    if (QTERM.includes(r.state)) return r;
+    await qSleep(r.state === "queued" ? 2000 : 1200);
+  }
+}
+/* 送進佇列並把結果寫回卡片。原本只寫一句「已排入任務清單」就不管了，
+   送單被擋下時卡片上什麼都看不到，錯誤只躺在任務清單最底下的完成區。
+   盯梢不能擋住呼叫端：批次送出與 T2VA 自動接力都會 await 這個函式。 */
+async function qSend(payload, meta, stat){
+  const set = t => { if (stat && stat.isConnected) stat.textContent = t; };
+  set("送出中…");
+  let r;
+  try{ r = await qEnqueue(payload, meta); }
+  catch(e){ set("✘ 送不出去：" + (e.message || e)); return null; }
+  set("已排入任務清單");
+  qWatch(r.id, row => {
+    if (row.state === "submitting") set("送往 ComfyUI…");
+    else if (row.state === "running") set("生成中…");
+  }).then(fin => {
+    if (!fin) return set("失去追蹤（任務清單裡還在）");
+    if (fin.state === "error") set("✘ " + (fin.error || "生成失敗"));
+    else if (fin.state === "canceled") set("已取消");
+    else set("完成 ✔");
+  }).catch(() => {});
   return r;
 }
 
@@ -4946,18 +4990,27 @@ async function comfyRunReviewed(payload, ctx, statusEl, btn){
   const rc = rvCfgFor(ctx.mode);          // T2VA 有獨立的及格分數與重試上限
   let tries = 0, best = null;
   for (;;){
-    await gpuPrepare("comfy", set);
+    /* 走伺服器佇列，不再直接打 /api/comfy/run。舊寫法的工作根本不會出現在
+       任務清單裡，也沒人替它排隊；又因為需要 gpuPrepare 先等 VRAM，按下去最久
+       可以什麼都不發生地空轉 20 分鐘。排隊跟 GPU 協調交給 worker。 */
     set("送出中…");
-    let r;
-    try{
-      r = await (await fetch(CAPI + "/run", {method: "POST",
-        headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)})).json();
-    }catch(e){ set("失敗：" + e.message); break; }
-    if (r.error){ set("失敗：" + r.error); break; }
-    set("影片生成中…");
-    let mp4;
-    try{ mp4 = await mvPollDone(r.prompt_id); }
-    catch(e){ set("失敗：" + e.message); break; }
+    let row;
+    try{ row = await qEnqueue(payload, {mode: ctx.mode,
+                                        title: ctx.title || (ctx.content || "").slice(0, 40),
+                                        rec_id: ctx.recId || ""}); }
+    catch(e){ set("✘ 送不出去：" + (e.message || e)); break; }
+    const nth = tries ? `（第 ${tries + 1} 次）` : "";
+    set("已排入任務清單" + nth);
+    const fin = await qWatch(row.id, rr => {
+      if (rr.state === "submitting") set("送往 ComfyUI…" + nth);
+      else if (rr.state === "running") set("影片生成中…" + nth);
+      else set("排隊中…" + nth);
+    });
+    if (!fin || fin.state !== "done"){
+      set("✘ " + ((fin && fin.error) || "工作沒有完成"));
+      break;
+    }
+    const mp4 = fin.video;
     let v = null;
     try{ v = await reviewVideo(mp4, ctx, set); }
     catch(e){ set("審查失敗（" + e.message + "），視為通過"); }
