@@ -19,7 +19,7 @@ PORT = int(os.environ.get("SAM2_PORT", "9996"))
 MODELS_DIR = os.environ.get("SAM2_MODELS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"))
 WEIGHT = os.environ.get("SAM2_WEIGHT", "sam2_b.pt")
 IDLE_UNLOAD = float(os.environ.get("SAM2_IDLE_UNLOAD", "180"))   # 卸模型
-IDLE_EXIT = float(os.environ.get("SAM2_IDLE_EXIT", "900"))       # 整支結束
+IDLE_EXIT = float(os.environ.get("SAM2_IDLE_EXIT", "5400"))      # 整支結束
 # BiRefNet 權重直接沿用 ComfyUI 那份，不再複製一份占磁碟
 BREF_DIR = os.environ.get("BREF_MODELS",
                           "E:/ComfyUI-MiniMaxH3/ComfyUI/models/background_removal")
@@ -234,6 +234,17 @@ def gc_cuda():
         pass
 
 
+def bref_warm(name):
+    """背景把模型預先載好。使用者右鍵開選單到真的按下去背中間有幾秒，
+    夠把 import torch 跟建模型那幾秒藏掉。"""
+    def go():
+        try: get_bref(name)
+        except Exception: pass
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    return True
+
+
 def matte(img_bytes, model_name, image_size=None):
     """回傳 float32 的軟 alpha（0..1，跟原圖同尺寸）。
     前處理跟 ComfyUI 一致：mean=0 std=1、不裁切，所以就是 resize 到正方形。"""
@@ -319,6 +330,12 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/health":
             return self._json({"ok": True, "loaded": _model is not None,
                                "bref_loaded": (_bref[1] if _bref else None), "port": PORT})
+        if self.path.startswith("/matte/warm"):
+            import urllib.parse as _up
+            q = _up.parse_qs(_up.urlparse(self.path).query)
+            nm = (q.get("model") or [BREF_DEFAULT])[0]
+            bref_warm(nm)
+            return self._json({"warming": nm, "loaded": (_bref[1] if _bref else None)})
         if self.path == "/matte/models":
             return self._json({"models": bref_list(), "default": BREF_DEFAULT})
         if self.path == "/unload":

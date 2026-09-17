@@ -2077,6 +2077,9 @@ function slotMenuOpen(ev, i){
   const S = slotsArr();
   if (!S[i]) return;                       // 空格子沒東西可操作
   slotMenuClose();
+  /* 右鍵到真的按下去背中間有幾秒，夠把 import torch 跟建模型藏掉。
+     訊息丟掉不管：預熱失敗也不影響任何事，頂多就是慢一點。 */
+  fetch("/api/matte/warm").catch(() => {});
   const items = SLOTMENU.filter(x => !x.hide || !x.hide(i));
   if (!items.length) return;
   const m = document.createElement("div");
@@ -2180,7 +2183,7 @@ async function samOpen(i){
     $("#samWrap").style.display = "flex";        // 要先顯示：隱藏中的元素量不到尺寸
     /* 畫面要等版面定案才量得到尺寸，所以走 rAF；但去背本身不需要版面，
        不能一起放進去——分頁切到背景時 rAF 不會觸發，整個就像卡死。 */
-    requestAnimationFrame(() => { samDraw(); samStatus(); });
+    samDraw(); samStatus();        // 先把原圖畫上去，畫布不要空白等結果
     samRun();
   };
   im.onerror = () => alert("這張圖讀不開");
@@ -2188,18 +2191,26 @@ async function samOpen(i){
 }
 
 function samClose(){
+  clearTimeout(SAM_REDRAW); samTick(true);
   $("#samWrap").style.display = "none";
   if (SAM.url){ try{ URL.revokeObjectURL(SAM.url); }catch(e){} SAM.url = ""; }
   SAM.img = null; SAM.cut = null;
 }
 
+let SAM_REDRAW = null;
 function samDraw(){
   const cv = $("#samCv"), im = SAM.img;
   if (!cv || !im) return;
   const box = $("#samStage").getBoundingClientRect();
-  if (box.width < 40 || box.height < 40){        // 版面還沒定案，下一幀再來
-    return requestAnimationFrame(samDraw);
+  if (box.width < 40 || box.height < 40){
+    /* 版面還沒定案。不能只靠 rAF：分頁切到背景時它不會觸發，
+       這條重排鏈一斷畫布就永遠空白。配一個 timeout 当保底。 */
+    clearTimeout(SAM_REDRAW);
+    SAM_REDRAW = setTimeout(samDraw, 120);
+    requestAnimationFrame(samDraw);
+    return;
   }
+  clearTimeout(SAM_REDRAW);
   /* 上限 4 倍：小圖不放大的話會浮在一大片空白中間 */
   const fit = Math.min((box.width - 24) / im.naturalWidth, (box.height - 24) / im.naturalHeight);
   const sc = Math.max(0.05, Math.min(fit, 4));
@@ -2270,7 +2281,8 @@ async function samRun(){
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({image: b64, bg: null,        // 永遠要 alpha 版，底色本地合成
         model: $("#samModel") ? $("#samModel").value : ""})})).json();
-    if (r.error){ SAM.info = " · " + r.error; SAM.busy = false; samTick(true); samStatus(); return; }
+    if (r.error){ SAM.info = " · " + r.error; SAM.busy = false; samTick(true);
+                  samDraw(); samStatus(); return; }
     const im = new Image();
     im.onload = () => {
       SAM.cut = im; SAM.busy = false; SAM.preview = false; SAM.loaded = r.model || SAM.loaded;
@@ -2278,11 +2290,12 @@ async function samRun(){
       SAM.info = ` · 保留 ${(r.covered * 100).toFixed(0)}% · 軟邊 ${r.soft} px · ${r.elapsed}s`;
       samDraw(); samStatus();
     };
-    im.onerror = () => { SAM.info = " · 結果讀不開"; SAM.busy = false; samTick(true); samStatus(); };
+    im.onerror = () => { SAM.info = " · 結果讀不開"; SAM.busy = false; samTick(true);
+                         samDraw(); samStatus(); };
     im.src = r.png;
   }catch(e){
     SAM.info = " · 去背失敗：" + (e.message || e);
-    SAM.busy = false; samTick(true); samStatus();
+    SAM.busy = false; samTick(true); samDraw(); samStatus();
   }
 }
 

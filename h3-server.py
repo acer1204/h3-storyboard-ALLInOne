@@ -55,7 +55,7 @@ H3 Prompt 批次產生器 - 本機服務
 import argparse, base64, hashlib, io, json, os, re, socket, struct, subprocess, sys, threading, time
 import urllib.request
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from urllib.parse import urlparse, unquote, parse_qs
+from urllib.parse import urlparse, unquote, parse_qs, quote
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 HIST = os.path.join(ROOT, "history")
@@ -2856,6 +2856,19 @@ class H(SimpleHTTPRequestHandler):
             return self.send_json({"installed": sam2_installed(), "running": bool(h),
                                    "loaded": bool(h and h.get("loaded")),
                                    "blocked": sam2_gpu_block(), "dir": SAM2_DIR})
+
+        if p == "/api/matte/warm":
+            # 不讓預熱踩到 GPU 閘門，否則算圖時右鍵選單會出錯
+            if sam2_gpu_block():
+                return self.send_json({"skipped": "gpu busy"})
+            try:
+                sam2_ensure(wait=8)
+                nm = (parse_qs(urlparse(self.path).query).get("model") or [""])[0] or                      (CONFIG.get("matte_model") or MATTE_DEFAULT)
+                with urllib.request.urlopen(SAM2_URL + "/matte/warm?model=" +
+                                            quote(nm), timeout=10) as r:
+                    return self.send_json(json.loads(r.read().decode("utf-8")))
+            except Exception as e:
+                return self.send_json({"skipped": str(e)[:120]})
 
         if p == "/api/matte/models":
             h = sam2_ping()
