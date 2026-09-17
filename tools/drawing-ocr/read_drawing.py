@@ -87,30 +87,59 @@ def masks_to_boxes(files, shape):
     return out
 
 
-def _iou(a, b):
+def _inter(a, b):
     x0, y0 = max(a[0], b[0]), max(a[1], b[1])
     x1, y1 = min(a[2], b[2]), min(a[3], b[3])
-    if x1 <= x0 or y1 <= y0:
-        return 0.0
-    inter = (x1 - x0) * (y1 - y0)
-    ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
-    return inter / max(1, ua)
+    return 0 if (x1 <= x0 or y1 <= y0) else (x1 - x0) * (y1 - y0)
 
 
-def clean(boxes, shape, max_area=0.004, iou_thr=0.5):
-    """SAM3 對同一個標註常回好幾個範圍不同的框，還會回圖框級的大框。
-    先丟掉過大的，再由大到小用 IoU 去重——保留大的那個，切半的片段才不會蓋掉完整的。"""
+def _area(b):
+    return (b[2] - b[0]) * (b[3] - b[1])
+
+
+def _iou(a, b):
+    i = _inter(a, b)
+    return i / max(1, _area(a) + _area(b) - i)
+
+
+def _contain(a, b):
+    """交集佔「較小那個框」的比例。片段被完整框包住時接近 1，
+    IoU 在這種包含關係下會很小，所以單看 IoU 會把 R1 跟 R140 當成兩個東西。"""
+    i = _inter(a, b)
+    return i / max(1, min(_area(a), _area(b)))
+
+
+def clean(boxes, shape, max_area=0.004, thr=0.3):
+    """SAM3 對同一個標註會回好幾個範圍不同的框，有時還把一個標註切成兩段
+    （R140 -> R1 + 140），另外會混進圖框級的大框。
+
+    去重不夠，要合併：兩個框只要重疊到一定程度就敲成它們的聯集，
+    反覆做到不再變動。這樣重複框收成一個，被切開的標註也接回來。"""
     h, w = shape
-    cand = [b for b in boxes
-            if (b[2] - b[0]) * (b[3] - b[1]) < max_area * w * h
-            and (b[2] - b[0]) > 12 and (b[3] - b[1]) > 12]
-    cand.sort(key=lambda b: -(b[2] - b[0]) * (b[3] - b[1]))
-    keep = []
-    for b in cand:
-        if all(_iou(b, k) < iou_thr for k in keep):
-            keep.append(b)
-    keep.sort(key=lambda b: (b[1], b[0]))
-    return keep
+    bs = [list(b) for b in boxes
+          if _area(b) < max_area * w * h and (b[2] - b[0]) > 12 and (b[3] - b[1]) > 12]
+    changed = True
+    while changed:
+        changed = False
+        out, used = [], [False] * len(bs)
+        for i, a in enumerate(bs):
+            if used[i]:
+                continue
+            cur = a[:]
+            for j in range(i + 1, len(bs)):
+                if used[j]:
+                    continue
+                b = bs[j]
+                if _contain(cur, b) >= thr or _iou(cur, b) >= thr:
+                    cur = [min(cur[0], b[0]), min(cur[1], b[1]),
+                           max(cur[2], b[2]), max(cur[3], b[3])]
+                    used[j] = True
+                    changed = True
+            used[i] = True
+            out.append(cur)
+        bs = out
+    bs.sort(key=lambda b: (b[1], b[0]))
+    return [tuple(b) for b in bs]
 
 
 def read_crop(crop):
@@ -133,7 +162,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
     ap.add_argument("--out", default="")
-    ap.add_argument("--prompt", default="number:80")
+    ap.add_argument("--prompt", default="number:80, text:40")
     ap.add_argument("--thr", type=float, default=0.10)
     ap.add_argument("--scale", type=int, default=4, help="裁切後放大倍率，小字要夠大才讀得準")
     ap.add_argument("--pad", type=int, default=6)
@@ -148,14 +177,21 @@ def main():
         return 1
     h, w = img.shape[:2]
 
-    stem = "dwgocr_" + re.sub(r"[^A-Za-z0-9]", "", os.path.basename(src))[:16]
+    # 前網要每次不同：ComfyUI 會快取相同的圖，重跡時直接回上一次的結果而
+    # 不重新寫檔，舊檔已經被我們刪掉的話就拿到 0 張遮罩。
+    stem = "dwgocr_%d_" % (int(time.time()) % 100000) +            re.sub(r"[^A-Za-z0-9]", "", os.path.basename(src))[:12]
     staged = os.path.join(COMFY_IN, stem + ".png")
     cv2.imwrite(staged, img)
 
     out.write("圖 %dx%d  提示詞 %r  閾值 %.2f%s" % (w, h, a.prompt, a.thr, chr(10)))
     files, dt = detect(stem + ".png", a.prompt, a.thr, stem)
-    boxes = clean(masks_to_boxes(files, (h, w)), (h, w))
-    out.write("SAM3 %.1fs：%d 張遮罩 -> 去重後 %d 個框%s" % (dt, len(files), len(boxes), chr(10)))
+    if not files:
+        out.write("SAM3 沒有回任何遮罩。降低 --thr 或改提示詞再試。%s" % chr(10))
+        return 1
+    raw_boxes = masks_to_boxes(files, (h, w))
+    boxes = clean(raw_boxes, (h, w))
+    out.write("SAM3 %.1fs：%d 張遮罩 -> %d 個原始框 -> 合併後 %d 個%s"
+              % (dt, len(files), len(raw_boxes), len(boxes), chr(10)))
 
     vis = img.copy()
     for i, (x0, y0, x1, y1) in enumerate(boxes):
