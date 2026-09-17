@@ -1460,13 +1460,14 @@ def _node_errors_text(ne, limit=6):
     return chr(10).join(lines)[:900]
 
 
-# ---------------------------------------------------------------- SAM2 點選去背
-# 獨立環境（E:/h3-sam2）跑一支小服務，按需啟動、閒置自動卸模型與結束。
+# ------------------------------------------------------------------ 去背服務
+# 獨立環境（E:/h3-matte）跑一支小服務，按需啟動、閒置自動卸模型與結束。
+# 裡面同時有 BiRefNet（自動去背，前端在用）與 SAM2（點選分割，目前前端沒用）。
 # 分開的理由：它跟 ComfyUI 搶同一張卡，不用時要能把 VRAM 整個放掉；
 # 而且不該為了省磁碟去動 ComfyUI 那個環境的 numpy/opencv。
-SAM2_DIR = os.environ.get("SAM2_DIR", r"E:/h3-sam2")
-SAM2_PORT = int(os.environ.get("SAM2_PORT", "9996"))
-SAM2_URL = "http://127.0.0.1:%d" % SAM2_PORT
+CUT_DIR = os.environ.get("CUT_DIR", r"E:/h3-matte")
+CUT_PORT = int(os.environ.get("CUT_PORT", "9996"))
+CUT_URL = "http://127.0.0.1:%d" % CUT_PORT
 # 去背權重沒必要再複製一份，直接用 ComfyUI 那份
 MATTE_DIR = os.environ.get("BREF_MODELS",
                            "E:/ComfyUI-MiniMaxH3/ComfyUI/models/background_removal")
@@ -1488,50 +1489,50 @@ def matte_models():
     except OSError:
         pass
     return out
-SAM2_PY = os.path.join(SAM2_DIR, ".venv", "Scripts", "python.exe")
-SAM2_APP = os.path.join(SAM2_DIR, "sam2_service.py")
-SAM2_LOCK = threading.RLock()
+CUT_PY = os.path.join(CUT_DIR, ".venv", "Scripts", "python.exe")
+CUT_APP = os.path.join(CUT_DIR, "matte_service.py")
+CUT_LOCK = threading.RLock()
 
 
-def sam2_installed():
-    return os.path.exists(SAM2_PY) and os.path.exists(SAM2_APP)
+def cut_installed():
+    return os.path.exists(CUT_PY) and os.path.exists(CUT_APP)
 
 
-def sam2_ping(timeout=2):
+def cut_ping(timeout=2):
     try:
-        with urllib.request.urlopen(SAM2_URL + "/health", timeout=timeout) as r:
+        with urllib.request.urlopen(CUT_URL + "/health", timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8"))
     except Exception:
         return None
 
 
-def sam2_ensure(wait=40):
+def cut_ensure(wait=40):
     """服務沒在跑就拉起來。它自己閒置 15 分鐘會結束，所以這裡要能重複拉。"""
-    h = sam2_ping()
+    h = cut_ping()
     if h:
         return h
-    if not sam2_installed():
-        raise SubmitError("SAM2 環境還沒安裝（預期在 %s）" % SAM2_DIR, 501)
-    with SAM2_LOCK:
-        h = sam2_ping()
+    if not cut_installed():
+        raise SubmitError("去背服務環境還沒安裝（預期在 %s）" % CUT_DIR, 501)
+    with CUT_LOCK:
+        h = cut_ping()
         if h:
             return h
         try:
-            subprocess.Popen([SAM2_PY, SAM2_APP], cwd=SAM2_DIR,
+            subprocess.Popen([CUT_PY, CUT_APP], cwd=CUT_DIR,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception as e:
-            raise SubmitError("SAM2 服務啟動失敗: %s" % e, 500)
+            raise SubmitError("去背服務啟動失敗: %s" % e, 500)
         t0 = time.time()
         while time.time() - t0 < wait:
             time.sleep(0.6)
-            h = sam2_ping()
+            h = cut_ping()
             if h:
                 return h
-    raise SubmitError("SAM2 服務啟動逾時", 504)
+    raise SubmitError("去背服務啟動逾時", 504)
 
 
-def sam2_gpu_block():
+def cut_gpu_block():
     """GPU 忙就擋下來（除非使用者在設定裡開放同時使用）。
     不排隊——編輯圖片時沒人想等算圖跑完。回傳擋下的理由，空字串＝放行。"""
     try:
@@ -2851,27 +2852,27 @@ class H(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self.send_json({"error": str(e)}, 502)
 
-        if p == "/api/sam2/status":
-            h = sam2_ping()
-            return self.send_json({"installed": sam2_installed(), "running": bool(h),
+        if p == "/api/cutout/status":
+            h = cut_ping()
+            return self.send_json({"installed": cut_installed(), "running": bool(h),
                                    "loaded": bool(h and h.get("loaded")),
-                                   "blocked": sam2_gpu_block(), "dir": SAM2_DIR})
+                                   "blocked": cut_gpu_block(), "dir": CUT_DIR})
 
         if p == "/api/matte/warm":
             # 不讓預熱踩到 GPU 閘門，否則算圖時右鍵選單會出錯
-            if sam2_gpu_block():
+            if cut_gpu_block():
                 return self.send_json({"skipped": "gpu busy"})
             try:
-                sam2_ensure(wait=8)
+                cut_ensure(wait=8)
                 nm = (parse_qs(urlparse(self.path).query).get("model") or [""])[0] or                      (CONFIG.get("matte_model") or MATTE_DEFAULT)
-                with urllib.request.urlopen(SAM2_URL + "/matte/warm?model=" +
+                with urllib.request.urlopen(CUT_URL + "/matte/warm?model=" +
                                             quote(nm), timeout=10) as r:
                     return self.send_json(json.loads(r.read().decode("utf-8")))
             except Exception as e:
                 return self.send_json({"skipped": str(e)[:120]})
 
         if p == "/api/matte/models":
-            h = sam2_ping()
+            h = cut_ping()
             return self.send_json({"models": matte_models(),
                                    "default": CONFIG.get("matte_model") or MATTE_DEFAULT,
                                    "loaded": (h or {}).get("bref_loaded")})
@@ -3462,19 +3463,19 @@ class H(SimpleHTTPRequestHandler):
             body = self.read_json()
             if not isinstance(body, dict):
                 return self.send_json({"error": "empty body"}, 400)
-            why = sam2_gpu_block()
+            why = cut_gpu_block()
             if why:
                 return self.send_json({"error": why + "——去背已暫停。"
                                                 "要同時使用請到「系統設定 → 連線與生成」開啟。",
                                        "blocked": True}, 409)
             try:
-                sam2_ensure()
+                cut_ensure()
             except SubmitError as e:
                 return self.send_json({"error": e.msg}, e.code)
             try:
                 if not body.get("model"):
                     body["model"] = CONFIG.get("matte_model") or MATTE_DEFAULT
-                req = urllib.request.Request(SAM2_URL + "/matte", method="POST",
+                req = urllib.request.Request(CUT_URL + "/matte", method="POST",
                                              data=json.dumps(body).encode("utf-8"),
                                              headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=300) as r:
@@ -3485,30 +3486,30 @@ class H(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self.send_json({"error": str(e)[:200]}, 502)
 
-        if p == "/api/sam2/segment":
+        if p == "/api/cutout/segment":
             body = self.read_json()
             if not isinstance(body, dict):
                 return self.send_json({"error": "empty body"}, 400)
-            why = sam2_gpu_block()
+            why = cut_gpu_block()
             if why:
                 return self.send_json({"error": why + "——去背已暫停。"
                                                 "要同時使用請到「系統設定 → 連線與生成」開啟。",
                                        "blocked": True}, 409)
             try:
-                sam2_ensure()
+                cut_ensure()
             except SubmitError as e:
                 return self.send_json({"error": e.msg}, e.code)
             try:
-                req = urllib.request.Request(SAM2_URL + "/segment", method="POST",
+                req = urllib.request.Request(CUT_URL + "/segment", method="POST",
                                              data=json.dumps(body).encode("utf-8"),
                                              headers={"Content-Type": "application/json"})
                 with urllib.request.urlopen(req, timeout=180) as r:
                     return self.send_json(json.loads(r.read().decode("utf-8")))
             except urllib.error.HTTPError as e:
                 try: return self.send_json(json.loads(e.read().decode("utf-8")), e.code)
-                except Exception: return self.send_json({"error": "SAM2 回應異常"}, 502)
+                except Exception: return self.send_json({"error": "去背服務回應異常"}, 502)
             except Exception as e:
-                return self.send_json({"error": "SAM2 連線失敗: %s" % str(e)[:200]}, 502)
+                return self.send_json({"error": "去背服務連線失敗: %s" % str(e)[:200]}, 502)
 
         if p == "/api/comfy/run":
             try:

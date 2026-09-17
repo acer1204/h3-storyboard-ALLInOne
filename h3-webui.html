@@ -256,31 +256,31 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .xedit:hover{border-color:var(--acc);color:var(--acc)}
 .xedit:disabled{opacity:.35;cursor:not-allowed}
 .xedit + .xdel{margin-left:5px}
-#samWrap{display:none;position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.66);
+#cutWrap{display:none;position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.66);
   align-items:center;justify-content:center;padding:24px}
-#samBox{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);
+#cutBox{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);
   width:min(1100px,96vw);height:min(860px,92vh);display:flex;flex-direction:column;overflow:hidden}
-#samBox .samhd{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--line)}
-#samBox .samhd b{font-size:13.5px}
-#samBox .samhd .hint{flex:1;font-size:11px}
-#samStage{flex:1;display:grid;place-items:center;background:
+#cutBox .cuthd{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--line)}
+#cutBox .cuthd b{font-size:13.5px}
+#cutBox .cuthd .hint{flex:1;font-size:11px}
+#cutStage{flex:1;display:grid;place-items:center;background:
   repeating-conic-gradient(var(--code) 0 25%,transparent 0 50%) 50%/18px 18px;overflow:auto;padding:12px}
-#samCv{cursor:crosshair;border-radius:8px;max-width:100%;box-shadow:0 2px 14px rgba(0,0,0,.35)}
-#samBox .samft{display:flex;align-items:center;gap:8px;padding:11px 14px;border-top:1px solid var(--line);
+#cutCv{cursor:crosshair;border-radius:8px;max-width:100%;box-shadow:0 2px 14px rgba(0,0,0,.35)}
+#cutBox .cutft{display:flex;align-items:center;gap:8px;padding:11px 14px;border-top:1px solid var(--line);
   flex-wrap:wrap}
-#samBox .samft .hint{font-size:11px;font-family:ui-monospace,Consolas,monospace}
-#samStage{position:relative}
+#cutBox .cutft .hint{font-size:11px;font-family:ui-monospace,Consolas,monospace}
+#cutStage{position:relative}
 /* 遇到首次載入模型時要讓人看得出來它在動，不然會以為卡死 */
-#samBusyBox{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;
+#cutBusyBox{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;
   justify-content:center;gap:10px;background:rgba(0,0,0,.55);backdrop-filter:blur(2px);
   border-radius:11px;z-index:5;pointer-events:none}
-#samBusyBox.on{display:flex}
-#samBusyBox b{font-size:14px;color:#fff}
-#samBusyBox .hint{font-size:12px;color:#cfc8bd;font-family:ui-monospace,Consolas,monospace}
-#samBusyBox .spin{width:34px;height:34px;border-radius:50%;
-  border:3px solid rgba(255,255,255,.22);border-top-color:#fff;animation:samspin .8s linear infinite}
-@keyframes samspin{to{transform:rotate(360deg)}}
-#samBox .mini.warn{border-color:var(--warn);color:var(--warn)}
+#cutBusyBox.on{display:flex}
+#cutBusyBox b{font-size:14px;color:#fff}
+#cutBusyBox .hint{font-size:12px;color:#cfc8bd;font-family:ui-monospace,Consolas,monospace}
+#cutBusyBox .spin{width:34px;height:34px;border-radius:50%;
+  border:3px solid rgba(255,255,255,.22);border-top-color:#fff;animation:cutspin .8s linear infinite}
+@keyframes cutspin{to{transform:rotate(360deg)}}
+#cutBox .mini.warn{border-color:var(--warn);color:var(--warn)}
 .slotmenu{position:absolute;z-index:70;min-width:190px;background:var(--panel);border:1px solid var(--line);
   border-radius:11px;padding:6px;box-shadow:var(--shadow)}
 .slotmenu .smhd{font-size:10.5px;color:var(--faint);padding:4px 8px 6px;border-bottom:1px solid var(--line);
@@ -602,32 +602,32 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <input type="file" id="slotfiles" multiple accept="image/*" hidden>
   <input type="file" id="audfiles" multiple accept="audio/*" hidden>
 
-  <div id="samWrap">
-    <div id="samBox">
-      <div class="samhd">
+  <div id="cutWrap">
+    <div id="cutBox">
+      <div class="cuthd">
         <b>✂ 去背景</b>
         <span class="hint">自動偵測主體，不用點選。換模型或底色會重新計算。</span>
-        <button class="ghost mini" id="samX">關閉</button>
+        <button class="ghost mini" id="cutX">關閉</button>
       </div>
-      <div id="samStage"><canvas id="samCv"></canvas>
-        <div id="samBusyBox"><div class="spin"></div><b id="samBusyMsg">處理中…</b>
-          <span id="samBusySub" class="hint"></span></div>
+      <div id="cutStage"><canvas id="cutCv"></canvas>
+        <div id="cutBusyBox"><div class="spin"></div><b id="cutBusyMsg">處理中…</b>
+          <span id="cutBusySub" class="hint"></span></div>
       </div>
-      <div class="samft">
-        <button class="ghost mini" id="samEye" disabled>👁 看原圖</button>
+      <div class="cutft">
+        <button class="ghost mini" id="cutEye" disabled>👁 看原圖</button>
         <span style="flex:1"></span>
         <label class="small" style="display:flex;align-items:center;gap:6px">模型
-          <select id="samModel" class="no-i18n" style="width:auto;padding:3px 6px"></select></label>
+          <select id="cutModel" class="no-i18n" style="width:auto;padding:3px 6px"></select></label>
         <label class="small" style="display:flex;align-items:center;gap:6px">背景
-          <select id="samBg" class="no-i18n" style="width:auto;padding:3px 6px">
+          <select id="cutBg" class="no-i18n" style="width:auto;padding:3px 6px">
             <option value="">透明</option><option value="#808080">中性灰</option>
             <option value="#ffffff">白</option><option value="#000000">黑</option>
             <option value="#00ff00">綠幕</option>
           </select></label>
-        <span class="hint" id="samInfo"></span>
-        <button class="ghost mini" id="samRun">↻ 重算</button>
-        <button class="ghost mini" id="samOrig" disabled title="把這格換回去背前的原圖">↺ 還原原圖</button>
-        <button id="samApply" disabled>✔ 套用到格子</button>
+        <span class="hint" id="cutInfo"></span>
+        <button class="ghost mini" id="cutRun">↻ 重算</button>
+        <button class="ghost mini" id="cutOrig" disabled title="把這格換回去背前的原圖">↺ 還原原圖</button>
+        <button id="cutApply" disabled>✔ 套用到格子</button>
       </div>
     </div>
   </div>
@@ -843,7 +843,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div><label>重試目標</label><select id="retrylvl">
         <option value="ok">完全通過（無警告）</option>
         <option value="noerr" selected>無錯誤即可</option></select></div>
-      <div><label>🖼 去背與 GPU 共用</label><select id="samBusy">
+      <div><label>🖼 去背與 GPU 共用</label><select id="cutBusy">
         <option value="0" selected>LLM／ComfyUI 忙碌時停用</option>
         <option value="1">允許同時使用（VRAM 夠大再開）</option></select></div>
       <div><label>✂ 去背預設模型</label><select id="matteModel" class="no-i18n"></select></div>
@@ -851,7 +851,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <p class="hint">去背跟算圖搶同一張卡。預設在生成劇情或算影片時停用——不排隊，直接擋下並告知，
       因為編輯圖片時沒人想等算圖跑完。VRAM 充裕的機器可以改成允許同時使用。
       服務按需啟動，閒置 3 分鐘卸掉模型、15 分鐘整支結束，不用時不佔 VRAM。
-      <span id="samStat" class="no-i18n"></span></p>
+      <span id="cutStat" class="no-i18n"></span></p>
     <p class="hint" style="margin-top:10px">生成結果不符合重試目標時自動重新生成，直到符合或用完次數，
       並保留其中最好的一次。設 0 關閉。</p>
     <div class="row" style="margin-top:16px">
@@ -1046,7 +1046,7 @@ const SKEY="h3.settings.v1", SPKEY="h3.sp.v1", VKEY="h3.view.v1";
 const FIELDS={tr:"#tr",
               retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
               wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur",
-              samBusy:"#samBusy",matteModel:"#matteModel"};
+              cutBusy:"#cutBusy",matteModel:"#matteModel"};
 /* 共用設定：這些鍵存在伺服器端 settings.json，換瀏覽器或換電腦都是同一份。
    其餘（介面語言、側欄收合、目前檢視）留在本機，那些本來就該因裝置而異。
    讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），寫入同時更新本機與伺服器。 */
@@ -1100,6 +1100,8 @@ function applySettings(){
   const q = new URLSearchParams(location.search);
   for (const [k,el] of Object.entries(FIELDS)) if (q.has(k)) $(el).value = q.get(k);
   let saved={}; try{ saved = JSON.parse(store.get(SKEY)||"{}") }catch(e){}
+  // 這個設定原本叫 samBusy，服務改名後跟著改；舊值接過來，免得使用者的選擇被重置
+  if (saved.cutBusy == null && saved.samBusy != null) saved.cutBusy = saved.samBusy;
   for (const [k,el] of Object.entries(FIELDS))
     if (saved[k] != null && saved[k] !== "") $(el).value = saved[k];
 }
@@ -2124,12 +2126,9 @@ slotMenuAdd({id: "replace", label: "🔁 換這張圖", hint: "重新選一張�
 slotMenuAdd({id: "remove", label: "✕ 移除這格", hint: "清空這個格子",
              run: i => { setSlot(i, null); renderSlots(); }});
 
-/* ---------- SAM2 點選去背 ----------
-   綠點 = 要保留的東西，紅點 = 排除（ClipForge 那版只有綠點，紅點是這裡補的）。
-   座標一律換算回原圖像素再送後端；顯示用的縮放不能影響結果。 */
 /* 去背用 BiRefNet：整張圖丟進去、模型自己判斷主體，沒有點選也沒有提示詞。
    輸出是連續 alpha（不是二值），面紗那種半透明才有辦法正確表達。 */
-const SAM = {file: null, slot: -1, img: null, url: "", busy: false, info: "",
+const CUT = {file: null, slot: -1, img: null, url: "", busy: false, info: "",
              cut: null, bg: "", preview: false, hasCut: false, models: null, loaded: null};
 
 /* 設定存的是 JSON 字串，store.get 不會替你 parse */
@@ -2137,28 +2136,28 @@ function mattePref(){
   try{ return (JSON.parse(store.get(SKEY) || "{}") || {}).matteModel || ""; }catch(e){ return ""; }
 }
 /* 模型清單是伺服器讀目錄給的，不會把 GPU 服務叫醒，所以開頁就能拿。 */
-async function samModels(force){
-  if (SAM.models && !force) return SAM.models;
+async function cutModels(force){
+  if (CUT.models && !force) return CUT.models;
   try{
     const r = await (await fetch("/api/matte/models")).json();
-    SAM.models = r.models || [];
-    SAM.loaded = r.loaded || null;          // 已經在 VRAM 裡的模型名，用來決定提示文字
-    const opts = SAM.models.map(m =>
+    CUT.models = r.models || [];
+    CUT.loaded = r.loaded || null;          // 已經在 VRAM 裡的模型名，用來決定提示文字
+    const opts = CUT.models.map(m =>
       `<option value="${esc(m.name)}">${esc(m.name.replace(/\.safetensors$/, ""))} · ${m.mb}MB · ${m.image_size}px</option>`).join("");
     const pref = mattePref() || r.default;
-    for (const id of ["#samModel", "#matteModel"]){
+    for (const id of ["#cutModel", "#matteModel"]){
       const sel = $(id);
       if (!sel) continue;
       const keep = sel.value;
       sel.innerHTML = opts;
-      if (keep && SAM.models.some(m => m.name === keep)) sel.value = keep;
-      else if (pref && SAM.models.some(m => m.name === pref)) sel.value = pref;
+      if (keep && CUT.models.some(m => m.name === keep)) sel.value = keep;
+      else if (pref && CUT.models.some(m => m.name === pref)) sel.value = pref;
     }
-  }catch(e){ SAM.models = []; }
-  return SAM.models;
+  }catch(e){ CUT.models = []; }
+  return CUT.models;
 }
 
-async function samOpen(i){
+async function cutOpen(i){
   const s = slotsArr()[i];
   if (!s || !s.file) return;
   /* 這格若已經是去背版，就把原圖拿回來當底圖。不這樣做的話多次編輯會疊加，削掉的回不來。 */
@@ -2167,50 +2166,50 @@ async function samOpen(i){
   if (!orig && s._origHash)
     orig = await fileFromHash(s._origHash, s._origName || s.file.name.replace(/-cutout(?=\.[^.]+$)/, ""));
   if (orig) s._orig = orig;
-  SAM.slot = i; SAM.file = orig || s.file; SAM.cut = null; SAM.busy = false;
-  SAM.hasCut = !!orig; SAM.preview = false; SAM.info = "";
-  SAM.bg = $("#samBg") ? $("#samBg").value : "";
-  await samModels(true);                    // 重新問一次：模型可能已經被閒置卸掉了
+  CUT.slot = i; CUT.file = orig || s.file; CUT.cut = null; CUT.busy = false;
+  CUT.hasCut = !!orig; CUT.preview = false; CUT.info = "";
+  CUT.bg = $("#cutBg") ? $("#cutBg").value : "";
+  await cutModels(true);                    // 重新問一次：模型可能已經被閒置卸掉了
   const pref = mattePref();
-  if (pref && $("#samModel") && SAM.models.some(m => m.name === pref)) $("#samModel").value = pref;
-  /* 底圖一定要用 SAM.file 自己的 URL。沿用 s.url 的話，這格是去背版時畫布會顯示
+  if (pref && $("#cutModel") && CUT.models.some(m => m.name === pref)) $("#cutModel").value = pref;
+  /* 底圖一定要用 CUT.file 自己的 URL。沿用 s.url 的話，這格是去背版時畫布會顯示
      去背版、但送去處理的是原圖，看到的跟算的不是同一張。 */
-  if (SAM.url){ try{ URL.revokeObjectURL(SAM.url); }catch(e){} }
-  SAM.url = URL.createObjectURL(SAM.file);
+  if (CUT.url){ try{ URL.revokeObjectURL(CUT.url); }catch(e){} }
+  CUT.url = URL.createObjectURL(CUT.file);
   const im = new Image();
   im.onload = () => {
-    SAM.img = im;
-    $("#samWrap").style.display = "flex";        // 要先顯示：隱藏中的元素量不到尺寸
+    CUT.img = im;
+    $("#cutWrap").style.display = "flex";        // 要先顯示：隱藏中的元素量不到尺寸
     /* 畫面要等版面定案才量得到尺寸，所以走 rAF；但去背本身不需要版面，
        不能一起放進去——分頁切到背景時 rAF 不會觸發，整個就像卡死。 */
-    samDraw(); samStatus();        // 先把原圖畫上去，畫布不要空白等結果
-    samRun();
+    cutDraw(); cutStatus();        // 先把原圖畫上去，畫布不要空白等結果
+    cutRun();
   };
   im.onerror = () => alert("這張圖讀不開");
-  im.src = SAM.url;
+  im.src = CUT.url;
 }
 
-function samClose(){
-  clearTimeout(SAM_REDRAW); samTick(true);
-  $("#samWrap").style.display = "none";
-  if (SAM.url){ try{ URL.revokeObjectURL(SAM.url); }catch(e){} SAM.url = ""; }
-  SAM.img = null; SAM.cut = null;
+function cutClose(){
+  clearTimeout(CUT_REDRAW); cutTick(true);
+  $("#cutWrap").style.display = "none";
+  if (CUT.url){ try{ URL.revokeObjectURL(CUT.url); }catch(e){} CUT.url = ""; }
+  CUT.img = null; CUT.cut = null;
 }
 
-let SAM_REDRAW = null;
-function samDraw(){
-  const cv = $("#samCv"), im = SAM.img;
+let CUT_REDRAW = null;
+function cutDraw(){
+  const cv = $("#cutCv"), im = CUT.img;
   if (!cv || !im) return;
-  const box = $("#samStage").getBoundingClientRect();
+  const box = $("#cutStage").getBoundingClientRect();
   if (box.width < 40 || box.height < 40){
     /* 版面還沒定案。不能只靠 rAF：分頁切到背景時它不會觸發，
        這條重排鏈一斷畫布就永遠空白。配一個 timeout 当保底。 */
-    clearTimeout(SAM_REDRAW);
-    SAM_REDRAW = setTimeout(samDraw, 120);
-    requestAnimationFrame(samDraw);
+    clearTimeout(CUT_REDRAW);
+    CUT_REDRAW = setTimeout(cutDraw, 120);
+    requestAnimationFrame(cutDraw);
     return;
   }
-  clearTimeout(SAM_REDRAW);
+  clearTimeout(CUT_REDRAW);
   /* 上限 4 倍：小圖不放大的話會浮在一大片空白中間 */
   const fit = Math.min((box.width - 24) / im.naturalWidth, (box.height - 24) / im.naturalHeight);
   const sc = Math.max(0.05, Math.min(fit, 4));
@@ -2218,11 +2217,11 @@ function samDraw(){
   cv.height = Math.round(im.naturalHeight * sc);
   const g = cv.getContext("2d");
   g.clearRect(0, 0, cv.width, cv.height);
-  if (SAM.preview || !SAM.cut){
+  if (CUT.preview || !CUT.cut){
     g.drawImage(im, 0, 0, cv.width, cv.height);   // 原圖
   } else {
     /* 成品：底色先鋪，去背結果疊上去。透明時鋪棋盤格才看得出哪裡是透明的。 */
-    if (SAM.bg){ g.fillStyle = SAM.bg; g.fillRect(0, 0, cv.width, cv.height); }
+    if (CUT.bg){ g.fillStyle = CUT.bg; g.fillRect(0, 0, cv.width, cv.height); }
     else {
       const t = 12;
       for (let y = 0; y < cv.height; y += t)
@@ -2231,89 +2230,89 @@ function samDraw(){
           g.fillRect(x, y, t, t);
         }
     }
-    g.drawImage(SAM.cut, 0, 0, cv.width, cv.height);
+    g.drawImage(CUT.cut, 0, 0, cv.width, cv.height);
   }
   cv.dataset.scale = String(sc);
 }
 
-function samStatus(){
-  const im = SAM.img, cv = $("#samCv");
+function cutStatus(){
+  const im = CUT.img, cv = $("#cutCv");
   const dim = im ? `${im.naturalWidth}×${im.naturalHeight}` : "";
   const z = (im && cv && cv.dataset.scale) ? ` · ${Math.round(+cv.dataset.scale * 100)}%` : "";
-  $("#samInfo").textContent = dim + z + (SAM.busy ? " · 處理中…" : (SAM.info || ""));
-  const bb = $("#samBusyBox");
-  if (bb) bb.className = SAM.busy ? "on" : "";
-  $("#samRun").disabled = SAM.busy;
-  $("#samModel").disabled = SAM.busy;
-  $("#samApply").disabled = SAM.busy || !SAM.cut;
-  $("#samOrig").disabled = SAM.busy || !SAM.hasCut;
-  const eye = $("#samEye");
-  eye.disabled = SAM.busy || !SAM.cut;
-  eye.textContent = SAM.preview ? "👁 看成品" : "👁 看原圖";
-  eye.className = "ghost mini" + (SAM.preview ? " on" : "");
+  $("#cutInfo").textContent = dim + z + (CUT.busy ? " · 處理中…" : (CUT.info || ""));
+  const bb = $("#cutBusyBox");
+  if (bb) bb.className = CUT.busy ? "on" : "";
+  $("#cutRun").disabled = CUT.busy;
+  $("#cutModel").disabled = CUT.busy;
+  $("#cutApply").disabled = CUT.busy || !CUT.cut;
+  $("#cutOrig").disabled = CUT.busy || !CUT.hasCut;
+  const eye = $("#cutEye");
+  eye.disabled = CUT.busy || !CUT.cut;
+  eye.textContent = CUT.preview ? "👁 看成品" : "👁 看原圖";
+  eye.className = "ghost mini" + (CUT.preview ? " on" : "");
 }
 
-let SAM_TICK = null;
-function samTick(stop){
-  clearInterval(SAM_TICK); SAM_TICK = null;
+let CUT_TICK = null;
+function cutTick(stop){
+  clearInterval(CUT_TICK); CUT_TICK = null;
   if (stop) return;
-  const t0 = Date.now(), sub = $("#samBusySub");
-  SAM_TICK = setInterval(() => {
+  const t0 = Date.now(), sub = $("#cutBusySub");
+  CUT_TICK = setInterval(() => {
     if (sub) sub.textContent = ((Date.now() - t0) / 1000).toFixed(1) + " s";
   }, 100);
 }
-async function samRun(){
-  if (SAM.busy || !SAM.file) return;
-  SAM.busy = true; SAM.info = ""; 
+async function cutRun(){
+  if (CUT.busy || !CUT.file) return;
+  CUT.busy = true; CUT.info = ""; 
   /* 首次要把 400～800MB 的權重搬進 VRAM，十幾秒跑不掉。講清楚比假裝很快好。 */
-  const want = $("#samModel") ? $("#samModel").value : "";
-  const warm = SAM.loaded && want && SAM.loaded === want;
-  const msg = $("#samBusyMsg");
+  const want = $("#cutModel") ? $("#cutModel").value : "";
+  const warm = CUT.loaded && want && CUT.loaded === want;
+  const msg = $("#cutBusyMsg");
   if (msg) msg.textContent = warm ? "去背中…" : "首次載入模型，稍候…";
-  samTick(false);
-  samStatus();
+  cutTick(false);
+  cutStatus();
   try{
     const b64 = await new Promise((res, rej) => {
       const fr = new FileReader(); fr.onload = () => res(fr.result);
-      fr.onerror = () => rej(new Error("讀檔失敗")); fr.readAsDataURL(SAM.file);
+      fr.onerror = () => rej(new Error("讀檔失敗")); fr.readAsDataURL(CUT.file);
     });
     const r = await (await fetch("/api/matte", {method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({image: b64, bg: null,        // 永遠要 alpha 版，底色本地合成
-        model: $("#samModel") ? $("#samModel").value : ""})})).json();
-    if (r.error){ SAM.info = " · " + r.error; SAM.busy = false; samTick(true);
-                  samDraw(); samStatus(); return; }
+        model: $("#cutModel") ? $("#cutModel").value : ""})})).json();
+    if (r.error){ CUT.info = " · " + r.error; CUT.busy = false; cutTick(true);
+                  cutDraw(); cutStatus(); return; }
     const im = new Image();
     im.onload = () => {
-      SAM.cut = im; SAM.busy = false; SAM.preview = false; SAM.loaded = r.model || SAM.loaded;
-      samTick(true);
-      SAM.info = ` · 保留 ${(r.covered * 100).toFixed(0)}% · 軟邊 ${r.soft} px · ${r.elapsed}s`;
-      samDraw(); samStatus();
+      CUT.cut = im; CUT.busy = false; CUT.preview = false; CUT.loaded = r.model || CUT.loaded;
+      cutTick(true);
+      CUT.info = ` · 保留 ${(r.covered * 100).toFixed(0)}% · 軟邊 ${r.soft} px · ${r.elapsed}s`;
+      cutDraw(); cutStatus();
     };
-    im.onerror = () => { SAM.info = " · 結果讀不開"; SAM.busy = false; samTick(true);
-                         samDraw(); samStatus(); };
+    im.onerror = () => { CUT.info = " · 結果讀不開"; CUT.busy = false; cutTick(true);
+                         cutDraw(); cutStatus(); };
     im.src = r.png;
   }catch(e){
-    SAM.info = " · 去背失敗：" + (e.message || e);
-    SAM.busy = false; samTick(true); samDraw(); samStatus();
+    CUT.info = " · 去背失敗：" + (e.message || e);
+    CUT.busy = false; cutTick(true); cutDraw(); cutStatus();
   }
 }
 
-async function samApply(){
-  if (!SAM.cut) return;
+async function cutApply(){
+  if (!CUT.cut) return;
   const c = document.createElement("canvas");
-  c.width = SAM.img.naturalWidth; c.height = SAM.img.naturalHeight;
+  c.width = CUT.img.naturalWidth; c.height = CUT.img.naturalHeight;
   const g = c.getContext("2d");
-  if (SAM.bg){ g.fillStyle = SAM.bg; g.fillRect(0, 0, c.width, c.height); }
-  g.drawImage(SAM.cut, 0, 0, c.width, c.height);
+  if (CUT.bg){ g.fillStyle = CUT.bg; g.fillRect(0, 0, c.width, c.height); }
+  g.drawImage(CUT.cut, 0, 0, c.width, c.height);
   const blob = await new Promise(r => c.toBlob(r, "image/png"));
-  const name = (SAM.file.name || "image").replace(/\.[^.]+$/, "") + "-cutout.png";
-  setSlot(SAM.slot, new File([blob], name, {type: "image/png"}), SAM.file);
-  renderSlots(); saveDraft(); samClose();
+  const name = (CUT.file.name || "image").replace(/\.[^.]+$/, "") + "-cutout.png";
+  setSlot(CUT.slot, new File([blob], name, {type: "image/png"}), CUT.file);
+  renderSlots(); saveDraft(); cutClose();
 }
 slotMenuAdd({id: "matte", label: "✂ 去背景",
              hint: "自動偵測主體、可選模型與底色；隨時能還原原圖",
-             run: i => samOpen(i)});
+             run: i => cutOpen(i)});
 
 function renderSlots(){
   const zone = $("#slotzone");
@@ -2411,24 +2410,24 @@ $("#audfiles") && ($("#audfiles").onchange = async e => {
   saveDraft(); renderAuds();
 });
 window.addEventListener("resize", () => {
-  if ($("#samWrap") && $("#samWrap").style.display === "flex"){ samDraw(); samStatus(); }
+  if ($("#cutWrap") && $("#cutWrap").style.display === "flex"){ cutDraw(); cutStatus(); }
 });
-$("#samX") && ($("#samX").onclick = samClose);
-$("#samModel") && ($("#samModel").onchange = () => samRun());
+$("#cutX") && ($("#cutX").onclick = cutClose);
+$("#cutModel") && ($("#cutModel").onchange = () => cutRun());
 $("#matteModel") && ($("#matteModel").onchange = () => { saveSettings(); });
-$("#samBg") && ($("#samBg").onchange = e => { SAM.bg = e.target.value; samDraw(); samStatus(); });
-$("#samRun") && ($("#samRun").onclick = () => samRun());
-$("#samEye") && ($("#samEye").onclick = () => { SAM.preview = !SAM.preview; samDraw(); samStatus(); });
-$("#samOrig") && ($("#samOrig").onclick = () => {
-  if (!SAM.hasCut || !SAM.file) return;
-  setSlot(SAM.slot, SAM.file);          // SAM.file 已經是真正的原圖，去背版丟掉
-  renderSlots(); saveDraft(); samClose();
+$("#cutBg") && ($("#cutBg").onchange = e => { CUT.bg = e.target.value; cutDraw(); cutStatus(); });
+$("#cutRun") && ($("#cutRun").onclick = () => cutRun());
+$("#cutEye") && ($("#cutEye").onclick = () => { CUT.preview = !CUT.preview; cutDraw(); cutStatus(); });
+$("#cutOrig") && ($("#cutOrig").onclick = () => {
+  if (!CUT.hasCut || !CUT.file) return;
+  setSlot(CUT.slot, CUT.file);          // CUT.file 已經是真正的原圖，去背版丟掉
+  renderSlots(); saveDraft(); cutClose();
 });
-$("#samApply") && ($("#samApply").onclick = samApply);
-$("#samWrap") && ($("#samWrap").onclick = e => { if (e.target.id === "samWrap") samClose(); });
+$("#cutApply") && ($("#cutApply").onclick = cutApply);
+$("#cutWrap") && ($("#cutWrap").onclick = e => { if (e.target.id === "cutWrap") cutClose(); });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && document.getElementById("qView")) qViewClose();
-  if ($("#samWrap") && $("#samWrap").style.display === "flex" && e.key === "Escape") samClose();
+  if ($("#cutWrap") && $("#cutWrap").style.display === "flex" && e.key === "Escape") cutClose();
 });
 
 $("#refRuleOn") && ($("#refRuleOn").onchange = () => { refRuleSave(); refRuleDraw(); });
@@ -3967,7 +3966,7 @@ refreshRequired();
 loadWfParams();
 renderPrompts();   // 先同步畫出內建，再去伺服器補其他組
 // 共用設定要先取回，之後所有 store.get 才讀得到伺服器上的值（skill 組合、審查設定…）
-loadShared().then(() => samModels(true).catch(() => {})).then(() => {
+loadShared().then(() => cutModels(true).catch(() => {})).then(() => {
   if (typeof applySettings === "function") applySettings();
   if (typeof rvLoad === "function") rvLoad();
   return loadPrompts();

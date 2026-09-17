@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""SAM2 點選去背服務（獨立環境，不碰 ComfyUI 的 .env）。
+"""去背服務（BiRefNet 自動去背 + SAM2 點選分割）（獨立環境，不碰 ComfyUI 的 .env）。
 
 為什麼要獨立成一支程序：
   1) 它跟 ComfyUI 共用同一張 3090。不用時必須能把模型整個從 VRAM 卸掉，
@@ -15,11 +15,11 @@
 import io, json, os, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = int(os.environ.get("SAM2_PORT", "9996"))
-MODELS_DIR = os.environ.get("SAM2_MODELS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"))
-WEIGHT = os.environ.get("SAM2_WEIGHT", "sam2_b.pt")
-IDLE_UNLOAD = float(os.environ.get("SAM2_IDLE_UNLOAD", "180"))   # 卸模型
-IDLE_EXIT = float(os.environ.get("SAM2_IDLE_EXIT", "5400"))      # 整支結束
+PORT = int(os.environ.get("MATTE_PORT", "9996"))
+MODELS_DIR = os.environ.get("SAM_MODELS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"))
+WEIGHT = os.environ.get("SAM_WEIGHT", "sam2_b.pt")
+IDLE_UNLOAD = float(os.environ.get("MATTE_IDLE_UNLOAD", "180"))   # 卸模型
+IDLE_EXIT = float(os.environ.get("MATTE_IDLE_EXIT", "5400"))      # 整支結束
 # BiRefNet 權重直接沿用 ComfyUI 那份，不再複製一份占磁碟
 BREF_DIR = os.environ.get("BREF_MODELS",
                           "E:/ComfyUI-MiniMaxH3/ComfyUI/models/background_removal")
@@ -421,6 +421,6 @@ def janitor():
 if __name__ == "__main__":
     threading.Thread(target=janitor, daemon=True).start()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
-    sys.stderr.write("SAM2 service on 127.0.0.1:%d  models=%s%s" % (PORT, MODELS_DIR, chr(10)))
+    sys.stderr.write("matte service on 127.0.0.1:%d  models=%s%s" % (PORT, MODELS_DIR, chr(10)))
     sys.stderr.flush()
     srv.serve_forever()
