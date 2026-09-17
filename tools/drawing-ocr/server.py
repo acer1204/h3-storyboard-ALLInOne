@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cv2
 import numpy as np
-from read_drawing import COMFY_IN, clean, detect_boxes, has_box_node, read_crop
+from read_drawing import COMFY, COMFY_IN, clean, detect_boxes, has_box_node, read_crop
 
 PORT = int(os.environ.get("DWG_PORT", "9995"))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -192,8 +192,33 @@ class H(BaseHTTPRequestHandler):
         return self._send({"error": "unknown endpoint"}, code=404)
 
 
+def preflight():
+    """先把設定錯誤講清楚。預設路徑是作者機器上的，別人 clone 下來一定要改；
+    不檢的話會到真的送出一張圖才失敗，而且錯誤訊息看不出是路徑問題。"""
+    bad = []
+    if not os.path.isdir(COMFY_IN):
+        bad.append("COMFY_INPUT 指到不存在的目錄：%s" % COMFY_IN)
+    try:
+        urllib.request.urlopen(COMFY + "/object_info/SAM3_Detect", timeout=5).read(1)
+    except Exception as e:
+        bad.append("連不上 ComfyUI 或找不到 SAM3_Detect：%s（%s）"
+                   % (COMFY, str(e)[:60]))
+    for line in bad:
+        sys.stderr.write("  ! " + line + chr(10))
+    if bad:
+        sys.stderr.write("  用環境變數 COMFY_INPUT / COMFY_URL 指到你自己的位置。"
+                         "伺服器還是會啟動。" + chr(10))
+
+
 if __name__ == "__main__":
+    # 中文訊息碰上 cp950 / cp1252 主控台會直接拋 UnicodeEncodeError，
+    # 把啟動訊息弄成異常很不候。改成编不出來就替換。
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     os.makedirs(WORK, exist_ok=True)
+    preflight()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     sys.stderr.write("工程圖標註擷取  http://127.0.0.1:%d%s" % (PORT, chr(10)))
     sys.stderr.flush()
