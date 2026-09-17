@@ -1532,6 +1532,21 @@ def cut_ensure(wait=40):
     raise SubmitError("去背服務啟動逾時", 504)
 
 
+def cut_unload(timeout=20):
+    """叫去背服務把模型從 VRAM 放掉。
+
+    它閒置三分鐘會自己卸，但交接的時候等不了那麼久——去完背接著
+    按生成，使用者看到的就是三分鐘的不明等待。服務沒在跑就不用拉它起來，
+    沒在跑就沒占 VRAM。"""
+    if not cut_ping(timeout=2):
+        return None
+    try:
+        with urllib.request.urlopen(CUT_URL + "/unload", timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", ""}
 
 
@@ -3168,6 +3183,17 @@ class H(SimpleHTTPRequestHandler):
             time.sleep(1.5)
             return self.send_json({"ok": True, "gpu": gpu_mem()})
 
+        if p == "/api/cutout/free":
+            # 跟「強制 Free ComfyUI」成對。去背服務閒置三分鐘才自己卸，
+            # 想馬上把卡讓出來給別的東西用時等不了那麼久。
+            if not cut_ping(timeout=2):
+                return self.send_json({"ok": True, "state": "not_running", "gpu": gpu_mem()})
+            r = cut_unload()
+            if r is None:
+                return self.send_json({"error": "去背服務沒有回應", "gpu": gpu_mem()}, 502)
+            time.sleep(0.8)
+            return self.send_json({"ok": True, "state": "unloaded", "detail": r, "gpu": gpu_mem()})
+
         if p == "/api/gpu/prepare":
             # 身分感知協調：VRAM 數字分不出持有者，改用可靠訊號 ——
             #   llama 使用中/剛用完：由 /api/llama/chat 代理精確追蹤（in-flight 計數＋最後完成時間）
@@ -3186,7 +3212,12 @@ class H(SimpleHTTPRequestHandler):
                 return self.send_json({"ready": True, "state": "no_gpu_info", "gpu": mem})
             in_flight = LLAMA_INFLIGHT[0] > 0
             since_llama = (time.time() - LLAMA_LAST[0]) if LLAMA_LAST[0] else 1e9
+            # 在別台機器上的那一方不碰這張卡。本機 VRAM 降不降下來跟它無關，
+            # 等下去只是無端不能用。cut_gpu_block 早就這樣判了，這裡漏掉。
+            comfy_here, llama_here = cut_rivals_local()
             if target == "llama":
+                if not llama_here:
+                    return self.send_json({"ready": True, "state": "llama_remote", "gpu": mem})
                 if in_flight:
                     # 另一個 llama 呼叫正在跑：同對象直接放行
                     return self.send_json({"ready": True, "state": "llama_resident", "gpu": mem})
@@ -3198,23 +3229,31 @@ class H(SimpleHTTPRequestHandler):
                 busy = comfy_busy()
                 if busy:
                     return self.send_json({"ready": False, "state": "comfy_busy", "gpu": mem})
+                # 去背服務也押著 VRAM（BiRefNet 約 4.4GB），而 comfy_free 卸不到它。
+                # 不叫它的話用量永遠降不到門檻以下，這裡會空轉到逾時。
+                freed = []
+                if cut_unload() is not None:
+                    freed.append("cutout")
                 try:
                     comfy_free()
-                    state = "freeing_comfy"
+                    freed.append("comfy")
                 except Exception as e:
-                    state = "comfy_unreachable: %s" % e
+                    freed.append("comfy失敗(%s)" % str(e)[:40])
+                state = "freeing_" + "+".join(freed) if freed else "nothing_to_free"
                 time.sleep(1.5)
                 mem = gpu_mem()
                 return self.send_json({"ready": (mem.get("used_mb") or 0) <= thr, "state": state, "gpu": mem})
             if target == "comfy":
-                if in_flight:
+                if not comfy_here:
+                    return self.send_json({"ready": True, "state": "comfy_remote", "gpu": mem})
+                if in_flight and llama_here:
                     return self.send_json({"ready": False, "state": "llama_in_use", "gpu": mem})
                 if used <= thr:
                     return self.send_json({"ready": True, "state": "gpu_free", "gpu": mem})
                 if comfy_busy():
                     # 高 VRAM 是 ComfyUI 自己在用：直接排進它的佇列即可
                     return self.send_json({"ready": True, "state": "comfy_owns_gpu", "gpu": mem})
-                if since_llama < 90:
+                if since_llama < 90 and llama_here:
                     return self.send_json({"ready": False, "state": "waiting_llama_unload", "gpu": mem})
                 # 沒人聲稱佔用：多半是 ComfyUI 閒置駐留的模型，送單無妨
                 return self.send_json({"ready": True, "state": "assume_comfy_resident", "gpu": mem})

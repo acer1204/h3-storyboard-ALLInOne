@@ -785,7 +785,9 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <p class="ph">ComfyUI／llama-server 位址設定在伺服器端的 <code>config.json</code>（與 h3-server.py 同資料夾）。改檔存檔即生效，不需重啟、也不會顯示在網頁上。</p>
     <div class="row" style="margin-top:12px">
       <button class="mini" id="comfyFreeBtn">🧹 強制 Free ComfyUI（卸載模型釋放 VRAM）</button>
+      <button class="mini" id="cutFreeBtn">🧹 強制 Free 去背服務（卸載模型釋放 VRAM）</button>
       <span class="status" id="comfyFreeStat" style="margin:0"></span>
+      <span class="status" id="cutFreeStat" style="margin:0"></span>
     </div>
     <p class="hint" style="margin-top:8px">GPU 目前用量：<span id="gpuNow">—</span>
       <button class="ghost mini" id="gpuRefresh" style="margin-left:8px">刷新</button></p>
@@ -3456,6 +3458,18 @@ async function refreshGpu(){
   }catch(e){ $("#gpuNow").textContent = "無法讀取"; }
 }
 $("#gpuRefresh").onclick = refreshGpu;
+$("#cutFreeBtn").onclick = async () => {
+  $("#cutFreeStat").textContent = "釋放中…";
+  try{
+    const j = await (await fetch("/api/cutout/free", {method:"POST"})).json();
+    const g = j.gpu || {};
+    const v = g.used_mb != null ? (g.used_mb/1024).toFixed(1) + "GB" : "?";
+    $("#cutFreeStat").textContent = j.error ? j.error
+      : (j.state === "not_running" ? "去背服務沒在跑，本來就沒占 VRAM ✔ VRAM " + v
+                                   : "已要求去背服務卸載模型 ✔ VRAM " + v);
+  }catch(e){ $("#cutFreeStat").textContent = "失敗：" + e.message; }
+  refreshGpu();
+};
 $("#comfyFreeBtn").onclick = async () => {
   $("#comfyFreeStat").textContent = "釋放中…";
   try{
@@ -5758,6 +5772,7 @@ const EN = {
 "ComfyUI／llama-server 位址設定在伺服器端的":"ComfyUI / llama-server addresses live in the server-side",
 "（與 h3-server.py 同資料夾）。改檔存檔即生效，不需重啟、也不會顯示在網頁上。":"(next to h3-server.py). Saving the file takes effect immediately — no restart, never shown in the browser.",
 "🧹 強制 Free ComfyUI（卸載模型釋放 VRAM）":"🧹 Force-free ComfyUI (unload models, release VRAM)",
+"🧹 強制 Free 去背服務（卸載模型釋放 VRAM）":"🧹 Force-free the cutout service (unload models, release VRAM)",
 "GPU 目前用量：":"GPU usage: ","刷新":"Refresh","📁 工作流":"📁 Workflow","從工作流資料夾（":"Pick a .json from the workflow folder (",
 "的":"in","）選一個 .json 直接載入為模板（Export (API) 或 Save 格式都可）。":") to load as the template (Export (API) or Save format).",
 "（載入中…）":"(loading…)","使用此工作流":"Use this workflow","重新掃描":"Rescan","⬆ 上傳工作流檔":"⬆ Upload workflow",
