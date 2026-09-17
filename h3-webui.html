@@ -1048,11 +1048,12 @@ const FIELDS={tr:"#tr",
               wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur",
               cutBusy:"#cutBusy",matteModel:"#matteModel"};
 /* 共用設定：這些鍵存在伺服器端 settings.json，換瀏覽器或換電腦都是同一份。
-   其餘（介面語言、側欄收合、目前檢視）留在本機，那些本來就該因裝置而異。
-   讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），寫入同時更新本機與伺服器。 */
+   只有介面語言留在本機——同一台電腦不同人用不同語言是合理的，
+   其餘設定分歧只會造成困擾。讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），
+   寫入同時更新本機與伺服器，且有 400ms 節流。 */
 const SHARED_KEYS = new Set(["h3.settings.v1","h3.review.v1","h3.reviewsys.v1","h3.sp.v1",
                              "h3.t2vasp.v1","h3.skills.v1","h3.styleskill.v1","h3.prompt.all.v1",
-                             "h3.refrule.v1"]);
+                             "h3.refrule.v1","h3.side.collapsed.v1","h3.view.v1"]);
 let SHARED = {}, sharedTimer = null;
 function pushShared(){
   clearTimeout(sharedTimer);
@@ -3968,6 +3969,10 @@ renderPrompts();   // 先同步畫出內建，再去伺服器補其他組
 // 共用設定要先取回，之後所有 store.get 才讀得到伺服器上的值（skill 組合、審查設定…）
 loadShared().then(() => cutModels(true).catch(() => {})).then(() => {
   if (typeof applySettings === "function") applySettings();
+  /* 這兩個剛改成共用，而開頁時是先用本機值畫的。
+     伺服器那份回來後要再套一次，不然改了要重整兩次才生效。 */
+  if (typeof setSide === "function") setSide(store.get(SIDEKEY) === "1");
+  if (typeof setView === "function"){ const v = store.get(VKEY); if (v) setView(v); }
   if (typeof rvLoad === "function") rvLoad();
   return loadPrompts();
 }).then(() => { setMode(curMode()); return loadDraft(); }).then(() => { setMode(curMode()); });
