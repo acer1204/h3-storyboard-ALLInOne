@@ -49,3 +49,13 @@ python read_drawing.py <圖檔> --prompt "text:80" --thr 0.25
 - ComfyUI 跑著，且 `models/checkpoints/sam3.1_multiplex_fp16.safetensors` 在位
 - llama-server 跑著，模型要有 multimodal 能力
 - 路徑可用環境變數改：`COMFY_URL` `LLAMA_URL` `COMFY_INPUT` `COMFY_OUTPUT` `SAM3_CKPT` `VLM_MODEL`
+
+## 只想看框在哪
+
+`workflows/SAM3_工程圖文字定位.json` 拖進 ComfyUI，把節點 2 換成你的圖，按執行。
+`DrawBBoxes` 會把紅框畫在原圖上，一張圖看完，存到 `output/dwg_boxes_xxxxx.png`。
+
+畫框只需要 `bboxes` 輸出，所以那個工作流的「個別 mask」是關的——腳本要逐框裁切才需要開。
+
+（`CropByBBoxes` 看起來能一次吐出所有裁切，但實測餵 SAM3 的 bboxes 只回 1 張，
+沒有深究，腳本仍用自己裁切。）

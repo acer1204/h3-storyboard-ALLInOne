@@ -1,6 +1,6 @@
 {
- "last_node_id": 6,
- "last_link_id": 6,
+ "last_node_id": 7,
+ "last_link_id": 8,
  "nodes": [
   {
    "id": 1,
@@ -69,7 +69,8 @@
      "name": "IMAGE",
      "type": "IMAGE",
      "links": [
-      3
+      3,
+      6
      ],
      "slot_index": 0
     },
@@ -84,7 +85,7 @@
     "Node name for S&R": "LoadImage"
    },
    "widgets_values": [
-    "example.png",
+    "dwg.png",
     "image"
    ],
    "title": "2. 工程圖"
@@ -178,15 +179,15 @@
     {
      "name": "masks",
      "type": "MASK",
-     "links": [
-      5
-     ],
+     "links": null,
      "slot_index": 0
     },
     {
      "name": "bboxes",
      "type": "BOUNDING_BOX",
-     "links": null,
+     "links": [
+      5
+     ],
      "slot_index": 0
     }
    ],
@@ -196,29 +197,34 @@
    "widgets_values": [
     0.1,
     1,
-    true
+    false
    ],
-   "title": "4. 閾值 0.10 / 精修 1 / 個別 mask=true"
+   "title": "4. 閾值 0.10 / 精修 1。畫框只用 bboxes，個別 mask 可關"
   },
   {
    "id": 5,
-   "type": "MaskToImage",
+   "type": "DrawBBoxes",
    "pos": [
     930,
     40
    ],
    "size": [
-    240,
-    50
+    300,
+    70
    ],
    "flags": {},
    "order": 4,
    "mode": 0,
    "inputs": [
     {
-     "name": "mask",
-     "type": "MASK",
+     "name": "bboxes",
+     "type": "BOUNDING_BOX",
      "link": 5
+    },
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 6
     }
    ],
    "outputs": [
@@ -226,26 +232,28 @@
      "name": "IMAGE",
      "type": "IMAGE",
      "links": [
-      6
+      7,
+      8
      ],
      "slot_index": 0
     }
    ],
    "properties": {
-    "Node name for S&R": "MaskToImage"
+    "Node name for S&R": "DrawBBoxes"
    },
-   "widgets_values": []
+   "widgets_values": [],
+   "title": "5. 把框畫在原圖上（紅框）"
   },
   {
    "id": 6,
    "type": "PreviewImage",
    "pos": [
     930,
-    140
+    160
    ],
    "size": [
-    420,
-    560
+    520,
+    420
    ],
    "flags": {},
    "order": 5,
@@ -254,7 +262,7 @@
     {
      "name": "images",
      "type": "IMAGE",
-     "link": 6
+     "link": 7
     }
    ],
    "outputs": [],
@@ -262,7 +270,37 @@
     "Node name for S&R": "PreviewImage"
    },
    "widgets_values": [],
-   "title": "每個標註一張遮罩（白＝文字位置）"
+   "title": "紅框標註圖"
+  },
+  {
+   "id": 7,
+   "type": "SaveImage",
+   "pos": [
+    930,
+    610
+   ],
+   "size": [
+    520,
+    300
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 8
+    }
+   ],
+   "outputs": [],
+   "properties": {
+    "Node name for S&R": "SaveImage"
+   },
+   "widgets_values": [
+    "dwg_boxes"
+   ],
+   "title": "存檔（output/dwg_boxes_xxxxx.png）"
   }
  ],
  "links": [
@@ -301,16 +339,32 @@
   [
    5,
    4,
-   0,
+   1,
    5,
    0,
-   "MASK"
+   "BOUNDING_BOX"
   ],
   [
    6,
+   2,
+   0,
+   5,
+   1,
+   "IMAGE"
+  ],
+  [
+   7,
    5,
    0,
    6,
+   0,
+   "IMAGE"
+  ],
+  [
+   8,
+   5,
+   0,
+   7,
    0,
    "IMAGE"
   ]
