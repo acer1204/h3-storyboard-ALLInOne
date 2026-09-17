@@ -1467,6 +1467,27 @@ def _node_errors_text(ne, limit=6):
 SAM2_DIR = os.environ.get("SAM2_DIR", r"E:/h3-sam2")
 SAM2_PORT = int(os.environ.get("SAM2_PORT", "9996"))
 SAM2_URL = "http://127.0.0.1:%d" % SAM2_PORT
+# 去背權重沒必要再複製一份，直接用 ComfyUI 那份
+MATTE_DIR = os.environ.get("BREF_MODELS",
+                           "E:/ComfyUI-MiniMaxH3/ComfyUI/models/background_removal")
+MATTE_DEFAULT = "birefnet.safetensors"
+
+
+def matte_models():
+    """列可用的去背模型。只讀目錄，不碰 GPU 服務——
+    設定頁要用這份清單，不能一開設定就把模型載進 VRAM。"""
+    out = []
+    try:
+        for fn in sorted(os.listdir(MATTE_DIR)):
+            if not fn.endswith(".safetensors"):
+                continue
+            low = fn.lower()
+            out.append({"name": fn,
+                        "mb": round(os.path.getsize(os.path.join(MATTE_DIR, fn)) / 1048576.0),
+                        "image_size": 2048 if ("hr" in low or "2048" in low) else 1024})
+    except OSError:
+        pass
+    return out
 SAM2_PY = os.path.join(SAM2_DIR, ".venv", "Scripts", "python.exe")
 SAM2_APP = os.path.join(SAM2_DIR, "sam2_service.py")
 SAM2_LOCK = threading.RLock()
@@ -2836,6 +2857,12 @@ class H(SimpleHTTPRequestHandler):
                                    "loaded": bool(h and h.get("loaded")),
                                    "blocked": sam2_gpu_block(), "dir": SAM2_DIR})
 
+        if p == "/api/matte/models":
+            h = sam2_ping()
+            return self.send_json({"models": matte_models(),
+                                   "default": CONFIG.get("matte_model") or MATTE_DEFAULT,
+                                   "loaded": (h or {}).get("bref_loaded")})
+
         if p == "/api/gpu":
             return self.send_json(gpu_mem())
 
@@ -3417,6 +3444,33 @@ class H(SimpleHTTPRequestHandler):
             qset(r["id"], state="canceled", t_end=int(time.time()))
             QWAKE.set()
             return self.send_json({"state": "canceled"})
+
+        if p == "/api/matte":
+            body = self.read_json()
+            if not isinstance(body, dict):
+                return self.send_json({"error": "empty body"}, 400)
+            why = sam2_gpu_block()
+            if why:
+                return self.send_json({"error": why + "——去背已暫停。"
+                                                "要同時使用請到「系統設定 → 連線與生成」開啟。",
+                                       "blocked": True}, 409)
+            try:
+                sam2_ensure()
+            except SubmitError as e:
+                return self.send_json({"error": e.msg}, e.code)
+            try:
+                if not body.get("model"):
+                    body["model"] = CONFIG.get("matte_model") or MATTE_DEFAULT
+                req = urllib.request.Request(SAM2_URL + "/matte", method="POST",
+                                             data=json.dumps(body).encode("utf-8"),
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=300) as r:
+                    return self.send_json(json.loads(r.read().decode("utf-8")))
+            except urllib.error.HTTPError as e:
+                try: return self.send_json(json.loads(e.read().decode("utf-8")), e.code)
+                except Exception: return self.send_json({"error": "去背服務回應異常"}, 502)
+            except Exception as e:
+                return self.send_json({"error": str(e)[:200]}, 502)
 
         if p == "/api/sam2/segment":
             body = self.read_json()

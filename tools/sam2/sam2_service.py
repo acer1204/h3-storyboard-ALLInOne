@@ -20,8 +20,13 @@ MODELS_DIR = os.environ.get("SAM2_MODELS", os.path.join(os.path.dirname(os.path.
 WEIGHT = os.environ.get("SAM2_WEIGHT", "sam2_b.pt")
 IDLE_UNLOAD = float(os.environ.get("SAM2_IDLE_UNLOAD", "180"))   # 卸模型
 IDLE_EXIT = float(os.environ.get("SAM2_IDLE_EXIT", "900"))       # 整支結束
+# BiRefNet 權重直接沿用 ComfyUI 那份，不再複製一份占磁碟
+BREF_DIR = os.environ.get("BREF_MODELS",
+                          "E:/ComfyUI-MiniMaxH3/ComfyUI/models/background_removal")
+BREF_DEFAULT = os.environ.get("BREF_WEIGHT", "birefnet.safetensors")
 
 _model = None
+_bref = None            # (模型物件, 權重檔名)
 _lock = threading.RLock()
 _last = time.time()
 
@@ -42,11 +47,12 @@ def get_model():
 
 
 def unload():
-    global _model
+    global _model, _bref
     with _lock:
-        if _model is None:
+        if _model is None and _bref is None:
             return False
         _model = None
+        _bref = None
         try:
             import torch, gc
             gc.collect()
@@ -173,6 +179,106 @@ def refine_mask(mask, level):
     return _fill_holes(m, int(area * hole_r))
 
 
+# ---------------------------------------------------------------- BiRefNet
+
+def bref_list():
+    """可用的去背模型。image_size 每個模型自己帶，因為 HR 版本是在
+    2048 訓練的，跑 1024 等於浪費掉它的優勢（ComfyUI 那邊就是鎖死 1024）。"""
+    out = []
+    if not os.path.isdir(BREF_DIR):
+        return out
+    for fn in sorted(os.listdir(BREF_DIR)):
+        if not fn.endswith(".safetensors"):
+            continue
+        low = fn.lower()
+        size = 2048 if ("hr" in low or "2048" in low) else 1024
+        out.append({"name": fn,
+                    "mb": round(os.path.getsize(os.path.join(BREF_DIR, fn)) / 1048576.0),
+                    "image_size": size})
+    return out
+
+
+def get_bref(name):
+    """延遲載入 / 換模型。一次只留一個在 VRAM 裡。"""
+    global _bref
+    import torch
+    from safetensors.torch import load_file
+    with _lock:
+        if _bref is not None and _bref[1] == name:
+            return _bref[0]
+        _bref = None
+        gc_cuda()
+        from birefnet import BiRefNet
+        fp = os.path.join(BREF_DIR, name)
+        if not os.path.exists(fp):
+            raise ValueError("找不到模型：" + name)
+        m = BiRefNet()
+        missing, unexpected = m.load_state_dict(load_file(fp), strict=False)
+        if missing:
+            # strict=False 不會报錯，但權重尺寸對不上時會静默吐垃圾，寧可在這裡死
+            raise ValueError("權重跟模型架構對不上（缺 %d 個張量），"
+                             "可能是 lite/Swin-T 版本，目前只支援 Swin-L。" % len(missing))
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        m = m.to(device=dev, dtype=torch.float16 if dev == "cuda" else torch.float32).eval()
+        _bref = (m, name)
+        return m
+
+
+def gc_cuda():
+    try:
+        import torch, gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def matte(img_bytes, model_name, image_size=None):
+    """回傳 float32 的軟 alpha（0..1，跟原圖同尺寸）。
+    前處理跟 ComfyUI 一致：mean=0 std=1、不裁切，所以就是 resize 到正方形。"""
+    import numpy as np, cv2, torch
+    arr = np.frombuffer(img_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("圖片解不開")
+    h, w = img.shape[:2]
+    m = get_bref(model_name)
+    if image_size is None:
+        image_size = next((x["image_size"] for x in bref_list() if x["name"] == model_name), 1024)
+    dev = next(m.parameters()).device
+    dt = next(m.parameters()).dtype
+    x = torch.from_numpy(img[:, :, ::-1].copy()).to(dev).float().div(255.0).unsqueeze(0).movedim(-1, 1)
+    x = torch.nn.functional.interpolate(x, size=(image_size, image_size), mode="bicubic", antialias=True)
+    with _lock:
+        with torch.no_grad():
+            out = m(pixel_values=x.to(dt))
+    out = torch.nn.functional.interpolate(out.float(), size=(h, w), mode="bicubic", antialias=False)
+    return out.sigmoid()[0, 0].cpu().numpy().clip(0.0, 1.0), h, w
+
+
+def matte_png(img_bytes, alpha, bg):
+    """軟 alpha 合成。bg=None -> 透明；否則混到底色。
+    軟邊是重點，不能先取閾值，面紗那種半透明就是靠這個才對。"""
+    import numpy as np, cv2
+    img = cv2.imdecode(np.frombuffer(img_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+    a = alpha[:, :, None].astype(np.float32)
+    if bg:
+        c = bg.lstrip("#")
+        rgb = tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+        back = np.zeros_like(img, np.float32)
+        back[:, :, 0] = rgb[2]; back[:, :, 1] = rgb[1]; back[:, :, 2] = rgb[0]   # BGR
+        out = (img.astype(np.float32) * a + back * (1 - a)).astype(np.uint8)
+        ok, buf = cv2.imencode(".png", out)
+    else:
+        b, g, r = cv2.split(img)
+        al = (alpha * 255.0).round().astype("uint8")
+        ok, buf = cv2.imencode(".png", cv2.merge([b, g, r, al]))
+    if not ok:
+        raise ValueError("PNG 編碼失敗")
+    return buf.tobytes()
+
+
 def cutout_png(img_bytes, mask, bg):
     """bg=None -> 透明去背；否則填上指定顏色（#rrggbb）。回傳 PNG bytes。"""
     import numpy as np, cv2
@@ -211,7 +317,10 @@ class H(BaseHTTPRequestHandler):
         global _last
         _last = time.time()
         if self.path == "/health":
-            return self._json({"ok": True, "loaded": _model is not None, "port": PORT})
+            return self._json({"ok": True, "loaded": _model is not None,
+                               "bref_loaded": (_bref[1] if _bref else None), "port": PORT})
+        if self.path == "/matte/models":
+            return self._json({"models": bref_list(), "default": BREF_DEFAULT})
         if self.path == "/unload":
             return self._json({"unloaded": unload()})
         return self._json({"error": "unknown endpoint"}, 404)
@@ -219,7 +328,7 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         global _last
         _last = time.time()
-        if self.path != "/segment":
+        if self.path not in ("/segment", "/matte"):
             return self._json({"error": "unknown endpoint"}, 404)
         n = int(self.headers.get("Content-Length") or 0)
         if n <= 0 or n > 48 * 1024 * 1024:
@@ -229,6 +338,25 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(n).decode("utf-8"))
         except Exception as e:
             return self._json({"error": "bad json: %s" % e}, 400)
+        if self.path == "/matte":
+            try:
+                import base64
+                durl = str(body.get("image") or "")
+                raw = base64.b64decode(durl.split(",", 1)[1] if "," in durl else durl)
+                name = str(body.get("model") or BREF_DEFAULT)
+                isz = body.get("image_size")
+                t0 = time.time()
+                alpha, h, w = matte(raw, name, int(isz) if isz else None)
+                png = matte_png(raw, alpha, body.get("bg"))
+                import base64 as b64
+                return self._json({"png": "data:image/png;base64," + b64.b64encode(png).decode(),
+                                   "w": w, "h": h, "model": name,
+                                   "covered": float((alpha > 0.5).mean()),
+                                   "soft": int(((alpha > 0.03) & (alpha < 0.97)).sum()),
+                                   "elapsed": round(time.time() - t0, 2)})
+            except Exception as e:
+                return self._json({"error": str(e)[:300]}, 500)
+
         try:
             import base64
             durl = str(body.get("image") or "")
@@ -269,7 +397,7 @@ def janitor():
         idle = time.time() - _last
         if idle > IDLE_EXIT:
             os._exit(0)                     # h3-server 下次會重新拉起來
-        if idle > IDLE_UNLOAD and _model is not None:
+        if idle > IDLE_UNLOAD and (_model is not None or _bref is not None):
             unload()
 
 
