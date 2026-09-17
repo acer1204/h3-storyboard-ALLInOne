@@ -1,0 +1,377 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工程圖標註定位</title>
+<style>
+:root{
+  --bg:#fbfaf8; --panel:#fff; --fg:#1c1a17; --mut:#6f6862; --faint:#9b948c;
+  --line:#e5e0d8; --acc:#b5502a; --ok:#2f6f5e; --side:#f4f1ea; --hover:#ece7de;
+  --scroll:#cfc7b9;
+  --shadow:0 1px 2px rgba(28,26,23,.04),0 4px 12px rgba(28,26,23,.05);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#16150f; --panel:#1e1c16; --fg:#eae5dc; --mut:#9b948a; --faint:#6f6a60;
+  --line:#312e27; --acc:#e08a5f; --ok:#6fbfa4; --side:#1a1813; --hover:#2a271f;
+  --scroll:#5a5346;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.25);
+}}
+*{box-sizing:border-box}
+html{scrollbar-color:var(--scroll) transparent}
+html,body{margin:0;padding:0;height:100%}
+body{background:var(--bg);color:var(--fg);overflow:hidden;
+  font:14px/1.6 "Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif}
+.app{display:grid;grid-template-columns:300px 1fr;height:100vh}
+.side{background:var(--side);border-right:1px solid var(--line);padding:16px 14px;
+  overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:14px}
+h1{font-size:15px;margin:0 0 2px}
+h1 small{display:block;font-size:11px;color:var(--faint);font-weight:400;margin-top:3px}
+label{display:block;font-size:12px;color:var(--mut);margin-bottom:4px}
+input[type=text],input[type=number],select{width:100%;padding:6px 8px;border-radius:8px;
+  border:1px solid var(--line);background:var(--panel);color:var(--fg);font:inherit;font-size:13px}
+button{padding:8px 12px;border-radius:9px;border:1px solid var(--line);background:var(--panel);
+  color:var(--fg);font:inherit;font-size:13px;cursor:pointer;transition:background .12s}
+button:hover:not(:disabled){background:var(--hover)}
+button:disabled{opacity:.45;cursor:default}
+button.go{background:var(--fg);color:var(--bg);border-color:var(--fg);font-weight:600;width:100%}
+.drop{border:2px dashed var(--line);border-radius:11px;padding:18px 10px;text-align:center;
+  color:var(--faint);font-size:12px;cursor:pointer}
+.drop.on{border-color:var(--acc);color:var(--acc)}
+.drop b{display:block;color:var(--fg);font-size:13px;margin-bottom:3px}
+.row{display:flex;gap:8px}.row>*{flex:1}
+.hint{font-size:11px;color:var(--faint);line-height:1.5}
+.stat{font:11px ui-monospace,Consolas,monospace;color:var(--mut);white-space:pre-wrap}
+.stage{position:relative;overflow:hidden;background:
+  repeating-conic-gradient(var(--hover) 0 25%,transparent 0 50%) 50%/18px 18px,var(--bg)}
+canvas{position:absolute;top:0;left:0;transform-origin:0 0;image-rendering:auto}
+.bar{position:absolute;left:0;right:0;top:0;padding:8px 12px;display:flex;align-items:center;
+  gap:10px;background:linear-gradient(var(--bg),transparent);pointer-events:none;z-index:3}
+.bar>*{pointer-events:auto}
+.bar .sp{flex:1}
+.pill{font:11px ui-monospace,Consolas,monospace;background:var(--panel);border:1px solid var(--line);
+  border-radius:20px;padding:4px 10px;box-shadow:var(--shadow)}
+.busy{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;
+  justify-content:center;gap:12px;background:rgba(0,0,0,.5);backdrop-filter:blur(2px);z-index:5}
+.busy.on{display:flex}
+.busy b{color:#fff;font-size:15px}
+.busy .sub{color:#cfc8bd;font:12px ui-monospace,Consolas,monospace}
+.spin{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.22);
+  border-top-color:#fff;animation:sp .8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.list{border-top:1px solid var(--line);padding-top:10px;max-height:34vh;overflow-y:auto;
+  overscroll-behavior:contain;font:11px ui-monospace,Consolas,monospace}
+.list div{padding:3px 6px;border-radius:6px;cursor:pointer;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.list div:hover,.list div.on{background:var(--hover)}
+.err{color:var(--acc);font-size:12px;white-space:pre-wrap}
+</style>
+
+<div class="app">
+  <div class="side">
+    <h1>工程圖標註定位<small>SAM3 找出標註位置，畫成紅框</small></h1>
+
+    <div class="drop" id="drop"><b>把圖拖進來</b>或點這裡選檔</div>
+    <input type="file" id="file" accept="image/*" style="display:none">
+
+    <div>
+      <label>提示詞</label>
+      <input type="text" id="prompt" value="number:80, text:40, symbol:30">
+      <div class="hint" style="margin-top:4px">逗號分隔多類別，<b>:N 是該類別最多抓幾個</b>。
+        不寫 :N 只會回 1 個。<code>number</code> 只認純數字，帶符號或中文的要靠 <code>text</code>，
+        表面粗糙度那種三角形要靠 <code>symbol</code>。</div>
+    </div>
+
+    <div class="row">
+      <div><label>閾值</label><input type="number" id="thr" value="0.10" step="0.01" min="0.01" max="0.9"></div>
+      <div><label>合併強度</label><input type="number" id="mthr" value="0.30" step="0.05" min="0" max="0.95"></div>
+    </div>
+    <div>
+      <label>跨行判定（倍）</label>
+      <input type="number" id="gapk" value="1.5" step="0.1" min="0" max="5">
+      <div class="hint" style="margin-top:4px">SAM3 有時會回一個歪掉的長框，同時蓋住上下兩個不同的標註
+        （例如 80 跟 25），不拿掉就會被當成一個。這個值是「內部框相隔超過幾倍字高
+        就算跨行」；同一行的字間距小（1.1 倍）、跨行的大（2.7 倍）。0 ＝不檢查。</div>
+    </div>
+    <div class="hint">閾值低＝抓得多。合併強度低＝更容易把重疊的框併成一個（0 ＝不合併）。</div>
+
+    <button class="go" id="run" disabled>開始定位</button>
+    <div class="row">
+      <button id="dl" disabled>⬇ 下載紅框圖</button>
+      <button id="dlcsv" disabled>⬇ 框座標 CSV</button>
+    </div>
+    <div class="stat" id="stat"></div>
+    <div class="err" id="err"></div>
+
+    <div class="list" id="list" style="display:none"></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <canvas id="cv"></canvas>
+    <div class="bar">
+      <span class="pill" id="zoom">—</span>
+      <button id="fit">符合視窗</button>
+      <button id="one">100%</button>
+      <span class="sp"></span>
+      <span class="pill" id="cnt">尚未執行</span>
+    </div>
+    <div class="busy" id="busy">
+      <div class="spin"></div><b id="bmsg">處理中…</b><span class="sub" id="bsub"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const S = {img:null, name:"", boxes:[], raw:[], sc:1, ox:0, oy:0, hot:-1, job:null, t0:0};
+
+/* ---------- 載圖 ---------- */
+function loadFile(f){
+  if (!f || !/^image\//.test(f.type)) return;
+  const fr = new FileReader();
+  fr.onload = () => {
+    const im = new Image();
+    im.onload = () => {
+      S.img = im; S.name = f.name; S.boxes = []; S.raw = [];
+      $("#run").disabled = false;
+      $("#list").style.display = "none"; $("#cnt").textContent = "尚未執行";
+      $("#dl").disabled = $("#dlcsv").disabled = true;
+      $("#err").textContent = ""; $("#stat").textContent =
+        `${f.name}\n${im.naturalWidth}×${im.naturalHeight}`;
+      fit(); draw();
+    };
+    im.src = fr.result;
+  };
+  fr.readAsDataURL(f);
+}
+$("#drop").onclick = () => $("#file").click();
+$("#file").onchange = e => loadFile(e.target.files[0]);
+["dragenter","dragover"].forEach(t => $("#drop").addEventListener(t, e => {
+  e.preventDefault(); $("#drop").classList.add("on"); }));
+["dragleave","drop"].forEach(t => $("#drop").addEventListener(t, e => {
+  e.preventDefault(); $("#drop").classList.remove("on"); }));
+$("#drop").addEventListener("drop", e => loadFile(e.dataTransfer.files[0]));
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => { e.preventDefault();
+  if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+
+/* ---------- 畫布 ----------
+   3309px 的圖必須能縮放平移，不然框只有幾個像素高，根本看不出準不準。 */
+function fit(){
+  if (!S.img) return;
+  const st = $("#stage").getBoundingClientRect();
+  S.sc = Math.min((st.width - 40) / S.img.naturalWidth, (st.height - 80) / S.img.naturalHeight);
+  S.ox = (st.width - S.img.naturalWidth * S.sc) / 2;
+  S.oy = (st.height - S.img.naturalHeight * S.sc) / 2 + 12;
+  draw();
+}
+function draw(){
+  const cv = $("#cv"), im = S.img;
+  if (!im) return;
+  cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+  const g = cv.getContext("2d");
+  g.drawImage(im, 0, 0);
+  /* 線寬要跟著縮放走，不然縮小時框會糊成一團、放大時細到看不見 */
+  const lw = Math.max(1.5, 2.5 / S.sc);
+  g.lineWidth = lw; g.font = `${Math.max(11, 14 / S.sc)}px ui-monospace,monospace`;
+  S.boxes.forEach((b, i) => {
+    const on = i === S.hot;
+    g.strokeStyle = on ? "#2ecc71" : "#e02020";
+    g.lineWidth = on ? lw * 2 : lw;
+    g.strokeRect(b[0], b[1], b[2] - b[0], b[3] - b[1]);
+    if (on){
+      g.fillStyle = "#2ecc71";
+      g.fillText(String(i), b[0], Math.max(12 / S.sc, b[1] - 4 / S.sc));
+    }
+  });
+  cv.style.transform = `translate(${S.ox}px,${S.oy}px) scale(${S.sc})`;
+  $("#zoom").textContent = Math.round(S.sc * 100) + "%";
+}
+$("#fit").onclick = fit;
+$("#one").onclick = () => { if (!S.img) return;
+  const st = $("#stage").getBoundingClientRect();
+  const cx = st.width / 2, cy = st.height / 2;
+  const ix = (cx - S.ox) / S.sc, iy = (cy - S.oy) / S.sc;
+  S.sc = 1; S.ox = cx - ix; S.oy = cy - iy; draw(); };
+$("#stage").addEventListener("wheel", e => {
+  if (!S.img) return;
+  e.preventDefault();
+  const r = $("#stage").getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const ix = (mx - S.ox) / S.sc, iy = (my - S.oy) / S.sc;
+  S.sc = Math.max(0.03, Math.min(8, S.sc * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+  S.ox = mx - ix * S.sc; S.oy = my - iy * S.sc;
+  draw();
+}, {passive:false});
+let drag = null;
+$("#stage").addEventListener("pointerdown", e => {
+  if (!S.img) return;
+  drag = {x:e.clientX, y:e.clientY, ox:S.ox, oy:S.oy};
+  $("#stage").setPointerCapture(e.pointerId);
+});
+$("#stage").addEventListener("pointermove", e => {
+  if (!drag) return;
+  S.ox = drag.ox + (e.clientX - drag.x); S.oy = drag.oy + (e.clientY - drag.y); draw();
+});
+$("#stage").addEventListener("pointerup", () => drag = null);
+window.addEventListener("resize", () => { if (S.img && S.sc < 0.001) fit(); });
+
+/* ---------- 合併：在前端做，改參數不必重跑 GPU ---------- */
+const area = b => (b[2]-b[0])*(b[3]-b[1]);
+function inter(a,b){
+  const x0=Math.max(a[0],b[0]), y0=Math.max(a[1],b[1]);
+  const x1=Math.min(a[2],b[2]), y1=Math.min(a[3],b[3]);
+  return (x1<=x0||y1<=y0) ? 0 : (x1-x0)*(y1-y0);
+}
+function merge(bs, thr){
+  if (thr <= 0) return bs.map(b => b.slice());
+  let cur = bs.map(b => b.slice()), changed = true;
+  while (changed){
+    changed = false;
+    const out = [], used = new Array(cur.length).fill(false);
+    for (let i = 0; i < cur.length; i++){
+      if (used[i]) continue;
+      let a = cur[i].slice();
+      for (let j = i+1; j < cur.length; j++){
+        if (used[j]) continue;
+        const b = cur[j], it = inter(a,b);
+        const contain = it / Math.max(1, Math.min(area(a), area(b)));
+        const iou = it / Math.max(1, area(a)+area(b)-it);
+        if (contain >= thr || iou >= thr){
+          a = [Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.max(a[2],b[2]),Math.max(a[3],b[3])];
+          used[j] = true; changed = true;
+        }
+      }
+      used[i] = true; out.push(a);
+    }
+    cur = out;
+  }
+  cur.sort((p,q) => p[1]-q[1] || p[0]-q[0]);
+  return cur;
+}
+/* SAM3 偶爾會回一個歪掉的框，同時壓在兩個不同標註上。它本身就是一個輸出框，
+   之後裁切判讀時會讀成「80 25」。分辨的依據是內部框的間距：
+   同一行的字間距小（實測 1.1 倍字高），跨行的大（2.7 倍）。 */
+function gapOf(a,b){
+  const dx=Math.max(0,Math.max(a[0],b[0])-Math.min(a[2],b[2]));
+  const dy=Math.max(0,Math.max(a[1],b[1])-Math.min(a[3],b[3]));
+  return Math.max(dx,dy);
+}
+function dropSmear(bs, gapK){
+  if (gapK <= 0 || bs.length < 3) return bs;
+  const hsv = bs.map(b=>b[3]-b[1]).sort((a,b)=>a-b);
+  const med = hsv[hsv.length>>1] || 1;
+  return bs.filter(a => {
+    const hit = bs.filter(b => b!==a && inter(a,b)/Math.max(1,Math.min(area(a),area(b))) >= 0.4);
+    for (let p=0;p<hit.length;p++) for (let q=p+1;q<hit.length;q++)
+      if (inter(hit[p],hit[q])===0 && gapOf(hit[p],hit[q]) > gapK*med) return false;
+    return true;
+  });
+}
+function applyMerge(){
+  if (!S.raw.length) return;
+  const kept = dropSmear(S.raw, +$("#gapk").value || 0);
+  S.boxes = merge(kept, +$("#mthr").value || 0);
+  const d = S.raw.length - kept.length;
+  $("#cnt").textContent = `${S.raw.length} 原始框`
+    + (d ? ` → 剔除歪框 ${d}` : "") + ` → ${S.boxes.length} 個`;
+  $("#dl").disabled = $("#dlcsv").disabled = !S.boxes.length;
+  renderList(); draw();
+}
+$("#mthr").onchange = applyMerge;
+$("#gapk").onchange = applyMerge;
+
+/* --- 下載 --- */
+function save(blob, name){
+  const u = URL.createObjectURL(blob), a = document.createElement("a");
+  a.href = u; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(u), 4000);
+}
+$("#dl").onclick = () => {
+  if (!S.img) return;
+  /* 另外畫一張全解析度的：畫面上那張的線寬是跟著縮放走的，直接存會很怪 */
+  const c = document.createElement("canvas");
+  c.width = S.img.naturalWidth; c.height = S.img.naturalHeight;
+  const g = c.getContext("2d");
+  g.drawImage(S.img, 0, 0);
+  const lw = Math.max(2, Math.round(Math.max(c.width, c.height) / 1100));
+  g.lineWidth = lw; g.strokeStyle = "#e02020";
+  g.font = `${lw*7}px ui-monospace,monospace`; g.fillStyle = "#e02020";
+  S.boxes.forEach((b,i) => {
+    g.strokeRect(b[0], b[1], b[2]-b[0], b[3]-b[1]);
+    g.fillText(String(i), b[0], Math.max(lw*7, b[1]-lw*2));
+  });
+  c.toBlob(b => save(b, (S.name.replace(/\.[^.]+$/,"") || "drawing") + "-紅框.png"), "image/png");
+};
+$("#dlcsv").onclick = () => {
+  const rows = [["i","x0","y0","x1","y1","w","h","cx","cy"]].concat(
+    S.boxes.map((b,i) => [i,b[0],b[1],b[2],b[3],b[2]-b[0],b[3]-b[1],
+                          Math.round((b[0]+b[2])/2),Math.round((b[1]+b[3])/2)]));
+  const csv = "﻿" + rows.map(r => r.join(",")).join(String.fromCharCode(13,10));
+  save(new Blob([csv], {type:"text/csv"}),
+       (S.name.replace(/\.[^.]+$/,"") || "drawing") + "-框.csv");
+};
+
+function renderList(){
+  const el = $("#list");
+  el.style.display = S.boxes.length ? "block" : "none";
+  el.innerHTML = S.boxes.map((b,i) =>
+    `<div data-i="${i}">${String(i).padStart(2," ")}  ${b[2]-b[0]}×${b[3]-b[1]}  @${b[0]},${b[1]}</div>`).join("");
+  [...el.children].forEach(d => {
+    d.onmouseenter = () => { S.hot = +d.dataset.i; draw(); };
+    d.onmouseleave = () => { S.hot = -1; draw(); };
+    d.onclick = () => {                       // 點一下把那個框帶到畫面中央
+      const b = S.boxes[+d.dataset.i], st = $("#stage").getBoundingClientRect();
+      S.sc = Math.min(6, Math.max(1, 240 / Math.max(1, b[2]-b[0])));
+      S.ox = st.width/2 - ((b[0]+b[2])/2) * S.sc;
+      S.oy = st.height/2 - ((b[1]+b[3])/2) * S.sc;
+      draw();
+    };
+  });
+}
+
+/* ---------- 執行 ---------- */
+function busy(on, msg, sub){
+  $("#busy").className = on ? "busy on" : "busy";
+  if (msg) $("#bmsg").textContent = msg;
+  $("#bsub").textContent = sub || "";
+}
+$("#run").onclick = async () => {
+  if (!S.img) return;
+  $("#err").textContent = "";
+  const c = document.createElement("canvas");
+  c.width = S.img.naturalWidth; c.height = S.img.naturalHeight;
+  c.getContext("2d").drawImage(S.img, 0, 0);
+  const b64 = c.toDataURL("image/png");
+  $("#run").disabled = true;
+  busy(true, "送出中…", "");
+  S.t0 = Date.now();
+  let r;
+  try{
+    r = await (await fetch("/api/run", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({image:b64, name:S.name, prompt:$("#prompt").value,
+                            thr:+$("#thr").value, read:false})})).json();
+  }catch(e){ busy(false); $("#run").disabled = false; $("#err").textContent = "送不出去：" + e.message; return; }
+  if (r.error){ busy(false); $("#run").disabled = false; $("#err").textContent = r.error; return; }
+  S.job = r.id;
+  poll();
+};
+async function poll(){
+  const tick = setInterval(() => busy(true, null,
+    ((Date.now()-S.t0)/1000).toFixed(1) + " s"), 100);
+  busy(true, "SAM3 定位中…");
+  try{
+    for(;;){
+      await new Promise(x => setTimeout(x, 800));
+      const j = await (await fetch("/api/job/" + S.job)).json();
+      if (j.error) throw new Error(j.error);
+      if (j.state === "error"){ throw new Error(j.error || "執行失敗"); }
+      if (j.state === "done" || (j.boxes && j.boxes.length)){
+        S.raw = j.boxes || [];
+        $("#stat").textContent =
+          `${S.name}\n${j.w}×${j.h}\nSAM3 ${j.detect_s}s · 原始 ${j.raw} 框`;
+        applyMerge();
+        break;
+      }
+    }
+  }catch(e){ $("#err").textContent = String(e.message || e); }
+  clearInterval(tick); busy(false); $("#run").disabled = false;
+}
+</script>

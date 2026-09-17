@@ -25,3 +25,4 @@ queue/
 settings.json
 drafts.json
 thumbs/
+.venv/

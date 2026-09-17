@@ -162,7 +162,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("image")
     ap.add_argument("--out", default="")
-    ap.add_argument("--prompt", default="number:80, text:40")
+    ap.add_argument("--prompt", default="number:80, text:40, symbol:30")
     ap.add_argument("--thr", type=float, default=0.10)
     ap.add_argument("--scale", type=int, default=4, help="裁切後放大倍率，小字要夠大才讀得準")
     ap.add_argument("--pad", type=int, default=6)
