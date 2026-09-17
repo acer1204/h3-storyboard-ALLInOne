@@ -44,30 +44,97 @@ def _get(path, timeout=300):
     return json.loads(urllib.request.urlopen(COMFY + path, timeout=timeout).read().decode())
 
 
-def detect(name, prompt, thr, tag):
-    """SAM3 文字定位。individual_masks 一定要開，否則只拿得到一張聯集遮罩。"""
-    wf = {
+BOX_NODE = "BoundingBoxesToJSON"      # 自備節點，把偵測器的框直接送回來
+
+
+def _wait(pid, poll=0.25, timeout=600):
+    """輪詢到跑完，回傳該筆的 history。
+
+    間隔是 0.25 秒不是 2 秒：去掉 refine 與遮罩之後整個偵測只副三秒，
+    再用兩秒的輪詢就是把一半的時間花在等自己。"""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        time.sleep(poll)
+        h = _get("/history/" + pid)
+        st = h.get(pid, {}).get("status", {})
+        if st.get("completed"):
+            return h[pid]
+        if st.get("status_str") == "error":
+            raise RuntimeError("SAM3 執行失敗：" + json.dumps(st, ensure_ascii=False)[:300])
+    raise RuntimeError("SAM3 逾時")
+
+
+def has_box_node():
+    """ComfyUI 裝了取框節點沒有。沒裝也能跑，只是要繞遮罩那條慢路。"""
+    try:
+        return bool(_get("/object_info/" + BOX_NODE, timeout=10))
+    except Exception:
+        return False
+
+
+def _graph(name, prompt, thr, individual):
+    """共用的前半段。refine_iterations 固定 0：它會把每個偵測再送進
+    SAM decoder 跑一次 1008x1008，150 個偵測就是 150 次，而我們只要矩形。
+    實測：開與不開合併後的框完全一樣（63/63），但差 22 秒。"""
+    return {
         "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": SAM3_CKPT}},
         "2": {"class_type": "LoadImage", "inputs": {"image": name}},
         "3": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["1", 1], "text": prompt}},
         "4": {"class_type": "SAM3_Detect",
               "inputs": {"model": ["1", 0], "image": ["2", 0], "conditioning": ["3", 0],
-                         "threshold": thr, "refine_iterations": 1, "individual_masks": True}},
-        "5": {"class_type": "MaskToImage", "inputs": {"mask": ["4", 0]}},
-        "6": {"class_type": "SaveImage", "inputs": {"images": ["5", 0], "filename_prefix": tag}},
+                         "threshold": thr, "refine_iterations": 0,
+                         "individual_masks": individual}},
     }
+
+
+def detect_boxes(name, prompt, thr, tag, shape):
+    """回傳 (框, 秒數, 走哪條路)。
+
+    SAM3_Detect 本來就吐 bboxes，而且已經換算回原圖座標。舊做法把它
+    丟掉，改用 individual_masks 要一批全解析度遮罩——143 個偵測就是
+    [143, 2339, 3309] 的浮點張量（4.4GB）、再轉 RGB、再編 143 張 PNG、
+    再讀回來用 nonzero 反推出矩形。實測那段占 54 秒，偵測本身只副三秒。"""
+    t0 = time.time()
+    if has_box_node():
+        wf = _graph(name, prompt, thr, False)      # 聯集遮罩最便宜，反正不用
+        wf["5"] = {"class_type": BOX_NODE, "inputs": {"bboxes": ["4", 1]}}
+        rec = _wait(_post("/prompt", {"prompt": wf})["prompt_id"])
+        txt = ((rec.get("outputs") or {}).get("5") or {}).get("text") or []
+        if not txt:
+            raise RuntimeError("取框節點沒有回傳內容")
+        data = json.loads(txt[0])
+        flat = []
+        for e in (data if isinstance(data, list) else [data]):
+            flat.extend(e if isinstance(e, list) else [e])
+        out = []
+        for d in flat:
+            x, y = float(d["x"]), float(d["y"])
+            out.append((int(round(x)), int(round(y)),
+                        int(round(x + float(d["width"]))), int(round(y + float(d["height"])))))
+        return out, time.time() - t0, "boxes"
+
+    files, _ = detect(name, prompt, thr, tag)
+    if not files:
+        return [], time.time() - t0, "masks"
+    boxes = masks_to_boxes(files, shape)
+    for f in files:
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    return boxes, time.time() - t0, "masks"
+
+
+def detect(name, prompt, thr, tag):
+    """遮罩路線。沒裝取框節點時的退路，也是要看遮罩本身時用的。
+    individual_masks 一定要開，否則只拿得到一張聯集遮罩。"""
+    wf = _graph(name, prompt, thr, True)
+    wf["5"] = {"class_type": "MaskToImage", "inputs": {"mask": ["4", 0]}}
+    wf["6"] = {"class_type": "SaveImage", "inputs": {"images": ["5", 0], "filename_prefix": tag}}
     for f in glob.glob(os.path.join(COMFY_OUT, tag + "_*.png")):
         os.remove(f)
     t0 = time.time()
-    pid = _post("/prompt", {"prompt": wf})["prompt_id"]
-    while time.time() - t0 < 600:
-        time.sleep(2)
-        h = _get("/history/" + pid)
-        st = h.get(pid, {}).get("status", {})
-        if st.get("completed"):
-            break
-        if st.get("status_str") == "error":
-            raise RuntimeError("SAM3 執行失敗：" + json.dumps(st, ensure_ascii=False)[:300])
+    _wait(_post("/prompt", {"prompt": wf})["prompt_id"])
     return sorted(glob.glob(os.path.join(COMFY_OUT, tag + "_*.png"))), time.time() - t0
 
 
@@ -184,14 +251,14 @@ def main():
     cv2.imwrite(staged, img)
 
     out.write("圖 %dx%d  提示詞 %r  閾值 %.2f%s" % (w, h, a.prompt, a.thr, chr(10)))
-    files, dt = detect(stem + ".png", a.prompt, a.thr, stem)
-    if not files:
-        out.write("SAM3 沒有回任何遮罩。降低 --thr 或改提示詞再試。%s" % chr(10))
+    raw_boxes, dt, mode = detect_boxes(stem + ".png", a.prompt, a.thr, stem, (h, w))
+    if not raw_boxes:
+        out.write("SAM3 沒有找到任何東西。降低 --thr 或改提示詞再試。%s" % chr(10))
         return 1
-    raw_boxes = masks_to_boxes(files, (h, w))
     boxes = clean(raw_boxes, (h, w))
-    out.write("SAM3 %.1fs：%d 張遮罩 -> %d 個原始框 -> 合併後 %d 個%s"
-              % (dt, len(files), len(raw_boxes), len(boxes), chr(10)))
+    out.write("SAM3 %.1fs（%s）：%d 個原始框 -> 合併後 %d 個%s"
+              % (dt, "直接取框" if mode == "boxes" else "遮罩反推，建議裝取框節點",
+                 len(raw_boxes), len(boxes), chr(10)))
 
     vis = img.copy()
     for i, (x0, y0, x1, y1) in enumerate(boxes):
@@ -232,8 +299,6 @@ def main():
 
     try:
         os.remove(staged)
-        for f in files:
-            os.remove(f)
     except OSError:
         pass
     out.flush()

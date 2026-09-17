@@ -359,14 +359,14 @@ async function poll(){
   busy(true, "SAM3 定位中…");
   try{
     for(;;){
-      await new Promise(x => setTimeout(x, 800));
+      await new Promise(x => setTimeout(x, 250));   /* 偵測變成幾秒之後，800ms 輪詢本身就是可觀的延遲 */
       const j = await (await fetch("/api/job/" + S.job)).json();
       if (j.error) throw new Error(j.error);
       if (j.state === "error"){ throw new Error(j.error || "執行失敗"); }
       if (j.state === "done" || (j.boxes && j.boxes.length)){
         S.raw = j.boxes || [];
         $("#stat").textContent =
-          `${S.name}\n${j.w}×${j.h}\nSAM3 ${j.detect_s}s · 原始 ${j.raw} 框`;
+          `${S.name}\n${j.w}×${j.h}\nSAM3 ${j.detect_s}s · 原始 ${j.raw} 框` + (j.mode === "masks" ? "\n慢路：ComfyUI 未裝取框節點" : "");
         applyMerge();
         break;
       }

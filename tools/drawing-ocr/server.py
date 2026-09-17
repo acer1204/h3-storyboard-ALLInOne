@@ -24,7 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cv2
 import numpy as np
-from read_drawing import (COMFY_IN, clean, detect, masks_to_boxes, read_crop)
+from read_drawing import COMFY_IN, clean, detect_boxes, has_box_node, read_crop
 
 PORT = int(os.environ.get("DWG_PORT", "9995"))
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -62,11 +62,10 @@ def run_job(jid, path, prompt, thr, scale, pad, read):
         staged = os.path.join(COMFY_IN, stem + ".png")
         cv2.imwrite(staged, img)
         t0 = time.time()
-        files, dt = detect(stem + ".png", prompt, thr, stem)
-        if not files:
+        raw, dt, mode = detect_boxes(stem + ".png", prompt, thr, stem, (h, w))
+        if not raw:
             return jset(jid, state="error",
-                        error="SAM3 沒有回任何遮罩。把閾值調低，或改提示詞再試。")
-        raw = masks_to_boxes(files, (h, w))
+                        error="SAM3 沒有找到任何東西。把閾值調低，或改提示詞再試。")
         # 只做尺寸過濾（丟掉圖框級的大框與雜訊），合併交給前端。
         # 這樣調「合併強度」不必重跡一次 GPU。
         sized = [list(b) for b in raw
@@ -75,13 +74,12 @@ def run_job(jid, path, prompt, thr, scale, pad, read):
         boxes = clean(raw, (h, w))          # 判讀那段還是用伺服器合併過的
         jset(jid, state="read" if read else "done",
              boxes=sized, merged=[list(b) for b in boxes], total=len(boxes),
-             detect_s=round(dt, 1), raw=len(sized),
-             note=("%d 個原始框" % len(sized)))
+             detect_s=round(dt, 1), raw=len(sized), mode=mode,
+             note=("%d 個原始框，%.1fs" % (len(sized), dt)
+                   + ("" if mode == "boxes" else "（慢路：ComfyUI 沒裝取框節點）")))
 
         try:
             os.remove(staged)
-            for f in files:
-                os.remove(f)
         except OSError:
             pass
 
