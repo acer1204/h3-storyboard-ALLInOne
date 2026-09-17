@@ -44,7 +44,7 @@ def _get(path, timeout=300):
     return json.loads(urllib.request.urlopen(COMFY + path, timeout=timeout).read().decode())
 
 
-BOX_NODE = "BoundingBoxesToJSON"      # 自備節點，把偵測器的框直接送回來
+BOX_NODE = "PreviewAny"   # 核心節點，吃任意型別，序列化成 JSON 走 /history 回來
 
 
 def _wait(pid, poll=0.25, timeout=600):
@@ -65,7 +65,8 @@ def _wait(pid, poll=0.25, timeout=600):
 
 
 def has_box_node():
-    """ComfyUI 裝了取框節點沒有。沒裝也能跑，只是要繞遮罩那條慢路。"""
+    """這台 ComfyUI 有沒有 PreviewAny。它是核心節點，正常一定在；
+    探不到就退回遮罩那條慢路，不要讓舊版本直接壞掉。"""
     try:
         return bool(_get("/object_info/" + BOX_NODE, timeout=10))
     except Exception:
@@ -97,11 +98,11 @@ def detect_boxes(name, prompt, thr, tag, shape):
     t0 = time.time()
     if has_box_node():
         wf = _graph(name, prompt, thr, False)      # 聯集遮罩最便宜，反正不用
-        wf["5"] = {"class_type": BOX_NODE, "inputs": {"bboxes": ["4", 1]}}
+        wf["5"] = {"class_type": BOX_NODE, "inputs": {"source": ["4", 1]}}   # 1 = bboxes
         rec = _wait(_post("/prompt", {"prompt": wf})["prompt_id"])
         txt = ((rec.get("outputs") or {}).get("5") or {}).get("text") or []
         if not txt:
-            raise RuntimeError("取框節點沒有回傳內容")
+            raise RuntimeError("PreviewAny 沒有回傳內容")
         data = json.loads(txt[0])
         flat = []
         for e in (data if isinstance(data, list) else [data]):

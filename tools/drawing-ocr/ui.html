@@ -120,7 +120,7 @@ canvas{position:absolute;top:0;left:0;transform-origin:0 0;image-rendering:auto}
 
 <script>
 const $ = s => document.querySelector(s);
-const S = {img:null, name:"", boxes:[], raw:[], sc:1, ox:0, oy:0, hot:-1, job:null, t0:0};
+const S = {img:null, data:"", name:"", boxes:[], raw:[], sc:1, ox:0, oy:0, hot:-1, job:null, t0:0};
 
 /* ---------- 載圖 ---------- */
 function loadFile(f){
@@ -129,7 +129,7 @@ function loadFile(f){
   fr.onload = () => {
     const im = new Image();
     im.onload = () => {
-      S.img = im; S.name = f.name; S.boxes = []; S.raw = [];
+      S.img = im; S.data = fr.result; S.name = f.name; S.boxes = []; S.raw = [];
       $("#run").disabled = false;
       $("#list").style.display = "none"; $("#cnt").textContent = "尚未執行";
       $("#dl").disabled = $("#dlcsv").disabled = true;
@@ -336,10 +336,10 @@ function busy(on, msg, sub){
 $("#run").onclick = async () => {
   if (!S.img) return;
   $("#err").textContent = "";
-  const c = document.createElement("canvas");
-  c.width = S.img.naturalWidth; c.height = S.img.naturalHeight;
-  c.getContext("2d").drawImage(S.img, 0, 0);
-  const b64 = c.toDataURL("image/png");
+  /* 送原檔的位元組。畫進 canvas 再 toDataURL 等於把一張七百多萬像素的圖
+     在主執行緒上重新編一次 PNG，在這台量到 0.3 秒以上。伺服器那邊是
+     cv2.imdecode，JPEG 跟 PNG 都讀得開，沒理由轉成 PNG 才上傳。 */
+  const b64 = S.data;
   $("#run").disabled = true;
   busy(true, "送出中…", "");
   S.t0 = Date.now();
