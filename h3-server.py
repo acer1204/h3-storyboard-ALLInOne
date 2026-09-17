@@ -1532,18 +1532,54 @@ def cut_ensure(wait=40):
     raise SubmitError("去背服務啟動逾時", 504)
 
 
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", ""}
+
+
+def is_local_url(u):
+    """網址指向本機嗎？去背服務是 h3-server 自己 subprocess 起的，
+    所以只有「對方也在本機」時才真的會搶同一張卡。"""
+    try:
+        h = (urlparse(u or "").hostname or "").lower()
+    except Exception:
+        return True                        # 解不開就當成本機，寧可保守
+    return h in LOCAL_HOSTS
+
+
+def cut_rivals_local():
+    """回傳 (comfy 在本機, llama 在本機)。"""
+    return (is_local_url(CONFIG.get("comfy_url")), is_local_url(CONFIG.get("llama_url")))
+
+
 def cut_gpu_block():
-    """GPU 忙就擋下來（除非使用者在設定裡開放同時使用）。
-    不排隊——編輯圖片時沒人想等算圖跑完。回傳擋下的理由，空字串＝放行。"""
+    """GPU 忙就擋下來。不排隊——編輯圖片時沒人想等算圖跑完。
+    回傳擋下的理由，空字串＝放行。
+
+    設定有三種：auto（預設）、"0" 一律擋、"1" 一律放行。
+    auto 看對方在不在本機：ComfyUI / LLM 指向別台機器時根本不搶 GPU，
+    擋下來只是無端不能用。"""
+    comfy_here, llama_here = cut_rivals_local()
     try:
         vals = (load_settings() or {}).get("values") or {}
         g = vals.get("h3.settings.v1")
         if isinstance(g, str):
             g = json.loads(g)
-        if str((g or {}).get("samBusy") or "") == "1":
-            return ""                      # 使用者允許同時使用
+        # cutBusy 是現在的名字，samBusy 是改名前的——舊設定要繼續認，
+        # 不然使用者不會知道自己開過的選項默默失效了。
+        mode = str((g or {}).get("cutBusy") or (g or {}).get("samBusy") or "auto")
     except Exception:
-        pass
+        mode = "auto"
+    if mode == "1":
+        return ""                          # 使用者強制允許同時使用
+    if mode == "auto":
+        # 兩個都在別台機器：没有任何予盾，直接放行
+        if not comfy_here and not llama_here:
+            return ""
+        if LLAMA_INFLIGHT[0] > 0 and llama_here:
+            return "LLM 正在生成劇情，GPU 忙碌中"
+        if comfy_here and comfy_busy():
+            return "ComfyUI 正在算圖，GPU 忙碌中"
+        return ""
+    # mode == "0"：不管在哪一台，對方忙就擋
     if LLAMA_INFLIGHT[0] > 0:
         return "LLM 正在生成劇情，GPU 忙碌中"
     if comfy_busy():
@@ -2854,8 +2890,11 @@ class H(SimpleHTTPRequestHandler):
 
         if p == "/api/cutout/status":
             h = cut_ping()
+            comfy_here, llama_here = cut_rivals_local()
             return self.send_json({"installed": cut_installed(), "running": bool(h),
                                    "loaded": bool(h and h.get("loaded")),
+                                   "bref_loaded": (h or {}).get("bref_loaded"),
+                                   "comfy_local": comfy_here, "llama_local": llama_here,
                                    "blocked": cut_gpu_block(), "dir": CUT_DIR})
 
         if p == "/api/matte/warm":

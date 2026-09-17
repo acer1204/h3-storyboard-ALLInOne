@@ -337,7 +337,8 @@ class H(BaseHTTPRequestHandler):
             bref_warm(nm)
             return self._json({"warming": nm, "loaded": (_bref[1] if _bref else None)})
         if self.path == "/matte/models":
-            return self._json({"models": bref_list(), "default": BREF_DEFAULT})
+            return self._json({"models": bref_list(), "default": BREF_DEFAULT,
+                               "loaded": (_bref[1] if _bref else None)})
         if self.path == "/unload":
             return self._json({"unloaded": unload()})
         return self._json({"error": "unknown endpoint"}, 404)

@@ -844,13 +844,16 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
         <option value="ok">完全通過（無警告）</option>
         <option value="noerr" selected>無錯誤即可</option></select></div>
       <div><label>🖼 去背與 GPU 共用</label><select id="cutBusy">
-        <option value="0" selected>LLM／ComfyUI 忙碌時停用</option>
-        <option value="1">允許同時使用（VRAM 夠大再開）</option></select></div>
+        <option value="auto" selected>自動（建議）</option>
+        <option value="0">一律在對方忙碌時停用</option>
+        <option value="1">一律允許同時使用</option></select></div>
       <div><label>✂ 去背預設模型</label><select id="matteModel" class="no-i18n"></select></div>
     </div>
-    <p class="hint">去背跟算圖搶同一張卡。預設在生成劇情或算影片時停用——不排隊，直接擋下並告知，
-      因為編輯圖片時沒人想等算圖跑完。VRAM 充裕的機器可以改成允許同時使用。
-      服務按需啟動，閒置 3 分鐘卸掉模型、15 分鐘整支結束，不用時不佔 VRAM。
+    <p class="hint">去背服務跟 <b>h3-server 跑在同一台機器</b>，所以只有 ComfyUI／LLM
+      也在本機時才真的搶同一張卡。<b>自動</b>就是看這個：對方在別台機器就直接放行，
+      在本機才會在它忙碌時擋下（不排隊，直接告知——編輯圖片時沒人想等算圖跑完）。
+      VRAM 充裕可以改成一律允許。<b>用 LLM 或 ComfyUI 不會把去背模型踢出 VRAM</b>，
+      卸載只看閒置：3 分鐘卸模型、90 分鐘整支結束（程序活著不佔 VRAM，只是省掉重跑 import）。
       <span id="cutStat" class="no-i18n"></span></p>
     <p class="hint" style="margin-top:10px">生成結果不符合重試目標時自動重新生成，直到符合或用完次數，
       並保留其中最好的一次。設 0 關閉。</p>
@@ -1705,6 +1708,29 @@ function setView(v){
   if (v === "media") loadMedia();
   if (v === "mvhist" && typeof loadMvHist === "function") loadMvHist();
   if (v === "queue" && typeof loadQueue === "function") loadQueue();
+  if (v === "set" && typeof cutStatLoad === "function") cutStatLoad();
+}
+
+/* 設定頁的一行小字：把「現在到底會不會被擋」講清楚。
+   同一台機器跟分開部署的答案完全不同，不讓使用者自己猜。 */
+async function cutStatLoad(){
+  const el = $("#cutStat"); if (!el) return;
+  try{
+    const r = await (await fetch("/api/cutout/status")).json();
+    const bits = [];
+    /* 舊版伺服器沒有這兩個欄位。缺時不能隨便討——敲成「別台機器」
+       會讓人以為沒有予盾，恰好是最寬鬆也最誤導的那個方向。 */
+    if (r.comfy_local !== undefined && r.llama_local !== undefined){
+      const where = t => t ? "本機" : "別台機器";
+      bits.push(`ComfyUI 在${where(r.comfy_local)}`, `LLM 在${where(r.llama_local)}`);
+      if (!r.comfy_local && !r.llama_local) bits.push("沒有 GPU 矛盾，自動模式下不會擋");
+      else bits.push(r.blocked ? ("目前會擋：" + r.blocked) : "目前放行");
+    } else {
+      bits.push(r.blocked ? ("目前會擋：" + r.blocked) : "目前放行");
+    }
+    if (r.bref_loaded) bits.push("模型已在 VRAM：" + String(r.bref_loaded).replace(/\.safetensors$/, ""));
+    el.textContent = "（" + bits.join("；") + "）";
+  }catch(e){ el.textContent = ""; }
 }
 /* ---- collapsible sidebar ---- */
 const SIDEKEY = "h3.side.collapsed.v1";
@@ -2184,7 +2210,17 @@ async function cutOpen(i){
     /* 畫面要等版面定案才量得到尺寸，所以走 rAF；但去背本身不需要版面，
        不能一起放進去——分頁切到背景時 rAF 不會觸發，整個就像卡死。 */
     cutDraw(); cutStatus();        // 先把原圖畫上去，畫布不要空白等結果
-    cutRun();
+    if (!CUT.hasCut){ cutRun(); return; }
+    /* 這格已經去過背就把現成的拿出來，不要一開就重跡。
+       重跡會洗掉使用者調好的結果，而且白燒一次 GPU。 */
+    const prev = new Image();
+    prev.onload = () => {
+      CUT.cut = prev;
+      CUT.info = " · 這格已去過背，顯示現有結果（按「重算」重做）";
+      cutDraw(); cutStatus();
+    };
+    prev.onerror = () => cutStatus();
+    prev.src = s.url;                         // 格子目前那張，就是上次的成品
   };
   im.onerror = () => alert("這張圖讀不開");
   im.src = CUT.url;
@@ -2269,7 +2305,8 @@ async function cutRun(){
   const want = $("#cutModel") ? $("#cutModel").value : "";
   const warm = CUT.loaded && want && CUT.loaded === want;
   const msg = $("#cutBusyMsg");
-  if (msg) msg.textContent = warm ? "去背中…" : "首次載入模型，稍候…";
+  /* 不要寫「首次」：模型閒置 3 分鐘就會被卸掉，第二、第三次也可能要重載。 */
+  if (msg) msg.textContent = warm ? "去背中…" : "載入模型中，稍候…";
   cutTick(false);
   cutStatus();
   try{
@@ -2415,6 +2452,7 @@ window.addEventListener("resize", () => {
 });
 $("#cutX") && ($("#cutX").onclick = cutClose);
 $("#cutModel") && ($("#cutModel").onchange = () => cutRun());
+$("#cutBusy") && ($("#cutBusy").addEventListener("change", () => setTimeout(cutStatLoad, 600)));
 $("#matteModel") && ($("#matteModel").onchange = () => { saveSettings(); });
 $("#cutBg") && ($("#cutBg").onchange = e => { CUT.bg = e.target.value; cutDraw(); cutStatus(); });
 $("#cutRun") && ($("#cutRun").onclick = () => cutRun());
