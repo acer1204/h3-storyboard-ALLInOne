@@ -1200,12 +1200,19 @@ async function ensureSkill(id){
 function officialSys(mode){
   const core = SKILLSET.cache["h3-prompt-writing"];
   if (!core) return "You are an expert MiniMax H3 video prompt writer. Output only the final prompt.";
-  const guide = mode === "ref2va" ? (core.references["ref-en.txt"] || "")
-                                  : (core.references["base-en.txt"] || "");
+  const isRef = mode === "ref2va";
+  const guide = isRef ? (core.references["ref-en.txt"] || "")
+                      : (core.references["base-en.txt"] || "");
+  /* 範例欄位要跟著模式走。寫死 base 模式的名字的話，ref2va 會拿到一個
+     指南根本不用的欄位名當示範（ref-en.txt 用的是 detailed_description）。 */
+  const sample = isRef ? "detailed_description" : "integrated_multimodal_description";
   let sys = "You are an expert MiniMax H3 (Hailuo) video prompt writer. Follow the skill below and its reference guide EXACTLY - field names, section order, alignment instruction lines and timing notation. Output ONLY the final prompt, with no explanations before or after.\n"
           + "CRITICAL OUTPUT FORMAT: plain text ONLY - absolutely NO Markdown. No # headings, no ** bold, no bullet lists, no code fences, no title line. Field names must appear as bare lowercase lines exactly like:\n"
-          + "integrated_multimodal_description: ...\n"
-          + "Do NOT invent extra sections (no \"Core Subject\", no summaries) beyond what the guide defines.\n\n"
+          + sample + ": ...\n"
+          /* 舊版寫「no summaries」，但 summary 是 Ref2VA 六個必要段落的第二個
+             （ref-en.txt:18 欄位表、:121 專章、:318 範例）——等於叫模型別寫指南要的東西。
+             改成針對行為本身：不要發明指南沒有的段落，但指南有的一個都不能少。 */
+          + "Do NOT invent sections the guide does not define (no \"Core Subject\", no title line, no closing commentary). Do write every section it DOES define, under its exact field name.\n\n"
           + (core.skill || "") + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
   // 疊加所有啟用的附加 skill（風格/知識皆可、可多個）；不適用目前模式的自動忽略
   for (const st of currentSkillIds()){
