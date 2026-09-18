@@ -117,6 +117,9 @@ input,select,textarea{width:100%;background:var(--bg);color:var(--fg);border:1px
   border-radius:8px;padding:9px 11px;font:inherit;font-size:14px}
 input:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(--acc) 45%,transparent);
   outline-offset:-1px;border-color:transparent}
+/* 上面那條 width:100% 是寫給文字欄的，checkbox 跟著吃到就會擐滿整行，
+   把自己的說明文字擠到下一行。以前是逐個元件去覆蓋，漏一個就歪一個。 */
+input[type=checkbox]{width:15px;height:15px;padding:0;accent-color:var(--acc);flex:none}
 textarea{min-height:340px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.65;resize:vertical}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 button{background:var(--btn);color:var(--btnfg);border:0;border-radius:8px;padding:9px 17px;
@@ -971,9 +974,12 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
           <span style="margin-left:auto"></span>
           <button class="ghost mini" id="pdel">刪除這組</button>
         </div>
-        <label class="row" style="margin-bottom:8px;gap:6px;cursor:pointer">
-          <input type="checkbox" id="poverlay">
-          <span>疊加在官方組之上（保留官方 skill＋格式指南，這組文字只作為額外規則附加）</span>
+        <label class="row" style="margin-bottom:8px;gap:8px;cursor:pointer;align-items:flex-start;
+               text-transform:none;letter-spacing:0;font-size:13px;color:var(--fg)">
+          <input type="checkbox" id="poverlay" style="margin-top:2px">
+          <span>疊加在官方那套之後——官方 skill、格式指南、附加 Skills 照常送，
+            這組文字只作為額外規則附在後面。<br>
+            <b>不勾就是取代</b>：送出的只有這框的內容，上述三樣一律不送。</span>
         </label>
         <textarea id="sp" spellcheck="false"></textarea>
         <p class="status" id="pstat"></p>
@@ -1332,6 +1338,9 @@ function upTok(){
     : "約 " + own + " tokens";
 }
 function renderPrompts(){
+  /* 內建組的內容依模式而異（範例欄位不同），而這個面板標題旁邊就寫著模式。
+     只在載入時算一次的話，標籤說 REF2VA、框裡卻是 base 模式的欄位名。 */
+  BUILTIN.text = appRules(curMode());
   const vis = visiblePrompts();
   if (!vis.some(p => p.id === active)) active = builtinFor(curMode()).id;
   $("#plist").innerHTML = vis.map(p => {
