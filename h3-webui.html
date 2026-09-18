@@ -1212,7 +1212,11 @@ function officialSys(mode){
           /* 舊版寫「no summaries」，但 summary 是 Ref2VA 六個必要段落的第二個
              （ref-en.txt:18 欄位表、:121 專章、:318 範例）——等於叫模型別寫指南要的東西。
              改成針對行為本身：不要發明指南沒有的段落，但指南有的一個都不能少。 */
-          + "Do NOT invent sections the guide does not define (no \"Core Subject\", no title line, no closing commentary). Do write every section it DOES define, under its exact field name.\n\n"
+          + "Do NOT invent sections the guide does not define (no \"Core Subject\", no title line, no closing commentary). Do write every section it DOES define, under its exact field name.\n"
+          /* 指令是中文、模型也懂中文，它會自己附上譯文或中英對照欄。
+             指南完全沒提這件事——它唯一提到 translation 的地方是「畫面上的文字照原樣保留」，
+             講的是場景文字，不是輸出本身。 */
+          + "Write the sections and nothing else: no translation of your own output, no side-by-side or bilingual columns, no Chinese annotations.\n\n"
           + (core.skill || "") + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
   // 疊加所有啟用的附加 skill（風格/知識皆可、可多個）；不適用目前模式的自動忽略
   for (const st of currentSkillIds()){
