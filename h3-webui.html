@@ -1356,7 +1356,7 @@ function renderPrompts(){
   $("#pstat").textContent = p.builtin
     ? "內建版本唯讀。要改就按「複製目前這組」，改副本。"
     : (p.overlay ? "疊加模式：官方 skill 與指南照常送，這組文字附在後面。"
-                 : "❗ 取代模式：送出的只有這框的內容，官方 skill 與 base-en／ref-en 指南都不會送。");
+                 : "❗ 取代模式：送出的只有這框的內容。官方 skill、base-en／ref-en 指南、以及你在設定裡勾的附加 Skills，一律不送。");
 }
 window.pickPrompt = async id => {
   const p = prompts.find(x => x.id === id);
