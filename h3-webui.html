@@ -2748,7 +2748,11 @@ function refRuleText(){
       + " ones that follow naturally from one another, and leave out any that could not be reached"
       + " from the previous position by a visible movement. Every change of posture must be carried"
       + " by that movement — someone turns, steps, leans, sits down — so the action reads as one"
-      + " continuous flow rather than a series of held positions.";
+      + " continuous flow rather than a series of held positions."
+      /* 「讀起來像連續的流動」被當成修辭，模型照樣切成三個鏡頭。
+         實測：不講這句時單鏡頭率 0/4，講了是 4/4。得明說「只寫一個鏡頭」。 */
+      + " Render the whole thing as ONE continuous take: write a single [Shot 1] and no other shot,"
+      + " with the camera and the subject travelling between the poses instead of cutting between them.";
     t += bg
       ? " Do NOT build an environment subject out of the pictures. The setting is: " + bg + "."
         + " Render it from this description, not from the pictures' backgrounds, and hold it"
