@@ -119,7 +119,7 @@ input:focus,select:focus,textarea:focus{outline:2px solid color-mix(in srgb,var(
   outline-offset:-1px;border-color:transparent}
 /* 上面那條 width:100% 是寫給文字欄的，checkbox 跟著吃到就會擐滿整行，
    把自己的說明文字擠到下一行。以前是逐個元件去覆蓋，漏一個就歪一個。 */
-input[type=checkbox]{width:15px;height:15px;padding:0;accent-color:var(--acc);flex:none}
+input[type=checkbox],input[type=radio]{width:15px;height:15px;padding:0;accent-color:var(--acc);flex:none}
 textarea{min-height:340px;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;line-height:1.65;resize:vertical}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 button{background:var(--btn);color:var(--btnfg);border:0;border-radius:8px;padding:9px 17px;
@@ -571,6 +571,18 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <span><b>參考圖只當外觀依據</b>
         <span class="hint" style="font-size:10.5px">不鎖構圖、不沿用背景 — 分鏡圖用來定角色長相，鏡頭安排交給模型</span></span></label>
     <div id="refRuleBody" style="display:none;margin-top:6px">
+      <div class="row" style="gap:16px;margin-bottom:8px;text-transform:none;letter-spacing:0">
+        <label style="display:inline-flex;align-items:flex-start;gap:7px;cursor:pointer;
+               text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--fg);margin:0">
+          <input type="radio" name="refRuleKind" value="appearance" style="margin-top:2px">
+          <span><b>姿勢／外觀圖</b><br>
+            <span class="hint" style="font-size:10.5px">同一角色的不同姿態。當作可挑選的動作詞彙，不是必須逐張命中的清單</span></span></label>
+        <label style="display:inline-flex;align-items:flex-start;gap:7px;cursor:pointer;
+               text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--fg);margin:0">
+          <input type="radio" name="refRuleKind" value="storyboard" style="margin-top:2px">
+          <span><b>分鏡圖</b><br>
+            <span class="hint" style="font-size:10.5px">依檔名順序規劃視角與主體位置，但拍成一鏡到底，不切鏡頭</span></span></label>
+      </div>
       <textarea class="note" id="refRuleBg" rows="2"
         placeholder="背景改由文字描述（選填）。例如：日式和室，榻榻米、深色木樑、紙拉門，暖色調室內光。留空＝只解除綁定，不指定場景"></textarea>
     </div>
@@ -2527,6 +2539,9 @@ document.addEventListener("keydown", e => {
 });
 
 $("#refRuleOn") && ($("#refRuleOn").onchange = () => { refRuleSave(); refRuleDraw(); });
+document.querySelectorAll("input[name=refRuleKind]").forEach(r => {
+  r.onchange = () => { refRuleSave(); refRuleDraw(); };
+});
 $("#refRuleBg") && ($("#refRuleBg").oninput = () => { refRuleSave(); });
 $("#slotAdd").onclick = () => composeSlots();
 $("#slotClear").onclick = () => {
@@ -2654,11 +2669,17 @@ function wantShotsFor(n){ return 1; }
    一次不給。這個開關把它釘在第三種，並切斷背景綁定。 */
 const REFRULE_KEY = "h3.refrule.v1";
 function refRuleCfg(){
-  try{ const o = JSON.parse(store.get(REFRULE_KEY) || "{}"); return {on: !!o.on, bg: o.bg || ""}; }
-  catch(e){ return {on: false, bg: ""}; }
+  /* kind 是後來加的。舊設定沒有這個欄位，要當成 appearance，
+     否則已經調好的人會發現行為默默變了。 */
+  try{
+    const o = JSON.parse(store.get(REFRULE_KEY) || "{}");
+    return {on: !!o.on, bg: o.bg || "", kind: o.kind === "storyboard" ? "storyboard" : "appearance"};
+  }catch(e){ return {on: false, bg: "", kind: "appearance"}; }
 }
 function refRuleSave(){
-  store.set(REFRULE_KEY, JSON.stringify({on: $("#refRuleOn").checked, bg: $("#refRuleBg").value}));
+  const k = document.querySelector("input[name=refRuleKind]:checked");
+  store.set(REFRULE_KEY, JSON.stringify({on: $("#refRuleOn").checked, bg: $("#refRuleBg").value,
+                                         kind: k ? k.value : "appearance"}));
 }
 function refRuleDraw(){
   const box = $("#refRules"); if (!box) return;
@@ -2667,25 +2688,57 @@ function refRuleDraw(){
   $("#refRuleOn").checked = c.on;
   $("#refRuleBg").value = c.bg;
   $("#refRuleBody").style.display = c.on ? "" : "none";
+  document.querySelectorAll("input[name=refRuleKind]").forEach(r => { r.checked = (r.value === c.kind); });
+  const ph = $("#refRuleBg");
+  if (ph) ph.placeholder = c.kind === "storyboard"
+    ? "背景改由文字描述（選填）。分鏡圖只管構圖與走位，場景長相寫這裡。留空＝沒定場景"
+    : "背景改由文字描述（選填）。例如：日式和室，榻榻米、深色木樑、紙拉門，暖色調室內光。留空＝只解除綁定，不指定場景";
   $("#refRuleOn").closest(".refrule").classList.toggle("on", c.on);
 }
-/* 這段直接進 user turn 的結尾——模型對結尾的注意力比 23KB 指南中段強得多 */
+/* 這段直接進 user turn 的結尾——模型對結尾的注意力比 23KB 指南中段強得多
+   兩種用途在指南裡本來就是不同的段落（§2.2）：外觀圖寫進 <Subject N>、
+   分鏡圖則是列出它規劃了哪些鏡頭。以前只有前者，所以分鏡圖送進來會被當成
+   「這個角色長這樣」的素材，順序與構圖全丟掉。 */
 function refRuleText(){
   const c = refRuleCfg();
   if (!c.on) return "";
-  let t = "\n\nREFERENCE USAGE (overrides any conflicting guidance): the attached pictures are"
-        + " APPEARANCE references only — the same character seen in different expressions, poses"
-        + " and angles. Do NOT treat any of them as a shot's first frame, keyframe, last frame or"
-        + " composition anchor, and do NOT create standalone <Picture N> entries for them; cite each"
-        + " image inside the <Subject N> definition it describes. Shot composition, framing, camera"
-        + " placement and movement are yours to decide from the story.";
   const bg = (c.bg || "").trim();
-  t += bg
-    ? ` Do NOT build an environment subject out of the pictures. The setting is: ${bg}.`
-      + " Render it from this description, not from the pictures' backgrounds."
-    : " Do NOT build an environment subject out of the pictures, and do not carry their backgrounds"
-      + " into the target video; compose the setting yourself from the story.";
-  t += " If the background must appear in retention_analysis at all, mark it weak_reference.";
+  let t = "";
+  if (c.kind === "storyboard"){
+    t = "\n\nREFERENCE USAGE (overrides any conflicting guidance): the attached pictures are"
+      + " STORYBOARD references, in the order given. Each one plans a viewpoint, a subject placement"
+      + " and a stage of the action; cite them as storyboard references naming the part of the action"
+      + " they plan. Do NOT treat any of them as a first frame, keyframe or last frame."
+      + " Stage the whole thing as ONE continuous take: the camera and the subject travel between the"
+      + " planned compositions instead of cutting between them, so each picture is a point the shot"
+      + " passes through rather than a separate shot. Leave out any composition that cannot be reached"
+      + " from the previous one by a visible movement.";
+    t += bg
+      ? " The setting is: " + bg + ". Render it from this description; where the pictures disagree"
+        + " about the background, this description wins."
+      : " Keep one setting for the whole take. Where the pictures disagree about the background,"
+        + " follow the first picture and hold it steady; the background must not change between moments.";
+  } else {
+    t = "\n\nREFERENCE USAGE (overrides any conflicting guidance): the attached pictures are"
+      + " APPEARANCE references only — the same character seen in different expressions, poses"
+      + " and angles. Do NOT treat any of them as a shot's first frame, keyframe, last frame or"
+      + " composition anchor, and do NOT create standalone <Picture N> entries for them; cite each"
+      + " image inside the <Subject N> definition it describes. Shot composition, framing, camera"
+      + " placement and movement are yours to decide from the story."
+      + " The poses they show are a vocabulary to draw on, not a list to work through: use only the"
+      + " ones that follow naturally from one another, and leave out any that could not be reached"
+      + " from the previous position by a visible movement. Every change of posture must be carried"
+      + " by that movement — someone turns, steps, leans, sits down — so the action reads as one"
+      + " continuous flow rather than a series of held positions.";
+    t += bg
+      ? " Do NOT build an environment subject out of the pictures. The setting is: " + bg + "."
+        + " Render it from this description, not from the pictures' backgrounds, and hold it"
+        + " steady for the whole video."
+      : " Do NOT build an environment subject out of the pictures, and do not carry their backgrounds"
+        + " into the target video; compose one setting yourself from the story and hold it steady"
+        + " for the whole video.";
+    t += " If the background must appear in retention_analysis at all, mark it weak_reference.";
+  }
   return t;
 }
 
