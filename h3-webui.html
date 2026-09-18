@@ -1229,6 +1229,18 @@ function appRules(mode){
        /* 指令是中文、模型也懂中文，它會自己附上譯文或對照欄。 */
        + "Write the sections and nothing else: no translation of your own output, no side-by-side or bilingual columns, no Chinese annotations.";
 }
+/* ref-en.txt 自己的第 9 行就說「鏡頭、運鏡、說話者、對白這些基本格式與
+   Video Prompt Writing Guide 共用」，第 223 行再叫一次：運鏡詞彙去那份查。
+   但 ref2va 只送 ref-en.txt，那份從來沒到過。於是第 219 行叫模型寫出
+   「運動類型、幅度、速度」，而它從來沒看過那張詞彙表——amplitude 在
+   base-en.txt 出現 14 次，在 ref-en.txt 只有 1 次，就是那條要求本身。
+   只補 4.2/4.3 兩節（約 2.8K 字），不是整份 16K。 */
+function sharedShotRules(core){
+  const b = (core && core.references && core.references["base-en.txt"]) || "";
+  const i = b.indexOf("### 4.2");
+  const j = b.indexOf("### 4.4", i + 1);
+  return (i >= 0 && j > i) ? b.slice(i, j).trim() : "";
+}
 function officialSys(mode){
   const core = SKILLSET.cache["h3-prompt-writing"];
   if (!core) return appRules(mode);
@@ -1237,6 +1249,13 @@ function officialSys(mode){
   let sys = appRules(mode)
           + "\n\n===== CORE SKILL: h3-prompt-writing =====\n" + (core.skill || "")
           + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
+  if (mode === "ref2va"){
+    const shared = sharedShotRules(core);
+    if (shared)
+      sys += "\n\n===== SHARED SHOT AND CAMERA RULES =====\n"
+           + "The guide above states that shots, cuts and camera movement follow the base guide"
+           + " and to consult it for the camera vocabulary. These are those sections:\n\n" + shared;
+  }
   // 疊加所有啟用的附加 skill（風格/知識皆可、可多個）；不適用目前模式的自動忽略
   for (const st of currentSkillIds()){
     if (st === "h3-prompt-writing" || !skillFits(st, mode)) continue;
