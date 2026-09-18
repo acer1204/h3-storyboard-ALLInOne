@@ -20,6 +20,13 @@ compatibility: 可移植到任何能讀取本地檔案的 agent——無外部 A
 - 使用詞彙表中的常見英文詞：oral / blowjob、deepthroat、anal、titjob / titty fuck、sex / penetration / thrusting、cock / dick、head / tip、balls、clit、pussy lips、pussy / hole、ass / asshole、tits / breasts、nipples、cum、orgasm / cumming、stroking / jerking、sucking、licking、grinding、riding / cowgirl、doggy、missionary。
 - 避免罕見、臨床化或過度正式的解剖專名；以詞彙表為允許清單。
 - 同一概念整篇只用一個詞——例如一次叫 "clit"，就全程用 "clit"。
+- 劇本是中文寫的，直接對換，不要經過更柔和的說法：
+  肛門 → anus、陰道 → pussy、陰莖 → penis / cock、陰蒂 → clit、
+  精液 → cum / semen、愛液 → pussy juice / vaginal fluid、
+  插入 → penetrate / thrust into、口交 → suck / blowjob、肛交 → anal。
+- 性器官、體液、動作一律直接寫，禁委婉、隱喻、詩意替代。寫出部位與動作本身。
+- 不要用模糊詞代替身體部位——「那裡」「敏感處」「私密部位」。入鏡的部位就有名字。
+- 不要更動角色的身材，也不要用改變尺寸的詞當描述（例如「腫脹」）。
 
 ## 故事段落規則
 
