@@ -838,7 +838,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div><label>Language（介面語言）</label><select id="lang" class="no-i18n">
         <option value="zh-TW">繁體中文</option><option value="zh-CN">简体中文</option><option value="en">English</option></select></div>
       <div style="grid-column:1/-1"><label>🎨 附加 Skills（可多選；只在各 skill 的適用模式疊加，其他模式自動忽略。把含 SKILL.md 的資料夾丟進 skills/ 即可安裝新 skill）</label>
-        <div id="skillChecks" class="no-i18n" style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:6px"></div></div>
+        <div id="skillChecks" class="no-i18n" style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:6px"></div>
+        <p class="hint" id="skillOrder" style="margin-top:6px"></p></div>
       <div><label>中文翻譯</label><select id="tr">
         <option value="1" selected>開啟</option><option value="0">關閉</option></select></div>
       <div><label>自動重試次數</label><input type="text" id="retry" value="3"></div>
@@ -951,8 +952,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
   <div class="panel">
     <h3>生成影片 System Prompt（全部類型） <span class="modetag" id="spmodetag"></span></h3>
-    <p class="ph">內建組＝<b>官方 MiniMax H3「h3-prompt-writing」skill</b>：依模式自動搭配 base-en／ref-en 參考指南，並疊加上方「連線與生成」選的風格 Skill（唯讀）。
-      左邊勾選哪一組，產生時就用哪一組（可自建組覆蓋）。自建組勾「疊加在官方組之上」時不取代官方 skill，只把這組文字附加為額外規則。編輯內容會自動保存到伺服器。</p>
+    <p class="ph">這個框是 <b>app 自己的輸出格式規則</b>（禁 Markdown、欄位寫法、不要自創段落等）。<b>官方「h3-prompt-writing」skill 與 base-en／ref-en 指南不在這裡</b>——它們在上方「附加 Skills」以核心身分列出，送出時依模式自動接在這段之後。
+      自建組勾「疊加」時附在官方那套之後；<b>不勾「疊加」就是完全取代，連官方指南一起不送</b>。編輯內容會自動保存到伺服器。</p>
     <div class="splayout">
       <div class="splist">
         <div id="plist"></div>
@@ -1147,7 +1148,7 @@ const MODE_INFO = {
 };
 function curMode(){ const m = $("#mode").value; return MODES[m] ? m : "i2va"; }
 function PSEL(){ return "h3.prompt.all.v1"; }
-const BUILTIN = {id:"builtin", name:"官方 h3-prompt-writing（依模式自動組裝＋可疊風格 Skill）", text:null, builtin:true, mode:"all"};
+const BUILTIN = {id:"builtin", name:"內建（輸出格式規則）", text:null, builtin:true, mode:"all"};
 let prompts = [BUILTIN], active = BUILTIN.id, dirty = null;
 
 /* ===== 官方 MiniMax H3 Skills（repo skills/ 資料夾，由伺服器供給） ===== */
@@ -1197,27 +1198,27 @@ async function ensureSkill(id){
 }
 /* 生成用 system prompt＝h3-prompt-writing SKILL＋依模式的參考指南（base/ref）＋可選風格 skill。
    模式與時長由 UI 供值（夾在使用者訊息），不需要 agent 式問答。 */
+/* app 自己的輸出規則。這才是「System Prompt」－－它跟官方 skill 是兩件事，
+   只是最後會串在同一個 system 訊息裡送出去。 */
+function appRules(mode){
+  /* 範例欄位要跟著模式走：ref-en.txt 用的是 detailed_description。 */
+  const sample = mode === "ref2va" ? "detailed_description" : "integrated_multimodal_description";
+  return "You are an expert MiniMax H3 (Hailuo) video prompt writer. Follow the skill below and its reference guide EXACTLY - field names, section order, alignment instruction lines and timing notation. Output ONLY the final prompt, with no explanations before or after.\n"
+       + "CRITICAL OUTPUT FORMAT: plain text ONLY - absolutely NO Markdown. No # headings, no ** bold, no bullet lists, no code fences, no title line. Field names must appear as bare lowercase lines exactly like:\n"
+       + sample + ": ...\n"
+       /* 舊版寫「no summaries」，但 summary 是 Ref2VA 六個必要段落的第二個。 */
+       + "Do NOT invent sections the guide does not define (no \"Core Subject\", no title line, no closing commentary). Do write every section it DOES define, under its exact field name.\n"
+       /* 指令是中文、模型也懂中文，它會自己附上譯文或對照欄。 */
+       + "Write the sections and nothing else: no translation of your own output, no side-by-side or bilingual columns, no Chinese annotations.";
+}
 function officialSys(mode){
   const core = SKILLSET.cache["h3-prompt-writing"];
-  if (!core) return "You are an expert MiniMax H3 video prompt writer. Output only the final prompt.";
-  const isRef = mode === "ref2va";
-  const guide = isRef ? (core.references["ref-en.txt"] || "")
-                      : (core.references["base-en.txt"] || "");
-  /* 範例欄位要跟著模式走。寫死 base 模式的名字的話，ref2va 會拿到一個
-     指南根本不用的欄位名當示範（ref-en.txt 用的是 detailed_description）。 */
-  const sample = isRef ? "detailed_description" : "integrated_multimodal_description";
-  let sys = "You are an expert MiniMax H3 (Hailuo) video prompt writer. Follow the skill below and its reference guide EXACTLY - field names, section order, alignment instruction lines and timing notation. Output ONLY the final prompt, with no explanations before or after.\n"
-          + "CRITICAL OUTPUT FORMAT: plain text ONLY - absolutely NO Markdown. No # headings, no ** bold, no bullet lists, no code fences, no title line. Field names must appear as bare lowercase lines exactly like:\n"
-          + sample + ": ...\n"
-          /* 舊版寫「no summaries」，但 summary 是 Ref2VA 六個必要段落的第二個
-             （ref-en.txt:18 欄位表、:121 專章、:318 範例）——等於叫模型別寫指南要的東西。
-             改成針對行為本身：不要發明指南沒有的段落，但指南有的一個都不能少。 */
-          + "Do NOT invent sections the guide does not define (no \"Core Subject\", no title line, no closing commentary). Do write every section it DOES define, under its exact field name.\n"
-          /* 指令是中文、模型也懂中文，它會自己附上譯文或中英對照欄。
-             指南完全沒提這件事——它唯一提到 translation 的地方是「畫面上的文字照原樣保留」，
-             講的是場景文字，不是輸出本身。 */
-          + "Write the sections and nothing else: no translation of your own output, no side-by-side or bilingual columns, no Chinese annotations.\n\n"
-          + (core.skill || "") + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
+  if (!core) return appRules(mode);
+  const guide = mode === "ref2va" ? (core.references["ref-en.txt"] || "")
+                                  : (core.references["base-en.txt"] || "");
+  let sys = appRules(mode)
+          + "\n\n===== CORE SKILL: h3-prompt-writing =====\n" + (core.skill || "")
+          + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
   // 疊加所有啟用的附加 skill（風格/知識皆可、可多個）；不適用目前模式的自動忽略
   for (const st of currentSkillIds()){
     if (st === "h3-prompt-writing" || !skillFits(st, mode)) continue;
@@ -1230,18 +1231,33 @@ function officialSys(mode){
 function renderSkillChecks(){
   const box = $("#skillChecks");
   if (!box) return;
-  const act = new Set(activeSkillIds());
-  box.innerHTML = SKILLSET.list.filter(s => s.id !== "h3-prompt-writing").map(s => {
+  const ids = activeSkillIds();
+  const act = new Set(ids);
+  const CHIP = "border:1px solid var(--line);border-radius:999px;padding:5px 12px 5px 9px;margin:0;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--fg);font-weight:400";
+  /* 核心 skill 一直都在，只是以前沒列出來——看不到的東西很難相信它存在。
+     列出來、勾起來、鎖死，它不是選項。 */
+  const core = `<label title="核心 skill，不能關掉" style="${CHIP};cursor:default;
+      border-color:var(--acc);background:color-mix(in srgb,var(--acc) 14%,transparent)">
+    <input type="checkbox" checked disabled style="width:14px;height:14px;accent-color:var(--acc);margin:0;flex:none">
+    <span style="font-family:ui-monospace,Consolas,monospace">h3-prompt-writing</span>
+    <span style="color:var(--faint);font-size:11px">核心・永遠套用</span></label>`;
+  const rest = SKILLSET.list.filter(s => s.id !== "h3-prompt-writing").map(s => {
     const fits = (SKILL_MODES[s.id] || []).map(m => MODES[m] || m).join("/") || "全部模式";
-    return `<label style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
-        text-transform:none;letter-spacing:0;font-size:12.5px;color:var(--fg);font-weight:400;
-        border:1px solid var(--line);border-radius:999px;padding:5px 12px 5px 9px;cursor:pointer;margin:0
-        ${act.has(s.id) ? ";border-color:var(--acc);background:color-mix(in srgb,var(--acc) 8%,transparent)" : ""}">
+    /* 附加 skill 是按勾選先後串進 prompt 的，而這裡是按名稱排。
+       不標出來的話，看到的順序跟送出的順序不一樣。 */
+    const ord = ids.indexOf(s.id);
+    return `<label style="${CHIP};cursor:pointer${act.has(s.id) ? ";border-color:var(--acc);background:color-mix(in srgb,var(--acc) 8%,transparent)" : ""}">
       <input type="checkbox" style="width:14px;height:14px;accent-color:var(--acc);margin:0;flex:none"
         ${act.has(s.id) ? "checked" : ""} onchange="toggleSkill('${esc(s.id)}', this.checked)">
+      ${ord >= 0 ? `<span style="color:var(--acc);font-size:11px;font-weight:600">${ord + 1}</span>` : ""}
       <span style="font-family:ui-monospace,Consolas,monospace">${esc(s.id)}</span>
       <span style="color:var(--faint);font-size:11px">${fits}</span></label>`;
-  }).join("") || '<span class="hint">skills/ 資料夾內沒有附加 skill</span>';
+  }).join("");
+  box.innerHTML = core + rest;
+  const note = $("#skillOrder");
+  if (note) note.textContent = ids.length > 1
+    ? "附加 skill 按標號順序串進 prompt（勾選的先後），後面的讀在後面。要換順序就取消重勾。"
+    : "";
 }
 window.toggleSkill = async (id, on) => {
   const ids = activeSkillIds().filter(x => x !== id);
@@ -1252,7 +1268,9 @@ async function loadSkills(){
   try{ SKILLSET.list = await (await fetch("/api/skills")).json(); }catch(e){ SKILLSET.list = []; }
   await ensureSkill("h3-prompt-writing");
   for (const id of activeSkillIds()) await ensureSkill(id);
-  BUILTIN.text = officialSys("i2va");        // prompt 庫的預覽/計數用
+  /* 這個框只放 app 自己的規則。官方 skill 與指南是另一件事，
+     在上方「附加 Skills」裡以核心身分列出，送出時自動接在這段之後。 */
+  BUILTIN.text = appRules("i2va");
   renderSkillChecks();
   if (typeof renderPrompts === "function") renderPrompts();
 }
@@ -1299,7 +1317,19 @@ window.setMode = m => {
   if (typeof render === "function") render();
 };
 function upTok(){
-  $("#sptok").textContent = "約 " + Math.round($("#sp").value.length / 3.6) + " tokens";
+  const own = Math.round($("#sp").value.length / 3.6);
+  const p = prompts.find(x => x.id === active) || BUILTIN;
+  /* 內建與疊加組送出時都會帶上官方 skill 與指南，框裡看不到。
+     只數框裡那些字會把實際送出量低估一個數量級。 */
+  let extra = 0;
+  try{
+    const full = officialSys(curMode()).length;
+    if (p.builtin) extra = Math.round((full - appRules(curMode()).length) / 3.6);
+    else if (p.overlay) extra = Math.round(full / 3.6);
+  }catch(e){}
+  $("#sptok").textContent = extra
+    ? "約 " + own + " + " + extra + " tokens（官方 skill 與指南自動附加）"
+    : "約 " + own + " tokens";
 }
 function renderPrompts(){
   const vis = visiblePrompts();
@@ -1321,7 +1351,12 @@ function renderPrompts(){
   $("#poverlay").checked = !p.builtin && !!p.overlay;
   $("#poverlay").disabled = !!p.builtin;
   upTok();
-  $("#pstat").textContent = p.builtin ? "內建版本唯讀。要改就按「複製目前這組」，改副本。" : "";
+  /* 不勾疊加的自建組會把官方指南整個拿掉，而畫面上本來只有一個小標籤。
+     這是最容易默默出錯的一個，講明白一點。 */
+  $("#pstat").textContent = p.builtin
+    ? "內建版本唯讀。要改就按「複製目前這組」，改副本。"
+    : (p.overlay ? "疊加模式：官方 skill 與指南照常送，這組文字附在後面。"
+                 : "❗ 取代模式：送出的只有這框的內容，官方 skill 與 base-en／ref-en 指南都不會送。");
 }
 window.pickPrompt = async id => {
   const p = prompts.find(x => x.id === id);
