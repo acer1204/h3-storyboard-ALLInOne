@@ -538,6 +538,12 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <button class="nav" data-view="set" data-tip="系統設定">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/></svg>
     <span>系統設定</span></button>
+  <div id="setsub">
+    <button class="nav sub" data-view="set" data-sect="conn"><span>· 連線與生成</span></button>
+    <button class="nav sub" data-view="set" data-sect="adv"><span>· 進階</span></button>
+    <button class="nav sub" data-view="set" data-sect="lesson"><span>· 經驗庫</span></button>
+    <button class="nav sub" data-view="set" data-sect="sp"><span>· System Prompt</span></button>
+  </div>
 
   </div>
 
@@ -842,13 +848,6 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <h1 class="vh">系統設定</h1>
   <p class="vs">改完即時保存，重新整理不會消失。</p>
 
-  <div class="seg sm" id="setSeg" style="margin-bottom:16px;flex-wrap:wrap">
-    <button data-sect="conn" class="on">連線與生成</button>
-    <button data-sect="adv">進階</button>
-    <button data-sect="lesson">經驗庫</button>
-    <button data-sect="sp">System Prompt</button>
-  </div>
-
   <div class="panel" data-sect="conn">
     <h3>連線與生成</h3>
     <p class="ph">temperature / top_p 等取樣參數請在 llama-server 後台（.env / 啟動參數）設定，前端只需要位址。</p>
@@ -997,10 +996,13 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
           <span style="margin-left:auto"></span>
           <button class="ghost mini" id="pdel">刪除這組</button>
         </div>
-        <label class="row" style="margin-bottom:8px;gap:8px;cursor:pointer;align-items:flex-start;
-               text-transform:none;letter-spacing:0;font-size:13px;color:var(--fg)">
-          <input type="checkbox" id="poverlay" style="margin-top:2px">
-          <span>疊加在官方那套之後——官方 skill、格式指南、附加 Skills 照常送，
+        <!-- .row 是 wrap 的，而 span 預設 min-width:auto 不肯縮，
+             所以這段長說明會把自己換到勾選框下一行。
+             不用 .row，直接寫一個不換行的 flex。 -->
+        <label style="display:flex;gap:8px;margin-bottom:8px;cursor:pointer;align-items:flex-start;
+               flex-wrap:nowrap;text-transform:none;letter-spacing:0;font-size:13px;color:var(--fg)">
+          <input type="checkbox" id="poverlay" style="margin-top:3px">
+          <span style="flex:1;min-width:0">疊加在官方那套之後——官方 skill、格式指南、附加 Skills 照常送，
             這組文字只作為額外規則附在後面。<br>
             <b>不勾就是取代</b>：送出的只有這框的內容，上述三樣一律不送。</span>
         </label>
@@ -1797,7 +1799,8 @@ function setView(v){
   document.querySelectorAll(".nav").forEach(b => {
     if (b.dataset.mode)       b.classList.toggle("on", v === "run" && b.dataset.mode === curMode());
     else if (b.dataset.hmode) b.classList.toggle("on", v === "hist" && typeof HMFILTER !== "undefined" && HMFILTER.size === 1 && HMFILTER.has(b.dataset.hmode));
-    else                      b.classList.toggle("on", b.dataset.view === v);
+    else if (b.dataset.sect)  b.classList.toggle("on", v === "set" && b.dataset.sect === SETSECT);
+    else                      b.classList.toggle("on", b.dataset.view === v && b.dataset.view !== "set");
   });
   document.querySelectorAll(".view").forEach(s => s.classList.toggle("on", s.id === "v-" + v));
   store.set(VKEY, v);
@@ -1848,6 +1851,9 @@ document.querySelectorAll(".nav").forEach(b => b.onclick = () => {
     if (typeof renderHist === "function") renderHist();
     return;
   }
+  if (b.dataset.sect){ setView("set"); setSect(b.dataset.sect); return; }
+  /* 按主項目進設定頁時，回到上次看的那一類。 */
+  if (b.dataset.view === "set"){ setView("set"); setSect(SETSECT); return; }
   if (b.dataset.view === "hist" && typeof HMFILTER !== "undefined"){ HMFILTER = new Set(HMODES.map(x=>x[0])); }
   setView(b.dataset.view);
   if (b.dataset.view === "hist" && typeof renderHist === "function") renderHist();
@@ -2641,27 +2647,23 @@ $("#slotCut") && ($("#slotCut").onclick = () => slotCutAll());
    選哪一類就只顯示那一類。選擇只存本機——它描述的是你此刻在看哪裡，
    不是作品的設定，沒必要跟著到別台電腦。 */
 const SETSECT_KEY = "h3.setsect.v1";
+const SETSECTS = ["conn", "adv", "lesson", "sp"];
+let SETSECT = "conn";
+try{ SETSECT = SETSECTS.includes(localStorage.getItem(SETSECT_KEY))
+     ? localStorage.getItem(SETSECT_KEY) : "conn"; }catch(e){}
+/* 設定頁面板越加越多，排成一長條就找不到東西。
+   分類放在側邊欄而不是頁面上，跟歷史紀錄底下那排一致。
+   選擇只存本機——它描述的是你此刻在看哪裡，不是作品的設定。 */
 function setSect(id){
-  const bar = $("#setSeg");
-  if (!bar) return;
-  const ids = [...bar.querySelectorAll("button")].map(b => b.dataset.sect);
-  if (!ids.includes(id)) id = ids[0];
-  bar.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.sect === id));
-  document.querySelectorAll('#v-set .panel[data-sect]').forEach(pn => {
-    pn.style.display = (pn.dataset.sect === id) ? "" : "none";
+  SETSECT = SETSECTS.includes(id) ? id : "conn";
+  document.querySelectorAll("#v-set .panel[data-sect]").forEach(pn => {
+    pn.style.display = (pn.dataset.sect === SETSECT) ? "" : "none";
   });
-  try{ localStorage.setItem(SETSECT_KEY, id); }catch(e){}
+  document.querySelectorAll(".nav[data-sect]").forEach(b => {
+    b.classList.toggle("on", b.dataset.sect === SETSECT);
+  });
+  try{ localStorage.setItem(SETSECT_KEY, SETSECT); }catch(e){}
 }
-(function setSectInit(){
-  const bar = $("#setSeg");
-  if (!bar) return;
-  bar.querySelectorAll("button").forEach(b => {
-    b.onclick = () => setSect(b.dataset.sect);
-  });
-  let want = "conn";
-  try{ want = localStorage.getItem(SETSECT_KEY) || "conn"; }catch(e){}
-  setSect(want);
-})();
 $("#slotClear").onclick = () => {
   if (curMode() === "ref2va"){
     AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
@@ -5932,6 +5934,9 @@ $("#expj").onclick=()=>dl("h3-results.json",JSON.stringify(
 $("#expt").onclick=()=>dl("h3-results.txt",modeItems().filter(i=>i.content)
   .map(i=>`########## ${i.name}\n${i.content}\n`+(i.zh?`\n--- 中文 ---\n${i.zh}\n`:"")).join("\n"),"text/plain");
 
+/* 面板的顯示要先歸位，否則上次停在設定頁的人
+   一開頁會看到六個面板全部展開。 */
+setSect(SETSECT);
 setView(store.get(VKEY) || "run");
 </script>
 <script>
