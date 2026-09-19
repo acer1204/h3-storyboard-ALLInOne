@@ -610,6 +610,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     </div>
     <div class="row">
       <button class="mini" id="slotAdd">✚ 加入生成清單</button>
+      <button class="ghost mini" id="slotCut" title="把格子裡的圖一次去背">✂ 一鍵去背</button>
       <button class="ghost mini" id="slotClear">清空格子</button>
       <span class="status" id="slotStat" style="margin:0"></span>
     </div>
@@ -866,6 +867,9 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
         <option value="0">一律在對方忙碌時停用</option>
         <option value="1">一律允許同時使用</option></select></div>
       <div><label>✂ 去背預設模型</label><select id="matteModel" class="no-i18n"></select></div>
+      <div><label>✂ 一鍵去背：第一張</label><select id="cutFirst">
+        <option value="0">跳過不去背</option>
+        <option value="1">也一起去背</option></select></div>
     </div>
     <p class="hint">去背服務跟 <b>h3-server 跑在同一台機器</b>，所以只有 ComfyUI／LLM
       也在本機時才真的搶同一張卡。<b>自動</b>就是看這個：對方在別台機器就直接放行，
@@ -1070,7 +1074,7 @@ const SKEY="h3.settings.v1", SPKEY="h3.sp.v1", VKEY="h3.view.v1";
 const FIELDS={tr:"#tr",
               retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
               wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur",
-              cutBusy:"#cutBusy",matteModel:"#matteModel"};
+              cutBusy:"#cutBusy",matteModel:"#matteModel",cutFirst:"#cutFirst"};
 /* 共用設定：這些鍵存在伺服器端 settings.json，換瀏覽器或換電腦都是同一份。
    只有介面語言留在本機——同一台電腦不同人用不同語言是合理的，
    其餘設定分歧只會造成困擾。讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），
@@ -2187,6 +2191,67 @@ function audCheck(nImg){
    行動裝置沒有右鍵，用 500ms 長按代替；長按後要吃掉隨後的 click，
    否則會順手觸發「換圖」把選單白開一場。 */
 const SLOTMENU = [];          // {id, label, hint, enabled(i), run(i)}
+/* 一鍵去背：把格子裡的圖逐張送去去背。
+   跟右鍵那個對話框同一条後端，只是不開畫面、不等使用者按套用。
+   第一張預設跳過：i2va 的第一張是首幀、ref2va 的第一張是背景基準，
+   把它去掉等於把場景一起去掉。 */
+async function cutFile(f, model){
+  const b64 = await new Promise((res, rej) => {
+    const fr = new FileReader(); fr.onload = () => res(fr.result);
+    fr.onerror = () => rej(new Error("讀檔失敗")); fr.readAsDataURL(f);
+  });
+  const r = await (await fetch("/api/matte", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({image: b64, bg: null, model: model || ""})})).json();
+  if (r.error) throw new Error(r.error);
+  const im = await new Promise((res, rej) => {
+    const x = new Image();
+    x.onload = () => res(x); x.onerror = () => rej(new Error("結果讀不開"));
+    x.src = r.png;
+  });
+  const c = document.createElement("canvas");
+  c.width = im.naturalWidth; c.height = im.naturalHeight;
+  c.getContext("2d").drawImage(im, 0, 0);
+  const blob = await new Promise(x => c.toBlob(x, "image/png"));
+  const nm = (f.name || "image").replace(/\.[^.]+$/, "") + "-cutout.png";
+  return {file: new File([blob], nm, {type: "image/png"}), covered: r.covered};
+}
+async function slotCutAll(){
+  const btn = $("#slotCut"), st = $("#slotStat");
+  if (!btn || btn.disabled) return;
+  const arr = slotsArr();
+  /* 設定存的是 JSON 字串，跟 mattePref() 同一個讀法。 */
+  let first = false;
+  try{ first = (JSON.parse(store.get(SKEY) || "{}") || {}).cutFirst === "1"; }catch(e){}
+  const idx = [];
+  arr.forEach((s2, i) => { if (s2 && s2.file && (first || i > 0)) idx.push(i); });
+  if (!idx.length){
+    if (st) st.textContent = arr.some(x => x && x.file)
+      ? "只有第一張有圖，而設定是跳過第一張"
+      : "格子是空的";
+    return;
+  }
+  btn.disabled = true;
+  const model = mattePref();
+  let ok = 0, bad = 0;
+  for (let k = 0; k < idx.length; k++){
+    const i = idx[k];
+    if (st) st.textContent = "去背中… " + (k + 1) + "/" + idx.length;
+    try{
+      const src = slotsArr()[i];
+      /* 已經去過背的格子要拿原圖再做，否則是在去過背的圖上再削一次。 */
+      const base = src._orig || src.file;
+      const out = await cutFile(base, model);
+      setSlot(i, out.file, base);
+      ok++;
+    }catch(e){ bad++; }
+  }
+  renderSlots(); saveDraft();
+  btn.disabled = false;
+  if (st) st.textContent = bad
+    ? ("去背完成 " + ok + " 張，失敗 " + bad + " 張")
+    : ("已去背 " + ok + " 張" + (first ? "" : "（第一張依設定跳過）"));
+}
 function slotMenuAdd(item){ SLOTMENU.push(item); }
 function slotMenuClose(){ const m = document.querySelector(".slotmenu"); if (m) m.remove(); }
 function slotMenuOpen(ev, i){
@@ -2563,6 +2628,7 @@ document.querySelectorAll("input[name=refRuleKind]").forEach(r => {
 });
 $("#refRuleBg") && ($("#refRuleBg").oninput = () => { refRuleSave(); });
 $("#slotAdd").onclick = () => composeSlots();
+$("#slotCut") && ($("#slotCut").onclick = () => slotCutAll());
 $("#slotClear").onclick = () => {
   if (curMode() === "ref2va"){
     AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
