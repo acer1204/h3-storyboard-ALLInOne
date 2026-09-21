@@ -614,6 +614,11 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
         — 模型聽不到聲音，請在每個音訊下方寫清楚它是什麼，它才寫得出 &lt;Audio N&gt;</div>
       <div id="audgrid"></div>
     </div>
+    <!-- 劇情提示本來只存在於卡片上，按鉛筆回來時卡片被刪掉，
+         它就沒地方可去。給它一個家，來回都看得見。 -->
+    <div class="note-wrap" style="margin:0 0 10px"><label>劇情提示（選填，中／英／日皆可）</label>
+      <textarea class="note" id="slotNote" rows="3" oninput="agrow(this)"
+        placeholder="留空＝自由創作。輸入提示＝以此為劇情核心，例如：她在雪地裡摈到一隻迷路的小企鵝"></textarea></div>
     <div class="row">
       <button class="mini" id="slotAdd">✚ 加入生成清單</button>
       <button class="ghost mini" id="slotCut" title="把格子裡的圖一次去背">✂ 一鍵去背</button>
@@ -2093,6 +2098,7 @@ function setSlot(i, f, orig){
   saveDraft();
 }
 function clearSlots(){
+  if ($("#slotNote")) $("#slotNote").value = "";   // 清圖卻留著劇情很怪
   const S = slotsArr();
   S.forEach(s => { if (s && s.url){ try{ URL.revokeObjectURL(s.url); }catch(e){} } });
   SLOTS_BY[curMode()] = [];
@@ -2599,6 +2605,7 @@ function composeSlots(){
               auds: curMode() === "ref2va"
                 ? AUDS.map(a => ({name: a.name, dur: a.dur, desc: a.desc, b64: a.b64})) : []};
   // objectURL 交棒給 item，格子清空但不 revoke
+  it.note = (($("#slotNote") || {}).value || "").trim();
   it.previews = picked.map(x => x.s.url);
   it.preview = it.previews[0];
   picked.forEach((x, n) => { if (x.s._hash) it.files[n]._hash = x.s._hash; });
@@ -2608,6 +2615,7 @@ function composeSlots(){
     AUDS = [];
   }
   SLOTS_BY[curMode()] = [];
+  if ($("#slotNote")) $("#slotNote").value = "";   // 交棒給卡片了
   saveDraft();
   renderSlots();
   render(); $("#run").disabled = !modeItems().length;
@@ -3640,6 +3648,10 @@ window.editItem = k => {
         return {file: null, url, name: a.name, dur: a.dur, desc: a.desc, b64: a.b64};
       }).filter(a => a.url);
     }
+  }
+  if (mode !== "t2va" && $("#slotNote")){
+    $("#slotNote").value = it.note || "";
+    agrow($("#slotNote"));
   }
   items.splice(k, 1);                       // previews 已交棒，不 revoke
   saveDraft();
