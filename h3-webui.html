@@ -2208,18 +2208,30 @@ const SLOTMENU = [];          // {id, label, hint, enabled(i), run(i)}
    跟右鍵那個對話框同一条後端，只是不開畫面、不等使用者按套用。
    第一張預設跳過：i2va 的第一張是首幀、ref2va 的第一張是背景基準，
    把它去掉等於把場景一起去掉。 */
-async function cutFile(f, model){
+async function cutFile(f, model, ms){
   const b64 = await new Promise((res, rej) => {
     const fr = new FileReader(); fr.onload = () => res(fr.result);
     fr.onerror = () => rej(new Error("讀檔失敗")); fr.readAsDataURL(f);
   });
-  const r = await (await fetch("/api/matte", {method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({image: b64, bg: null, model: model || ""})})).json();
+  /* 首次呼叫要把模型搬進 VRAM，十幾秒跑不掉，所以門檻放寬；
+     但一定要有門檻——沒逆時的 fetch 不回來，整個迴圈就停在那一張。 */
+  const ctl = new AbortController();
+  const tm = setTimeout(() => ctl.abort(), ms || 120000);
+  let r;
+  try{
+    r = await (await fetch("/api/matte", {method: "POST", signal: ctl.signal,
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({image: b64, bg: null, model: model || ""})})).json();
+  }catch(e){
+    throw new Error(e.name === "AbortError" ? "逾時（去背服務沒回應）" : (e.message || String(e)));
+  }finally{ clearTimeout(tm); }
   if (r.error) throw new Error(r.error);
   const im = await new Promise((res, rej) => {
     const x = new Image();
-    x.onload = () => res(x); x.onerror = () => rej(new Error("結果讀不開"));
+    /* onload / onerror 都不觸發的情況是有的，這裡也不能無限等。 */
+    const t2 = setTimeout(() => rej(new Error("結果解編碼逾時")), 30000);
+    x.onload = () => { clearTimeout(t2); res(x); };
+    x.onerror = () => { clearTimeout(t2); rej(new Error("結果讀不開")); };
     x.src = r.png;
   });
   const c = document.createElement("canvas");
@@ -2246,24 +2258,30 @@ async function slotCutAll(){
   }
   btn.disabled = true;
   const model = mattePref();
-  let ok = 0, bad = 0;
-  for (let k = 0; k < idx.length; k++){
-    const i = idx[k];
-    if (st) st.textContent = "去背中… " + (k + 1) + "/" + idx.length;
-    try{
-      const src = slotsArr()[i];
-      /* 已經去過背的格子要拿原圖再做，否則是在去過背的圖上再削一次。 */
-      const base = src._orig || src.file;
-      const out = await cutFile(base, model);
-      setSlot(i, out.file, base);
-      ok++;
-    }catch(e){ bad++; }
+  let ok = 0; const fails = [];
+  /* 整段包 try/finally：不管中間出什麼事，按鈕都要解鎖。
+     上一版把解鎖放在迴圈之後，一卡住就永遠暗著。 */
+  try{
+    for (let k = 0; k < idx.length; k++){
+      const i = idx[k];
+      if (st) st.textContent = "去背中… " + (k + 1) + "/" + idx.length;
+      try{
+        const src = slotsArr()[i];
+        if (!src || !src.file) continue;
+        /* 已經去過背的格子要拿原圖再做，否則是在去過背的圖上再削一次。 */
+        const base = src._orig || src.file;
+        const out = await cutFile(base, model);
+        setSlot(i, out.file, base);
+        ok++;
+      }catch(e){ fails.push("第 " + (i + 1) + " 格：" + (e.message || e)); }
+    }
+  }finally{
+    btn.disabled = false;
+    try{ renderSlots(); saveDraft(); }catch(e){}
+    if (st) st.textContent = fails.length
+      ? ("去背 " + ok + " 張，失敗 " + fails.length + " 張——" + fails[0])
+      : ("已去背 " + ok + " 張" + (first ? "" : "（第一張依設定跳過）"));
   }
-  renderSlots(); saveDraft();
-  btn.disabled = false;
-  if (st) st.textContent = bad
-    ? ("去背完成 " + ok + " 張，失敗 " + bad + " 張")
-    : ("已去背 " + ok + " 張" + (first ? "" : "（第一張依設定跳過）"));
 }
 function slotMenuAdd(item){ SLOTMENU.push(item); }
 function slotMenuClose(){ const m = document.querySelector(".slotmenu"); if (m) m.remove(); }
