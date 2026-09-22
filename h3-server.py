@@ -2449,7 +2449,9 @@ class H(SimpleHTTPRequestHandler):
 
     def read_json(self):
         n = int(self.headers.get("Content-Length") or 0)
+        self.body_too_big = 0
         if n > MAX_BODY:
+            self.body_too_big = n
             # 連線是 keep-alive 的，未讀的 body 會被當成下一個請求行。不去讀它（可能很大），
             # 直接標記關閉連線，呼叫端照常回它的錯誤，回完就斷。
             self.close_connection = True
@@ -3539,12 +3541,19 @@ class H(SimpleHTTPRequestHandler):
 
         if p == "/api/matte":
             body = self.read_json()
+            if getattr(self, "body_too_big", 0):
+                # 去背的輸入很容易是上一輪的全解析度 PNG，撞這條線很正常。
+                # 回「empty body」的話完全看不出原因。
+                return self.send_json({"error": "圖片太大（%.1f MB，上限 %d MB）"
+                                       "——請用原圖去背，別拿去背結果再去一次"
+                                       % (self.body_too_big / 1048576.0,
+                                          MAX_BODY // 1048576)}, 413)
             if not isinstance(body, dict):
                 return self.send_json({"error": "empty body"}, 400)
             why = cut_gpu_block()
             if why:
                 return self.send_json({"error": why + "——去背已暫停。"
-                                                "要同時使用請到「系統設定 → 連線與生成」開啟。",
+                                                "要同時使用請到「系統設定 → 去背景」開啟。",
                                        "blocked": True}, 409)
             try:
                 cut_ensure()
@@ -3566,12 +3575,19 @@ class H(SimpleHTTPRequestHandler):
 
         if p == "/api/cutout/segment":
             body = self.read_json()
+            if getattr(self, "body_too_big", 0):
+                # 去背的輸入很容易是上一輪的全解析度 PNG，撞這條線很正常。
+                # 回「empty body」的話完全看不出原因。
+                return self.send_json({"error": "圖片太大（%.1f MB，上限 %d MB）"
+                                       "——請用原圖去背，別拿去背結果再去一次"
+                                       % (self.body_too_big / 1048576.0,
+                                          MAX_BODY // 1048576)}, 413)
             if not isinstance(body, dict):
                 return self.send_json({"error": "empty body"}, 400)
             why = cut_gpu_block()
             if why:
                 return self.send_json({"error": why + "——去背已暫停。"
-                                                "要同時使用請到「系統設定 → 連線與生成」開啟。",
+                                                "要同時使用請到「系統設定 → 去背景」開啟。",
                                        "blocked": True}, 409)
             try:
                 cut_ensure()

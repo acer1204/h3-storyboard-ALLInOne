@@ -307,7 +307,11 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .audrow .ab{flex:1;min-width:0}
 .audrow audio{width:100%;height:30px;display:block}
 .audrow .adesc{width:100%;margin-top:5px;border:1px solid var(--line);border-radius:7px;background:transparent;
-  color:var(--fg);font:inherit;font-size:12px;padding:5px 7px;resize:vertical}
+  color:var(--fg);font:inherit;font-size:12px;line-height:1.45;padding:4px 7px;
+  /* 全域 textarea 是 min-height:340px（給 prompt 編輯區的），
+     不壓回來 rows 根本不起作用。overflow 用 auto 而非 hidden：
+     萬一自動長高沒跑到（渲染時還隱藏著），至少滾得到。 */
+  min-height:28px;resize:vertical;overflow-y:auto}
 .audrow .ax{border:1px solid var(--line);background:transparent;color:var(--mut);border-radius:7px;
   padding:2px 7px;font-size:12px;cursor:pointer;flex:none;font-family:inherit}
 .audrow .ax:hover{color:var(--warn);border-color:var(--warn)}
@@ -540,6 +544,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <span>系統設定</span></button>
   <div id="setsub">
     <button class="nav sub" data-view="set" data-sect="conn"><span>· 連線與生成</span></button>
+    <button class="nav sub" data-view="set" data-sect="cut"><span>· 去背景</span></button>
     <button class="nav sub" data-view="set" data-sect="adv"><span>· 進階</span></button>
     <button class="nav sub" data-view="set" data-sect="lesson"><span>· 經驗庫</span></button>
     <button class="nav sub" data-view="set" data-sect="sp"><span>· System Prompt</span></button>
@@ -873,21 +878,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div><label>重試目標</label><select id="retrylvl">
         <option value="ok">完全通過（無警告）</option>
         <option value="noerr" selected>無錯誤即可</option></select></div>
-      <div><label>🖼 去背與 GPU 共用</label><select id="cutBusy">
-        <option value="auto" selected>自動（建議）</option>
-        <option value="0">一律在對方忙碌時停用</option>
-        <option value="1">一律允許同時使用</option></select></div>
-      <div><label>✂ 去背預設模型</label><select id="matteModel" class="no-i18n"></select></div>
-      <div><label>✂ 一鍵去背：第一張</label><select id="cutFirst">
-        <option value="0">跳過不去背</option>
-        <option value="1">也一起去背</option></select></div>
     </div>
-    <p class="hint">去背服務跟 <b>h3-server 跑在同一台機器</b>，所以只有 ComfyUI／LLM
-      也在本機時才真的搶同一張卡。<b>自動</b>就是看這個：對方在別台機器就直接放行，
-      在本機才會在它忙碌時擋下（不排隊，直接告知——編輯圖片時沒人想等算圖跑完）。
-      VRAM 充裕可以改成一律允許。<b>用 LLM 或 ComfyUI 不會把去背模型踢出 VRAM</b>，
-      卸載只看閒置：3 分鐘卸模型、90 分鐘整支結束（程序活著不佔 VRAM，只是省掉重跑 import）。
-      <span id="cutStat" class="no-i18n"></span></p>
     <p class="hint" style="margin-top:10px">生成結果不符合重試目標時自動重新生成，直到符合或用完次數，
       並保留其中最好的一次。設 0 關閉。</p>
     <div class="row" style="margin-top:16px">
@@ -896,6 +887,46 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     </div>
     <p class="status" id="conn"></p>
     <p class="status" id="saved" style="margin-top:2px"></p>
+  </div>
+
+  <div class="panel" data-sect="cut">
+    <h3>✂ 去背景</h3>
+    <p class="ph">去背服務與 h3-server 同進程，按需啟動。這裡設的是預設值；
+      單張編輯器裡的模型與背景選單依舊可以臨時改，不會回寫這裡。</p>
+    <div class="grid">
+      <div><label>✂ 預設模型</label><select id="matteModel" class="no-i18n"></select></div>
+      <div><label>🖼 與 GPU 共用</label><select id="cutBusy">
+        <option value="auto" selected>自動（建議）</option>
+        <option value="0">一律在對方忙碌時停用</option>
+        <option value="1">一律允許同時使用</option></select></div>
+    </div>
+    <p class="hint">去背服務跟 <b>h3-server 跑在同一台機器</b>，所以只有 ComfyUI／LLM
+      也在本機時才真的搶同一張卡。<b>自動</b>就是看這個：對方在別台機器就直接放行，
+      在本機才會在它忙碌時擋下（不排隊，直接告知——編輯圖片時沒人想等算圖跑完）。
+      VRAM 充裕可以改成一律允許。<b>用 LLM 或 ComfyUI 不會把去背模型踢出 VRAM</b>，
+      卸載只看閒置：3 分鐘卸模型、90 分鐘整支結束（程序活著不佔 VRAM，只是省掉重跑 import）。
+      <span id="cutStat" class="no-i18n"></span></p>
+
+    <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px">
+      <h3 style="margin-top:0">✂ 一鍵去背</h3>
+      <p class="ph">格子上方那顆按鈕，一次把所有格子跑完。
+        它不會開對話框，所以模型與底色一律用這裡的設定。</p>
+      <div class="grid">
+        <div><label>第一張</label><select id="cutFirst">
+          <option value="0">跳過不去背</option>
+          <option value="1">也一起去背</option></select></div>
+        <div><label>去掉背景後填什麼</label><select id="cutBgDef" class="no-i18n">
+          <option value="">透明（保留 alpha）</option>
+          <option value="#808080">中性灰</option>
+          <option value="#ffffff">白</option>
+          <option value="#000000">黑</option>
+          <option value="#00ff00">綠幕</option></select></div>
+      </div>
+      <p class="hint">填色是在瀏覽器裡合成的：底色先舖、去背結果疊上去，
+        跟單張編輯器同一個順序。選透明就什麼都不舖，輸出是帶 alpha 的 PNG。
+        MiniMax H3 收到透明 PNG 時會自己補一個背景，
+        選中性灰則是明確告訴它「這裡沒有東西」。</p>
+    </div>
   </div>
 
   <div class="panel" data-sect="adv">
@@ -1088,7 +1119,8 @@ const SKEY="h3.settings.v1", SPKEY="h3.sp.v1", VKEY="h3.view.v1";
 const FIELDS={tr:"#tr",
               retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
               wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur",
-              cutBusy:"#cutBusy",matteModel:"#matteModel",cutFirst:"#cutFirst"};
+              cutBusy:"#cutBusy",matteModel:"#matteModel",cutFirst:"#cutFirst",
+              cutBgDef:"#cutBgDef"};
 /* 共用設定：這些鍵存在伺服器端 settings.json，換瀏覽器或換電腦都是同一份。
    只有介面語言留在本機——同一台電腦不同人用不同語言是合理的，
    其餘設定分歧只會造成困擾。讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），
@@ -2168,13 +2200,20 @@ function renderAuds(){
       <div class="ab">
         <audio controls preload="metadata" src="${x.url}"></audio>
         <div class="hint" style="margin-top:3px;font-size:10.5px">${esc(x.name)}${x.dur ? ` · ${x.dur.toFixed(1)}s` : ""}</div>
-        <textarea class="adesc" rows="2" placeholder="這段音訊是什麼？例如：主角的說話音色、雨聲環境音、片頭節奏"
-          oninput="audDesc(${i}, this.value)">${esc(x.desc || "")}</textarea>
+        <textarea class="adesc" rows="1" placeholder="這段音訊是什麼？例如：主角的說話音色、雨聲環境音"
+          oninput="audDesc(${i}, this.value); agrow(this)">${esc(x.desc || "")}</textarea>
       </div>
       <button class="ax" onclick="audDel(${i})" title="移除">✕</button>
     </div>`).join("")
     + (AUDS.length < AUD_MAX ? `<button class="audadd" onclick="$('#audfiles').click()">＋ 加入音訊（還可 ${AUD_MAX - AUDS.length} 個）</button>` : "")
     + (AUDS.length ? `<div class="hint" style="margin-top:5px${audTotal() > AUD_MAX_SECONDS ? ";color:var(--warn)" : ""}">總長 ${audTotal().toFixed(1)} / ${AUD_MAX_SECONDS} 秒</div>` : "");
+  /* 已經有內容的也要長到剛好，否則一行高會把舊描述截掉。 */
+  /* 不呼叫 agrow：它在此檔更下面才貴值，而這裡可能在開機時就跑到。 */
+  box.querySelectorAll(".adesc").forEach(t => {
+    /* 隱藏時 scrollHeight 是 0，釘下去會變成一條線。 */
+    t.style.height = "auto";
+    if (t.scrollHeight > 0) t.style.height = (t.scrollHeight + 2) + "px";
+  });
 }
 /* 描述欄每個字都存會把整包音訊 base64 重新序列化上傳（可達數 MB），拖慢又逼近
    MAX_BODY；改成停手 1.2 秒才寫。 */
@@ -2214,10 +2253,26 @@ const SLOTMENU = [];          // {id, label, hint, enabled(i), run(i)}
    跟右鍵那個對話框同一条後端，只是不開畫面、不等使用者按套用。
    第一張預設跳過：i2va 的第一張是首幀、ref2va 的第一張是背景基準，
    把它去掉等於把場景一起去掉。 */
-async function cutFile(f, model, ms){
-  const b64 = await new Promise((res, rej) => {
-    const fr = new FileReader(); fr.onload = () => res(fr.result);
-    fr.onerror = () => rej(new Error("讀檔失敗")); fr.readAsDataURL(f);
+/* 每一個 await 都要有期限，而且要講得出是哪一步停住的。
+   上一版只有 fetch 有期限，讀檔與 toBlob 沒有——
+   回調不觸發就是永遠停在那一張，按鈕一直暗著。 */
+function deadline(ms, label, run){
+  return new Promise((res, rej) => {
+    let settled = false;
+    const t = setTimeout(() => {
+      if (!settled){ settled = true; rej(new Error(label + "逾時")); }
+    }, ms);
+    const ok = v => { if (!settled){ settled = true; clearTimeout(t); res(v); } };
+    const no = e => { if (!settled){ settled = true; clearTimeout(t); rej(e); } };
+    try{ run(ok, no); }catch(e){ no(e); }
+  });
+}
+async function cutFile(f, model, ms, bg){
+  let b64 = await deadline(30000, "讀檔", (ok, no) => {
+    const fr = new FileReader();
+    fr.onload = () => ok(fr.result);
+    fr.onerror = () => no(new Error("讀檔失敗"));
+    fr.readAsDataURL(f);
   });
   /* 首次呼叫要把模型搬進 VRAM，十幾秒跑不掉，所以門檻放寬；
      但一定要有門檻——沒逆時的 fetch 不回來，整個迴圈就停在那一張。 */
@@ -2229,21 +2284,39 @@ async function cutFile(f, model, ms){
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({image: b64, bg: null, model: model || ""})})).json();
   }catch(e){
-    throw new Error(e.name === "AbortError" ? "逾時（去背服務沒回應）" : (e.message || String(e)));
-  }finally{ clearTimeout(tm); }
+    throw new Error(e.name === "AbortError" ? "逾時（等滿 120 秒；可能是瀏覽器連線排隊，不一定是服務慢）" : (e.message || String(e)));
+  }finally{ clearTimeout(tm); b64 = null; }   /* 原圖的 data URL 也可以是幾十 MB */
   if (r.error) throw new Error(r.error);
-  const im = await new Promise((res, rej) => {
-    const x = new Image();
-    /* onload / onerror 都不觸發的情況是有的，這裡也不能無限等。 */
-    const t2 = setTimeout(() => rej(new Error("結果解編碼逾時")), 30000);
-    x.onload = () => { clearTimeout(t2); res(x); };
-    x.onerror = () => { clearTimeout(t2); rej(new Error("結果讀不開")); };
-    x.src = r.png;
-  });
-  const c = document.createElement("canvas");
-  c.width = im.naturalWidth; c.height = im.naturalHeight;
-  c.getContext("2d").drawImage(im, 0, 0);
-  const blob = await new Promise(x => c.toBlob(x, "image/png"));
+  /* 沒要合成底色時，canvas 整段都是多餘的：回來的本來就是 PNG。
+     走 canvas 的代價是一張全解析度點陣圖（4096px 約 100 MB）
+     加一次無損 PNG 重編碼。連做四五張，分頁就是靠這裡爬不動的——
+     後端實測 4096px 只要 2.6 秒，慢的一直是這一段。 */
+  let blob;
+  if (!bg){
+    blob = await deadline(30000, "轉檔", (ok, no) =>
+      fetch(r.png).then(x => x.blob()).then(ok, no));
+  }else{
+    const im = await deadline(30000, "結果解編碼", (ok, no) => {
+      const x = new Image();
+      x.onload = () => ok(x);
+      x.onerror = () => no(new Error("結果讀不開"));
+      x.src = r.png;
+    });
+    const c = document.createElement("canvas");
+    c.width = im.naturalWidth; c.height = im.naturalHeight;
+    const cx = c.getContext("2d");
+    /* 底色先舖、去背結果疊上去——跟編輯器同一個順序。 */
+    cx.fillStyle = bg; cx.fillRect(0, 0, c.width, c.height);
+    cx.drawImage(im, 0, 0);
+    /* toBlob 失敗時是拿 null 回調，不是拋錯。
+       不擋的話 new File([null]) 會做出一個壞檔而不是報錯。 */
+    blob = await deadline(60000, "輸出 PNG", (ok, no) =>
+      c.toBlob(b => b ? ok(b) : no(new Error("輸出 PNG 失敗")), "image/png"));
+    /* 收到 0 才會馬上放掉點陣圖，等 GC 來收已經太慢。 */
+    im.src = ""; c.width = 0; c.height = 0;
+  }
+  /* 這個字串可以是幾十 MB，點名放掉比等整個 r 出範圍快。 */
+  r.png = null;
   const nm = (f.name || "image").replace(/\.[^.]+$/, "") + "-cutout.png";
   return {file: new File([blob], nm, {type: "image/png"}), covered: r.covered};
 }
@@ -2252,8 +2325,11 @@ async function slotCutAll(){
   if (!btn || btn.disabled) return;
   const arr = slotsArr();
   /* 設定存的是 JSON 字串，跟 mattePref() 同一個讀法。 */
-  let first = false;
-  try{ first = (JSON.parse(store.get(SKEY) || "{}") || {}).cutFirst === "1"; }catch(e){}
+  let first = false, bg = "";
+  try{
+    const cf = JSON.parse(store.get(SKEY) || "{}") || {};
+    first = cf.cutFirst === "1"; bg = cf.cutBgDef || "";
+  }catch(e){}
   const idx = [];
   arr.forEach((s2, i) => { if (s2 && s2.file && (first || i > 0)) idx.push(i); });
   if (!idx.length){
@@ -2263,6 +2339,9 @@ async function slotCutAll(){
     return;
   }
   btn.disabled = true;
+  /* 整批期間不存草稿：存檔的上傳跟去背的 POST 搶同一個 origin
+     的連線池，而去背那邊一排隊就是 120 秒。跑完再存一次就好。 */
+  draftHold();
   const model = mattePref();
   let ok = 0; const fails = [];
   /* 整段包 try/finally：不管中間出什麼事，按鈕都要解鎖。
@@ -2270,23 +2349,41 @@ async function slotCutAll(){
   try{
     for (let k = 0; k < idx.length; k++){
       const i = idx[k];
-      if (st) st.textContent = "去背中… " + (k + 1) + "/" + idx.length;
+      /* 只寫一次「1/4」的話，慢跟死看起來一模一樣。 */
+      const t0 = Date.now();
+      const tick = () => { if (st) st.textContent = "去背中… " + (k + 1) + "/" + idx.length
+        + "（" + Math.round((Date.now() - t0) / 1000) + " 秒）"; };
+      tick();
+      const tk = setInterval(tick, 1000);
       try{
         const src = slotsArr()[i];
-        if (!src || !src.file) continue;
-        /* 已經去過背的格子要拿原圖再做，否則是在去過背的圖上再削一次。 */
-        const base = src._orig || src.file;
-        const out = await cutFile(base, model);
-        setSlot(i, out.file, base);
-        ok++;
-      }catch(e){ fails.push("第 " + (i + 1) + " 格：" + (e.message || e)); }
+        /* 不能用 continue：那會跳過迴圈尾巴那個讓步。 */
+        if (src && src.file){
+          /* 已經去過背的格子要拿原圖再做，否則是在去過背的圖上再削一次。
+             重整過的草稿只留得住 _origHash，原圖物件要跟 cutOpen 一樣重新取回。 */
+          if (!src._orig && src._origHash)
+            src._orig = await fileFromHash(src._origHash,
+              src._origName || src.file.name.replace(/-cutout(?=\.[^.]+$)/, ""));
+          const base = src._orig || src.file;
+          const out = await cutFile(base, model, 0, bg);
+          setSlot(i, out.file, base);
+          ok++;
+        }
+      }catch(e){ fails.push("第 " + (i + 1) + " 格：" + (e.message || e));
+      }finally{ clearInterval(tk); }
+      /* 讓出一拍：連續占著主執行緒時，瀏覽器沒機會回收上一張的記憶體，
+         也畫不出進度。 */
+      await new Promise(res => setTimeout(res, 120));
     }
   }finally{
     btn.disabled = false;
-    try{ renderSlots(); saveDraft(); }catch(e){}
+    try{ renderSlots(); draftRelease(); saveDraft(); }catch(e){}
+    const bgn = {"": "透明", "#808080": "中性灰", "#ffffff": "白",
+                 "#000000": "黑", "#00ff00": "綠幕"}[bg] || bg;
     if (st) st.textContent = fails.length
       ? ("去背 " + ok + " 張，失敗 " + fails.length + " 張——" + fails[0])
-      : ("已去背 " + ok + " 張" + (first ? "" : "（第一張依設定跳過）"));
+      : ("已去背 " + ok + " 張（底色 " + bgn + "）"
+         + (first ? "" : "，第一張依設定跳過"));
   }
 }
 function slotMenuAdd(item){ SLOTMENU.push(item); }
@@ -2609,6 +2706,12 @@ function composeSlots(){
   it.previews = picked.map(x => x.s.url);
   it.preview = it.previews[0];
   picked.forEach((x, n) => { if (x.s._hash) it.files[n]._hash = x.s._hash; });
+  /* 去背前的原圖也要跟著卡片走。只搬 file 的話，按鉛筆放回格子後
+     _orig 就沒了，一鍵去背會拿「已經去過背的 PNG」再削一次，
+     而且每次存草稿要傳的也從小 JPEG 變成兩張全解析度 PNG。 */
+  it.origs = picked.map(x => x.s._orig || null);
+  it.origHashes = picked.map(x => x.s._origHash || null);
+  it.origNames = picked.map(x => x.s._origName || null);
   items.push(it);
   if (curMode() === "ref2va"){        // AUDS 是全域的，別在別的模式把它清掉
     AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
@@ -2673,7 +2776,7 @@ $("#slotCut") && ($("#slotCut").onclick = () => slotCutAll());
    選哪一類就只顯示那一類。選擇只存本機——它描述的是你此刻在看哪裡，
    不是作品的設定，沒必要跟著到別台電腦。 */
 const SETSECT_KEY = "h3.setsect.v1";
-const SETSECTS = ["conn", "adv", "lesson", "sp"];
+const SETSECTS = ["conn", "cut", "adv", "lesson", "sp"];
 let SETSECT = "conn";
 try{ SETSECT = SETSECTS.includes(localStorage.getItem(SETSECT_KEY))
      ? localStorage.getItem(SETSECT_KEY) : "conn"; }catch(e){}
@@ -3611,7 +3714,10 @@ window.redo = async k => { const it=items[k]; it.state="running"; it.keep=true; 
 window.copyOne = k => navigator.clipboard.writeText(items[k].content);
 window.removeItem = k => {
   const it = items[k]; if (!it || it.state === "running") return;
-  if (it.preview) URL.revokeObjectURL(it.preview);
+  /* preview 就是 previews[0]，但 previews[1..] 以前沒人放——
+     一張 ref2va 卡片可以掹 9 個 objectURL，而去背後每個都是好幾 MB。 */
+  for (const u of new Set([it.preview, ...(it.previews || [])]))
+    if (u){ try{ URL.revokeObjectURL(u); }catch(e){} }
   items.splice(k, 1);
   saveDraft();                     // 不存的話重整一次又全部回來
   render();
@@ -3632,8 +3738,15 @@ window.editItem = k => {
   } else {
     const cur = slotsArr().filter(Boolean);
     if (cur.length && !confirm(`上方格子還有 ${cur.length} 張圖，放回去會覆蓋掉。要繼續嗎？`)) return;
+    /* 被覆蓋掉的那幾張，這裡是最後的持有者——不 revoke 就再也沒人會放。 */
+    cur.forEach(s2 => { if (s2.url){ try{ URL.revokeObjectURL(s2.url); }catch(e){} } });
+    /* previews 的 objectURL 交棒給格子；_orig 也要一起還回去，
+       否則這格會被當成「本來就長這樣」。 */
     SLOTS_BY[mode] = (it.files || []).map((f, i) => ({
-      file: f, url: (it.previews || [])[i] || URL.createObjectURL(f), _hash: f._hash, _name: f.name}));
+      file: f, url: (it.previews || [])[i] || URL.createObjectURL(f), _hash: f._hash, _name: f.name,
+      _orig: (it.origs || [])[i] || null,
+      _origHash: (it.origHashes || [])[i] || null,
+      _origName: (it.origNames || [])[i] || null}));
     if (mode === "ref2va"){
       AUDS.forEach(a => { try{ URL.revokeObjectURL(a.url); }catch(e){} });
       AUDS = (it.auds || []).map(a => {
@@ -4435,6 +4548,7 @@ $("#wfFile").onchange = async e => {
    甚至換一台電腦都能接續。圖片本身走既有的 uploads/（內容雜湊去重），草稿只存 hash，
    所以同一張圖重複出現不會佔額外空間。 */
 let DRAFT_T = null, DRAFT_READY = false;
+let DRAFT_BUSY = false, DRAFT_AGAIN = false, DRAFT_HOLD = 0, DRAFT_PEND = false;
 
 async function regUpload(file){
   const e = await encode(file);
@@ -4450,16 +4564,35 @@ async function fileFromHash(h, name){
   const b = await ok.blob();
   return new File([b], name || (h + ".jpg"), {type: b.type || "image/jpeg"});
 }
+/* 存一次草稿會打好幾個 /api/uploads/register，每個掹著全解析度的
+   base64。DRAFT_T 只擋「排程」，擋不住兩輪存檔重疊——重疊起來就把
+   瀏覽器對同一個 origin 的六條連線佔滿，去背的 POST 只能排隊，
+   而它的 120 秒逾時在排隊的時候已經在走。
+   HOLD 是給一鍵去背這種連續寫入用的：整批跑完再存一次就好。 */
+function draftHold(){ DRAFT_HOLD++; }
+function draftRelease(){
+  DRAFT_HOLD = Math.max(0, DRAFT_HOLD - 1);
+  if (DRAFT_HOLD === 0 && DRAFT_PEND){ DRAFT_PEND = false; saveDraft(); }
+}
 function saveDraft(){
   if (!onServer || !DRAFT_READY) return;
+  if (DRAFT_HOLD > 0){ DRAFT_PEND = true; return; }
+  if (DRAFT_BUSY){ DRAFT_AGAIN = true; return; }
   clearTimeout(DRAFT_T);
   DRAFT_T = setTimeout(async () => {
+    /* HOLD 可能是在計時器排定之後才設起來的。只擋排程擋不住——
+       跟 DRAFT_T 本身犯的是同一個錯，所以執行前要再確認一次。 */
+    if (DRAFT_HOLD > 0){ DRAFT_PEND = true; return; }
+    DRAFT_BUSY = true;
     const d = {slots: {}, items: [], t2va: $("#t2vaInput") ? $("#t2vaInput").value : "",
                auds: AUDS.map(a => ({name: a.name, dur: a.dur, desc: a.desc, b64: a.b64}))};
     try{
       for (const [m, arr] of Object.entries(SLOTS_BY)){
         const out = [];
         for (const sl of (arr || [])){
+          /* 已經跑进來的也要讓路：這個迴圈傳的正是好幾 MB 的去背 PNG，
+             跟去背的 POST 搶同一個 origin。DRAFT_PEND 會把這次存檔補回來。 */
+          if (DRAFT_HOLD > 0){ DRAFT_PEND = true; return; }
           if (!sl || !sl.file) { out.push(null); continue; }
           if (!sl._hash){ const u = await regUpload(sl.file); sl._hash = u && u.hash; sl._name = sl.file.name; }
           if (sl._orig && !sl._origHash){ const u2 = await regUpload(sl._orig); sl._origHash = u2 && u2.hash; }
@@ -4480,15 +4613,29 @@ function saveDraft(){
                      content: it.content || "", zh: it.zh || "",
                      shots: it.shots || 1, attempts: it.attempts || 1,
                      auds: (it.auds || []).map(a => ({name: a.name, dur: a.dur, desc: a.desc, b64: a.b64}))};
-        for (const f of (it.files || [])){
+        for (let n = 0; n < (it.files || []).length; n++){
+          /* 已經跑进來的也要讓路：這個迴圈傳的正是好幾 MB 的去背 PNG，
+             跟去背的 POST 搶同一個 origin。DRAFT_PEND 會把這次存檔補回來。 */
+          if (DRAFT_HOLD > 0){ DRAFT_PEND = true; return; }
+          const f = it.files[n];
           if (!f._hash){ const u = await regUpload(f); f._hash = u && u.hash; }
-          if (f._hash) rec.files.push({hash: f._hash, name: f.name});
+          /* 原圖也要留著，否則重整之後「還原原圖」拿到的是去背版。
+             _hash 有快取，所以每張原圖只會傳一次。 */
+          const og = (it.origs || [])[n];
+          if (og && !og._hash){ const u2 = await regUpload(og); og._hash = u2 && u2.hash; }
+          const oh = (og && og._hash) || (it.origHashes || [])[n] || null;
+          if (f._hash) rec.files.push({hash: f._hash, name: f.name, orig: oh,
+                                       orig_name: (og && og.name) || (it.origNames || [])[n] || null});
         }
         d.items.push(rec);
       }
       await fetch("/api/drafts", {method:"POST", headers:{"Content-Type":"application/json"},
                                   body: JSON.stringify(d)});
     }catch(e){}
+    finally{
+      DRAFT_BUSY = false;
+      if (DRAFT_AGAIN){ DRAFT_AGAIN = false; saveDraft(); }
+    }
   }, 900);
 }
 async function loadDraft(){
@@ -4507,10 +4654,13 @@ async function loadDraft(){
       SLOTS_BY[m] = out;
     }
     for (const rec of (d.items || [])){
-      const files = [];
+      const files = [], origHashes = [], origNames = [];
       for (const e of (rec.files || [])){
         const f = await fileFromHash(e.hash, e.name);
-        if (f){ f._hash = e.hash; files.push(f); }
+        /* 原圖只拿 hash，不在開頁時把每張都抓回來——
+           真的要用到是在按下去背的時候。 */
+        if (f){ f._hash = e.hash; files.push(f);
+                origHashes.push(e.orig || null); origNames.push(e.orig_name || null); }
       }
       const previews = files.map(f => URL.createObjectURL(f));
       const restored = rec.content || "";
@@ -4522,6 +4672,7 @@ async function loadDraft(){
         $("#mode").value = prevMode;
       }
       items.push({mode: rec.mode, files, file: files[0] || null,
+                  origs: files.map(() => null), origHashes, origNames,
                   name: rec.name || (files.map(f=>f.name).join(" ＋ ")),
                   content: restored, zh: rec.zh || "", v: rv,
                   shots: rec.shots || 1, attempts: rec.attempts || 1,
@@ -6047,6 +6198,15 @@ const EN = {
 "解析度":"Resolution","（照模板）":"(template)","步數 steps":"steps","模板值":"template value",
 "改完即時保存，重新整理不會消失。":"Changes save instantly and survive reloads.",
 "連線與生成":"Connection & generation",
+"✂ 去背景":"✂ Background removal",
+"✂ 一鍵去背":"✂ One-click cutout",
+"✂ 預設模型":"✂ Default model",
+"🖼 與 GPU 共用":"🖼 Sharing the GPU",
+"第一張":"First image",
+"去掉背景後填什麼":"What to fill the background with",
+"跳過不去背":"Leave it alone","也一起去背":"Cut it too",
+"透明（保留 alpha）":"Transparent (keep alpha)",
+"中性灰":"Neutral grey","白":"White","黑":"Black","綠幕":"Green screen",
 "temperature / top_p 等取樣參數請在 llama-server 後台（.env / 啟動參數）設定，前端只需要位址。":"Set sampling parameters (temperature / top_p …) on the llama-server side (.env / launch args).",
 "llama-server 位址設定在伺服器端的":"The llama-server address lives in the server-side",
 "），改檔存檔即生效；網頁不顯示、也不需填寫。":"); saving the file takes effect immediately — never shown or entered in the browser.",
