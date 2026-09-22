@@ -1015,6 +1015,11 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <h3>生成影片 System Prompt（全部類型） <span class="modetag" id="spmodetag"></span></h3>
     <p class="ph">這個框是 <b>app 自己的輸出格式規則</b>（禁 Markdown、欄位寫法、不要自創段落等）。<b>官方「h3-prompt-writing」skill 與 base-en／ref-en 指南不在這裡</b>——它們在上方「附加 Skills」以核心身分列出，送出時依模式自動接在這段之後。
       自建組勾「疊加」時附在官方那套之後；<b>不勾「疊加」就是完全取代，連官方指南一起不送</b>。編輯內容會自動保存到伺服器。</p>
+    <p class="ph">兩組內建的差別：<b>輸出格式規則（qwen3.8-flash-next 推薦）</b>只多一段——
+      要求每一句運鏡都寫滿「類型＋幅度＋速度」。指南本來說中等幅度與正常速度可以省略，
+      而這個模型把那句執行得很忠實；想把運鏡指定清楚的人切過去就行。
+      實測（姿勢模式 21 格同題對照）：完全沒寫幅度的從 14/21 降到 2/21，鏡頭數與延遲都沒變。
+      換回別的模型未必適用，所以預設組沒動。</p>
     <div class="splayout">
       <div class="splist">
         <div id="plist"></div>
@@ -1217,7 +1222,11 @@ const MODE_INFO = {
 function curMode(){ const m = $("#mode").value; return MODES[m] ? m : "i2va"; }
 function PSEL(){ return "h3.prompt.all.v1"; }
 const BUILTIN = {id:"builtin", name:"內建（輸出格式規則）", text:null, builtin:true, mode:"all"};
-let prompts = [BUILTIN], active = BUILTIN.id, dirty = null;
+/* 第二組一樣是內建、一樣唯讀，只差在最後多一段運鏡規則。
+   不動預設組：那段是針對這個模型量出來的，換回別的模型未必適用。 */
+const BUILTIN_FN = {id:"builtin-fn", name:"輸出格式規則（qwen3.8-flash-next 推薦）",
+                    text:null, builtin:true, mode:"all", variant:"fn"};
+let prompts = [BUILTIN, BUILTIN_FN], active = BUILTIN.id, dirty = null;
 
 /* ===== 官方 MiniMax H3 Skills（repo skills/ 資料夾，由伺服器供給） ===== */
 const SKILLSET = {list: [], cache: {}};
@@ -1268,7 +1277,19 @@ async function ensureSkill(id){
    模式與時長由 UI 供值（夾在使用者訊息），不需要 agent 式問答。 */
 /* app 自己的輸出規則。這才是「System Prompt」－－它跟官方 skill 是兩件事，
    只是最後會串在同一個 system 訊息裡送出去。 */
-function appRules(mode){
+/* 這一段只在「輸出格式規則（qwen3.8-flash-next 推薦）」那組送出。
+   指南 4.3 節講明「medium amplitude 與 normal speed 通常省略」，而這個模型
+   把那句話執行得比舊模型忠實：姿勢模式 21 格裡有 14 格完全沒寫幅度。
+   加上這段後降到 2/21，amplitude 與 speed 各 0.48 → 1.67，
+   鏡頭數與延遲都沒變。要談的是「寫滿三個維度」，不是「多用運鏡」。 */
+const FN_CAMERA_RULES =
+  "\n\nCAMERA MOTION MUST BE FULLY SPECIFIED: every camera movement you write must carry all three"
+  + " dimensions in one phrase - motion type, then amplitude, then speed - in the form"
+  + " \"<motion type> with <small|medium|large> amplitude at <slow|normal|fast> speed\"."
+  + " This OVERRIDES the guide's note that medium amplitude and normal speed are usually omitted:"
+  + " write them out even when they are medium and normal. A camera movement carrying only a motion"
+  + " type, with no amplitude and no speed, is incomplete.";
+function appRules(mode, variant){
   /* 範例欄位要跟著模式走：ref-en.txt 用的是 detailed_description。 */
   const sample = mode === "ref2va" ? "detailed_description" : "integrated_multimodal_description";
   return "You are an expert MiniMax H3 (Hailuo) video prompt writer. Follow the skill below and its reference guide EXACTLY - field names, section order, alignment instruction lines and timing notation. Output ONLY the final prompt, with no explanations before or after.\n"
@@ -1277,7 +1298,8 @@ function appRules(mode){
        /* 舊版寫「no summaries」，但 summary 是 Ref2VA 六個必要段落的第二個。 */
        + "Do NOT invent sections the guide does not define (no \"Core Subject\", no title line, no closing commentary). Do write every section it DOES define, under its exact field name.\n"
        /* 指令是中文、模型也懂中文，它會自己附上譯文或對照欄。 */
-       + "Write the sections and nothing else: no translation of your own output, no side-by-side or bilingual columns, no Chinese annotations.";
+       + "Write the sections and nothing else: no translation of your own output, no side-by-side or bilingual columns, no Chinese annotations."
+       + (variant === "fn" ? FN_CAMERA_RULES : "");
 }
 /* ref-en.txt 自己的第 9 行就說「鏡頭、運鏡、說話者、對白這些基本格式與
    Video Prompt Writing Guide 共用」，第 223 行再叫一次：運鏡詞彙去那份查。
@@ -1291,12 +1313,12 @@ function sharedShotRules(core){
   const j = b.indexOf("### 4.4", i + 1);
   return (i >= 0 && j > i) ? b.slice(i, j).trim() : "";
 }
-function officialSys(mode){
+function officialSys(mode, variant){
   const core = SKILLSET.cache["h3-prompt-writing"];
-  if (!core) return appRules(mode);
+  if (!core) return appRules(mode, variant);
   const guide = mode === "ref2va" ? (core.references["ref-en.txt"] || "")
                                   : (core.references["base-en.txt"] || "");
-  let sys = appRules(mode)
+  let sys = appRules(mode, variant)
           + "\n\n===== CORE SKILL: h3-prompt-writing =====\n" + (core.skill || "")
           + "\n\n===== REFERENCE GUIDE (follow this format) =====\n" + guide;
   if (mode === "ref2va"){
@@ -1358,6 +1380,7 @@ async function loadSkills(){
   /* 這個框只放 app 自己的規則。官方 skill 與指南是另一件事，
      在上方「附加 Skills」裡以核心身分列出，送出時自動接在這段之後。 */
   BUILTIN.text = appRules("i2va");
+  BUILTIN_FN.text = appRules("i2va", "fn");
   renderSkillChecks();
   if (typeof renderPrompts === "function") renderPrompts();
 }
@@ -1366,7 +1389,7 @@ function builtinFor(){ return BUILTIN; }
 function visiblePrompts(){ return prompts; }
 function activeText(){
   const p = prompts.find(x => x.id === active) || BUILTIN;
-  if (p.builtin) return officialSys(curMode());   // 官方組合依目前模式選 base/ref 指南
+  if (p.builtin) return officialSys(curMode(), p.variant);   // 官方組合依目前模式選 base/ref 指南
   const t = p.text != null ? p.text : "";
   if (p.overlay)   // 疊加組：官方 skill＋指南照常，這組文字附加為額外規則（格式仍由指南管）
     return officialSys(curMode())
@@ -1422,6 +1445,7 @@ function renderPrompts(){
   /* 內建組的內容依模式而異（範例欄位不同），而這個面板標題旁邊就寫著模式。
      只在載入時算一次的話，標籤說 REF2VA、框裡卻是 base 模式的欄位名。 */
   BUILTIN.text = appRules(curMode());
+  BUILTIN_FN.text = appRules(curMode(), "fn");
   const vis = visiblePrompts();
   if (!vis.some(p => p.id === active)) active = builtinFor(curMode()).id;
   $("#plist").innerHTML = vis.map(p => {
@@ -1444,7 +1468,10 @@ function renderPrompts(){
   /* 不勾疊加的自建組會把官方指南整個拿掉，而畫面上本來只有一個小標籤。
      這是最容易默默出錯的一個，講明白一點。 */
   $("#pstat").textContent = p.builtin
-    ? "內建版本唯讀。要改就按「複製目前這組」，改副本。"
+    ? (p.variant === "fn"
+        ? "內建唯讀。比預設組多一段：要求每一句運鏡都寫滿「類型＋幅度＋速度」。"
+          + "實測（姿勢模式 21 格同題對照）：完全沒寫幅度的 14/21 → 2/21，鏡頭數與延遲不變。"
+        : "內建版本唯讀。要改就按「複製目前這組」，改副本。")
     : (p.overlay ? "疊加模式：官方 skill 與指南照常送，這組文字附在後面。"
                  : "❗ 取代模式：送出的只有這框的內容。官方 skill、base-en／ref-en 指南、以及你在設定裡勾的附加 Skills，一律不送。");
 }
@@ -1458,7 +1485,7 @@ window.pickPrompt = async id => {
   active = id; store.set(PSEL(), id); renderPrompts();
 };
 async function loadPrompts(){
-  prompts = [BUILTIN];
+  prompts = [BUILTIN, BUILTIN_FN];
   // 內建組＝官方 skills（loadSkills 會填 BUILTIN.text 預覽）
   await loadSkills();
   if (onServer){
@@ -2961,7 +2988,12 @@ function refRuleText(){
       + " Stage the whole thing as ONE continuous take: the camera and the subject travel between the"
       + " planned compositions instead of cutting between them, so each picture is a point the shot"
       + " passes through rather than a separate shot. Leave out any composition that cannot be reached"
-      + " from the previous one by a visible movement.";
+      + " from the previous one by a visible movement."
+      /* 只寫敘述性的「一鏡到底」不夠。與姿勢模式同一個毛病：
+         模型沒有叙事可依附時就退回「一張圖一個鏡頭」——實測 7 張圖寫 7 個鏡頭、
+         6 張圖寫 6 個鏡頭。姿勢模式加了下面這句之後是 21/21 單鏡頭。 */
+      + " Write a single [Shot 1] and no other shot: no [Shot 2], no [Shot 3], however many"
+      + " pictures are attached. The number of shots does NOT follow the number of pictures.";
     t += bg
       ? " The setting is: " + bg + ". Render it from this description; where the pictures disagree"
         + " about the background, this description wins."
