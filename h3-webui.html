@@ -2839,6 +2839,12 @@ async function cutPickAt(x, y, out){
       body: JSON.stringify({image: CUT.b64, points: [[Math.round(x), Math.round(y)]],
                             labels: [1], refine: 2, bg: null})}, 200000)).json();
     if (r.error) throw new Error(r.error);
+    /* SAM2 對某些點會回空遮罩（實測：同一張圖換個位置就選得到）。
+       空的就別動畫面，也別佔掉一步復原——那一步退回去什麼都不會變。 */
+    if (!(r.covered > 0.0002)){
+      CUT.info = " · SAM2 在這一點沒有選到東西，換個位置再點一次";
+      return;
+    }
     const mk = await deadline(30000, "SAM2 遮罩解編碼", (ok, no) => {
       const im = new Image();
       im.onload = () => ok(im);
