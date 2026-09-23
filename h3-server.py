@@ -3267,7 +3267,22 @@ class H(SimpleHTTPRequestHandler):
             try:
                 return self.send_json(llama_api("/props", timeout=10))
             except Exception as e:
-                return self.send_json({"error": str(e)}, 502)
+                err = str(e)
+            # llama-server 放在反向代理後面時，常常只開放 /v1/*（實測：/props、/health、
+            # /slots 都是 nginx 回 401，/v1/chat/completions 照常）。生成完全不受影響，
+            # 「測試連線」卻會顯示連不上。退回 /v1/models 拼出同樣形狀的回應，
+            # 能回答就代表生成那條路是通的。
+            try:
+                j = llama_api("/v1/models", timeout=10)
+                m = ((j.get("data") or [{}])[0]) or {}
+                mm = ((j.get("models") or [{}])[0]) or {}
+                return self.send_json({
+                    "model_ftype": m.get("id") or mm.get("name") or "?",
+                    "modalities": {"vision": "multimodal" in (mm.get("capabilities") or [])},
+                    "default_generation_settings": {"n_ctx": (m.get("meta") or {}).get("n_ctx")},
+                    "via": "/v1/models（/props 無法存取：%s）" % err[:80]})
+            except Exception:
+                return self.send_json({"error": err}, 502)
 
         if p == "/api/cutout/status":
             h = cut_ping()
