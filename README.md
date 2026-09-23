@@ -122,6 +122,8 @@ Pick any workflow .json from your workflow folder (or upload one from the page) 
   成品影片內嵌完整工作流參數（含當次實際套用的畫布尺寸），拖回 ComfyUI 即還原當時的節點圖與 Prompt。
 - A media library page browses everything in the ComfyUI output folder.  
   媒體庫頁可瀏覽 ComfyUI 輸出資料夾的所有成品。
+- ComfyUI can live on another machine, even behind an https reverse proxy: progress and live previews arrive over TLS, and finished videos and their first/last frames are pulled back through ComfyUI's `/view` into a local `output/` mirror the moment a job completes — so review, movie merging, covers and playback all read local files. Covers are made from a JPEG preview ComfyUI renders on its side, about ten times smaller than the full PNG.  
+  ComfyUI 可以在別台機器，甚至在 https 反向代理後面：進度與即時預覽走 TLS，任務一完成就透過 ComfyUI 的 `/view` 把成品與首尾幀拉回本機 `output/` 鏡像——審查、長片合併、封面與播放讀的都是本機檔案。封面用 ComfyUI 那邊先轉好的 JPEG 預覽來縮，比完整 PNG 小約十倍。
 
 ### GPU coexistence GPU 共存協調
 
@@ -190,6 +192,22 @@ Your ratings and notes accumulate into reusable rules: one click asks the model 
 
 ---
 
+## Background removal 去背
+
+Reference pictures copy their background into the video unless it is gone, so every slot can be cut out: right-click a slot (long-press on touch) and choose 去背景, or use the one-click button to cut the whole row. It runs in its own small service with its own GPU environment, unloads the model after three idle minutes, and is refused — with the reason named — while ComfyUI or the LLM is working on the same card.  
+參考圖的背景不去掉就會被照抄進影片，所以每一格都可以去背：在格子上按右鍵（觸控長按）選「去背景」，或用一鍵去背整排處理。它跑在自己的小服務與獨立 GPU 環境裡，閒置三分鐘就把模型卸掉；ComfyUI 或 LLM 正在用同一張卡時會拒絕並說明原因。
+
+- **BiRefNet** finds the subject automatically and returns a continuous alpha, so veils and loose hair keep their transparency. Two weights are offered (`birefnet`, `lucida`).  
+  **BiRefNet** 自動找主體，輸出連續 alpha，面紗與髮絲的半透明保得住。可選兩組權重（`birefnet`、`lucida`）。
+- **SAM3 subject gate**: BiRefNet segments the *salient* object, so a person sitting on a bed keeps the bed. Choose SAM3 and name the subject (`person:2` by default); the text-prompted mask vetoes everything else. It runs on ComfyUI and the multiplication happens in the browser.  
+  **SAM3 主體閘**：BiRefNet 分的是「顯著物件」，人坐在床上床就被留下。選 SAM3 並寫出主體（預設 `person:2`），文字提示的遮罩會否決其餘一切。它在 ComfyUI 上跑，相乘在瀏覽器做。
+- **Touch-up**: erase and paint-back brushes, plus **click-to-remove / click-to-restore** — click an object and SAM2 selects all of it. Six undo steps, and a reset back to the model's result.  
+  **手動修補**：擦除與塗回原圖筆刷，另有 **點選去除／點選補回**——點一下物件，SAM2 會把整個物件選起來。六步復原，也可以一鍵回到模型原本的結果。
+- Nothing runs until you press ▶ 執行, and an applied cutout can always be restored to the original picture.  
+  按下「▶ 執行」才會開始算；套用過的去背隨時可以還原成原圖。
+
+---
+
 ## Getting started 快速開始
 
 1. Run [llama.cpp](https://github.com/ggml-org/llama.cpp) `llama-server` with a multimodal Qwen model (tested with a 27B Q4_K_M build) and the OpenAI-compatible API enabled.  
@@ -206,6 +224,18 @@ Your ratings and notes accumulate into reusable rules: one click asks the model 
 Requirements: Windows + Python 3 and a modern browser; ffmpeg is auto-discovered (bundled imageio-ffmpeg works) for the review and merge features.  
 需求：Windows＋Python 3 與現代瀏覽器；審查與合併功能會自動尋找 ffmpeg（imageio-ffmpeg 內附版即可）。
 
+### Docker
+
+`docker-compose.yml` runs the web server and the background-removal service as two containers; llama-server and ComfyUI stay wherever they already are, addressed from `config.json`. The whole repo is mounted into the web container, so history, uploads, drafts and settings are the same files `start_app.bat` uses, and editing `h3-webui.html` still only needs F5. The cutout container needs an NVIDIA GPU (Docker Desktop with the WSL2 backend is enough) and the BiRefNet weights in `models/background_removal/` — `Comfy-Org/BiRefNet` on HuggingFace. The SAM2 weight for click selection downloads itself on first use.  
+`docker-compose.yml` 會起兩個容器：網頁伺服器與去背服務；llama-server 與 ComfyUI 維持原本的位置，位址寫在 `config.json`。整個 repo 掛進網頁容器，所以歷史、上傳、草稿與設定跟 `start_app.bat` 用的是同一份檔案，改 `h3-webui.html` 一樣按 F5 就好。去背容器需要 NVIDIA GPU（Docker Desktop 的 WSL2 後端即可），以及放在 `models/background_removal/` 的 BiRefNet 權重——HuggingFace 上的 `Comfy-Org/BiRefNet`。點選用的 SAM2 權重第一次使用時會自己下載。
+
+```
+docker compose up -d --build
+```
+
+Then open `http://localhost:9998/`. After changing `h3-server.py`, run `docker compose restart h3-server`.  
+然後開 `http://localhost:9998/`。改了 `h3-server.py` 之後執行 `docker compose restart h3-server`。
+
 ---
 
 ## Files 檔案說明
@@ -219,6 +249,9 @@ Requirements: Windows + Python 3 and a modern browser; ffmpeg is auto-discovered
 | `ui2api.py` | Converts ComfyUI Save-format workflows into runnable API graphs (subgraphs/bypass supported).<br>將 ComfyUI Save 格式工作流轉成可執行 API 圖（支援子圖／bypass）。 |
 | `queue/`, `settings.json`, `drafts.json` | Server-side state: the job queue, shared settings and unsent drafts (created on first run).<br>伺服器端狀態：任務佇列、共用設定與未送出草稿（首次執行時建立）。 |
 | `start_app.bat` | One-click launcher on port 9998.<br>一鍵啟動（port 9998）。 |
+| `docker-compose.yml`, `docker/` | Docker deployment: the web server and the cutout service as two containers.<br>Docker 部署：網頁伺服器與去背服務兩個容器。 |
+| `tools/matte/` | The background-removal service (BiRefNet + SAM2) and its Dockerfile.<br>去背服務（BiRefNet＋SAM2）與它的 Dockerfile。 |
+| `models/`, `output/` | Cutout weights, and the local mirror of a remote ComfyUI's outputs (not in git).<br>去背權重，以及遠端 ComfyUI 成品的本機鏡像（不進 git）。 |
 | `app.html` | Legacy single-page frontend (kept for reference).<br>舊版簡易前端（保留參考）。 |
 
 ---

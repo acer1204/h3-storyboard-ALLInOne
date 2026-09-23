@@ -23,14 +23,34 @@ copy birefnet.py     E:/h3-matte/
 
 位置可用環境變數 `CUT_DIR` 改，伺服器端預設找 `E:/h3-matte`。
 
+### Docker
+
+repo 根目錄的 `docker-compose.yml` 會用這個資料夾的 `Dockerfile` 建一個 `h3-matte` 容器
+（基底 `pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime`，GPU 由 compose 保留）。
+h3-server 容器帶著 `CUT_URL=http://h3-matte:9996`，看到這個就**不會** subprocess 拉本機 venv，
+只等容器回應。容器裡的差別都是環境變數：
+
+| 變數 | 容器裡 | 為什麼 |
+|---|---|---|
+| `MATTE_BIND` | `0.0.0.0` | 預設只聽 127.0.0.1，另一個容器連不到 |
+| `MATTE_IDLE_EXIT` | `0` | 生命週期歸 docker 管，閒置不自己結束（模型照樣三分鐘卸掉） |
+| `BREF_MODELS` | `/models/background_removal` | 掛的是 repo 的 `models/` |
+| `SAM_MODELS_DIR` | `/models/sam` | SAM2 權重下載到這裡，重建容器不用再下載 |
+
 ### 權重
 
 | 用途 | 檔案 | 放哪 |
 |---|---|---|
-| BiRefNet 自動去背 | `birefnet.safetensors`（424MB）、`lucida.safetensors`（844MB） | ComfyUI 的 `models/background_removal/` |
-| SAM2 點選分割 | `sam2_b.pt`（約 160MB） | `E:/h3-matte/models/`，首次推論自動下載 |
+| BiRefNet 自動去背 | `birefnet.safetensors`（424MB）、`lucida.safetensors`（844MB） | repo 的 `models/background_removal/`；沒有的話找 ComfyUI 的 |
+| SAM2 點選分割 | `sam2_b.pt`（154MB） | `SAM_MODELS_DIR`，第一次用時在背景自動下載 |
 
-去背權重直接沿用 ComfyUI 那一份，不另外複製。位置可用 `BREF_MODELS` 改。
+ComfyUI 在同一台時，去背權重直接沿用它那一份。ComfyUI 搬到別台之後只能自己放一份，
+放在 repo 的 `models/background_removal/`（不進 git）；h3-server 啟動去背服務時會把同一個位置
+用 `BREF_MODELS` 傳過去，兩邊才不會各自猜出不同的資料夾。
+
+SAM2 權重是從 GitHub releases 下載的，實測這條線只有 50-100 KB/s，要二十幾分鐘。
+以前是在第一次推論時同步下載，下載期間整支服務的鎖一直握著，連 BiRefNet 都跟著卡死。
+現在改成背景下載：還沒下載完時 `/segment` 立刻回 503 並附上目前的 MB 數。
 `Comfy-Org/BiRefNet` 與 `Comfy-Org/sam3.1` 都在 HuggingFace 上。
 
 ## 端點
