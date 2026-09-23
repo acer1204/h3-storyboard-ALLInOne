@@ -898,7 +898,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div><label>🖼 與 GPU 共用</label><select id="cutBusy">
         <option value="auto" selected>自動（建議）</option>
         <option value="0">一律在對方忙碌時停用</option>
-        <option value="1">一律允許同時使用</option></select></div>
+        <option value="1">一律允許同時使用（關閉保護）</option></select></div>
     </div>
     <p class="hint">去背服務跟 <b>h3-server 跑在同一台機器</b>，所以只有 ComfyUI／LLM
       也在本機時才真的搶同一張卡。<b>自動</b>就是看這個：對方在別台機器就直接放行，
@@ -906,6 +906,11 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       VRAM 充裕可以改成一律允許。<b>用 LLM 或 ComfyUI 不會把去背模型踢出 VRAM</b>，
       卸載只看閒置：3 分鐘卸模型、90 分鐘整支結束（程序活著不佔 VRAM，只是省掉重跑 import）。
       <span id="cutStat" class="no-i18n"></span></p>
+    <p class="hint" style="color:var(--warn)"><b>選「一律允許同時使用」前請先讀這段。</b>
+      那個選項會讓門檻連問都不問就放行。ComfyUI 算圖中按去背的話，
+      BiRefNet 會被載到一張已經快滿的卡上；Windows 不會乾脆報錯，
+      而是把顯存分頁到系統記憶體——<b>兩邊一起變慢</b>，連你原本在跑的
+      那支影片也會被拖垂。只有 VRAM 真的夠用或两邊不在同一張卡時才選它。</p>
 
     <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px">
       <h3 style="margin-top:0">✂ 一鍵去背</h3>
@@ -2310,6 +2315,15 @@ async function cutFile(f, model, ms, bg){
     fr.onerror = () => no(new Error("讀檔失敗"));
     fr.readAsDataURL(f);
   });
+  /* 伺服器上限 24 MB。超過時它回 413 然後直接斷線，而沒讀完的 body
+     會讓 TCP 送 RST，把那個 413 連同解釋一起丟掉——瀏覽器只剩
+     「Failed to fetch」。實測過：26 MB 的 body 拿到的是 ConnectionAborted。
+     在這裡先量，才講得出真正的原因。 */
+  if (b64.length > 24 * 1024 * 1024){
+    const mb = (b64.length / 1048576).toFixed(1);
+    b64 = null;
+    throw new Error("圖片太大（編碼後 " + mb + " MB，上限 24 MB）——請先縮圖再試");
+  }
   /* 首次呼叫要把模型搬進 VRAM，十幾秒跑不掉，所以門檻放寬；
      但一定要有門檻——沒逆時的 fetch 不回來，整個迴圈就停在那一張。 */
   const ctl = new AbortController();
@@ -2379,16 +2393,21 @@ async function slotCutAll(){
      的連線池，而去背那邊一排隊就是 120 秒。跑完再存一次就好。 */
   draftHold();
   const model = mattePref();
-  let ok = 0; const fails = [];
+  let ok = 0, skipped = 0; const fails = [];
   /* 整段包 try/finally：不管中間出什麼事，按鈕都要解鎖。
      上一版把解鎖放在迴圈之後，一卡住就永遠暗著。 */
+  const tBatch = Date.now();
   try{
     for (let k = 0; k < idx.length; k++){
       const i = idx[k];
-      /* 只寫一次「1/4」的話，慢跟死看起來一模一樣。 */
+      /* 只寫一次「1/4」的話，慢跟死看起來一模一樣。
+         但只寫這一格的秒數也不夠：t0 每格重置，第 7 格的 43 秒
+         跟第 1 格的 43 秒在畫面上一模一樣，整批已經跑掉十四分鐘
+         這件事完全看不出來。兩個都要寫。 */
       const t0 = Date.now();
       const tick = () => { if (st) st.textContent = "去背中… " + (k + 1) + "/" + idx.length
-        + "（" + Math.round((Date.now() - t0) / 1000) + " 秒）"; };
+        + "（這張 " + Math.round((Date.now() - t0) / 1000) + " 秒／整批 "
+        + Math.round((Date.now() - tBatch) / 1000) + " 秒）"; };
       tick();
       const tk = setInterval(tick, 1000);
       try{
@@ -2405,7 +2424,18 @@ async function slotCutAll(){
           setSlot(i, out.file, base);
           ok++;
         }
-      }catch(e){ fails.push("第 " + (i + 1) + " 格：" + (e.message || e));
+      }catch(e){
+        const msg = e.message || String(e);
+        fails.push("第 " + (i + 1) + " 格：" + msg);
+        /* GPU 被占住、排不進去、或等滿逾時：後面每一格都會是同一個結果。
+           繼續跑只是把同一個 120 秒再付 N 次，而按鈕從頭到尾都是暗的。 */
+        if (/GPU|逾時|去背已暫停|還在去背|狀態不明/.test(msg)){
+          /* 這是說明，不是另一筆失敗——混進 fails 會把
+             「失敗 1 張」報成「失敗 2 張」。 */
+          skipped = idx.length - k - 1;
+          clearInterval(tk);
+          break;
+        }
       }finally{ clearInterval(tk); }
       /* 讓出一拍：連續占著主執行緒時，瀏覽器沒機會回收上一張的記憶體，
          也畫不出進度。 */
@@ -2417,7 +2447,9 @@ async function slotCutAll(){
     const bgn = {"": "透明", "#808080": "中性灰", "#ffffff": "白",
                  "#000000": "黑", "#00ff00": "綠幕"}[bg] || bg;
     if (st) st.textContent = fails.length
-      ? ("去背 " + ok + " 張，失敗 " + fails.length + " 張——" + fails[0])
+      ? ("去背 " + ok + " 張，失敗 " + fails.length + " 張"
+         + (skipped ? "，同樣原因跨過 " + skipped + " 張" : "")
+         + "——" + fails[0])
       : ("已去背 " + ok + " 張（底色 " + bgn + "）"
          + (first ? "" : "，第一張依設定跳過"));
   }

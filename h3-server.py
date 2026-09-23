@@ -116,6 +116,10 @@ def load_config():
 CONFIG = load_config()
 MEDIA_ROOT = CONFIG["media_root"]
 COMFY_URL = CONFIG["comfy_url"].rstrip("/")
+# 上次成功跟 ComfyUI 說上話是什麼時候。判「問不到」到底是
+# 「沒在跑」還是「忙到不回話」時要用——這台機器上沒開的本機埠
+# 會 timeout 而不是 RST，兩者在例外層級分不出來。
+COMFY_SEEN = [0.0]
 
 _CFG_MTIME = [os.path.getmtime(CONFIG_PATH) if os.path.exists(CONFIG_PATH) else 0]
 
@@ -172,12 +176,20 @@ def gpu_mem():
 
 
 def comfy_busy():
-    """True if ComfyUI is generating or has queued jobs; None if unreachable."""
+    """True＝在算圖或有排隊；False＝確定不忙；None＝問不到且可疑。
+
+    None 會讓去背被擋，所以不能濺b地回——根本沒在跑 ComfyUI 的人
+    不該因此永遠不能去背。本機沒開的埠在這台機器上是 timeout
+    而不是連線被拒，所以分不出來；改用「之前聯絡上過嗎」判：
+    剛還好好的、現在不回話＝忙；從來沒聯絡上＝沒在跑。
+    閒置時 /queue 實測 1-2 ms，算圖中也只有 3-19 ms，2 秒是百倍餘裕。"""
     try:
-        q = comfy_api("/queue", timeout=6)
+        q = comfy_api("/queue", timeout=2)
         return bool(q.get("queue_running")) or bool(q.get("queue_pending"))
     except Exception:
-        return None
+        if COMFY_SEEN[0] and time.time() - COMFY_SEEN[0] < 600:
+            return None                # 不久前還在，現在答不出來＝可疑
+        return False                   # 從來沒聯絡上＝沒在跑，不該擋去背
 
 
 def comfy_free():
@@ -836,7 +848,9 @@ def comfy_api(path, data=None, timeout=30):
     req = _u.Request(COMFY_URL + path,
                      data=json.dumps(data).encode() if data is not None else None,
                      headers={"Content-Type": "application/json"} if data is not None else {})
-    return json.loads(_u.urlopen(req, timeout=timeout).read() or b"{}")
+    r = json.loads(_u.urlopen(req, timeout=timeout).read() or b"{}")
+    COMFY_SEEN[0] = time.time()
+    return r
 
 
 def llama_api(path, data=None, timeout=600):
@@ -1492,6 +1506,11 @@ def matte_models():
 CUT_PY = os.path.join(CUT_DIR, ".venv", "Scripts", "python.exe")
 CUT_APP = os.path.join(CUT_DIR, "matte_service.py")
 CUT_LOCK = threading.RLock()
+# CUT_LOCK 管的是「把服務拉起來」；CUT_BUSY 管的是「一次只送一張進去」。
+# 兩件事不能共用一把鎖：拉服務要阻塞等，送圖要立刻拒絕。
+# 去背服務端本來就是全程序一把鎖，這裡不擋的話第二張只是排在
+# 對方的鎖後面，瀏覽器看不出差別，等滿逾時換下一張。
+CUT_BUSY = threading.Semaphore(1)
 
 
 def cut_installed():
@@ -1591,14 +1610,23 @@ def cut_gpu_block():
             return ""
         if LLAMA_INFLIGHT[0] > 0 and llama_here:
             return "LLM 正在生成劇情，GPU 忙碌中"
-        if comfy_here and comfy_busy():
-            return "ComfyUI 正在算圖，GPU 忙碌中"
+        if comfy_here:
+            b = comfy_busy()
+            if b:
+                return "ComfyUI 正在算圖，GPU 忙碌中"
+            # 不知道就當成忙。這條守門的全部意義就是「別在對方算圖時去碰同一張卡」，
+            # 猜錯的代價是整台機器一起慢。
+            if b is None:
+                return "ComfyUI 沒在期限內回應佇列查詢（多半正忙），GPU 狀態不明"
         return ""
     # mode == "0"：不管在哪一台，對方忙就擋
     if LLAMA_INFLIGHT[0] > 0:
         return "LLM 正在生成劇情，GPU 忙碌中"
-    if comfy_busy():
+    b = comfy_busy()
+    if b:
         return "ComfyUI 正在算圖，GPU 忙碌中"
+    if b is None:
+        return "ComfyUI 沒在期限內回應佇列查詢（多半正忙），GPU 狀態不明"
     return ""
 
 
@@ -3559,19 +3587,27 @@ class H(SimpleHTTPRequestHandler):
                 cut_ensure()
             except SubmitError as e:
                 return self.send_json({"error": e.msg}, e.code)
+            if not CUT_BUSY.acquire(blocking=False):
+                return self.send_json({"error": "上一張還在去背——同一張卡一次只做一張，"
+                                                "等它完成再送。", "blocked": True}, 409)
             try:
                 if not body.get("model"):
                     body["model"] = CONFIG.get("matte_model") or MATTE_DEFAULT
                 req = urllib.request.Request(CUT_URL + "/matte", method="POST",
                                              data=json.dumps(body).encode("utf-8"),
                                              headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=300) as r:
+                # 瀏覽器 120 秒就中止，而中止傳不到這裡。原本等 300 秒，
+                # 等於每放棄一張就在 GPU 上多留三分鐘沒人認領的工作——
+                # UI 已經顯示失敗了，機器還在忙。比瀏覽器早一點放手。
+                with urllib.request.urlopen(req, timeout=110) as r:
                     return self.send_json(json.loads(r.read().decode("utf-8")))
             except urllib.error.HTTPError as e:
                 try: return self.send_json(json.loads(e.read().decode("utf-8")), e.code)
                 except Exception: return self.send_json({"error": "去背服務回應異常"}, 502)
             except Exception as e:
                 return self.send_json({"error": str(e)[:200]}, 502)
+            finally:
+                CUT_BUSY.release()
 
         if p == "/api/cutout/segment":
             body = self.read_json()
