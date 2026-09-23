@@ -1,0 +1,464 @@
+{
+ "last_node_id": 9,
+ "last_link_id": 10,
+ "nodes": [
+  {
+   "id": 1,
+   "type": "CheckpointLoaderSimple",
+   "pos": [
+    40,
+    40
+   ],
+   "size": [
+    380,
+    98
+   ],
+   "flags": {},
+   "order": 0,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "MODEL",
+     "type": "MODEL",
+     "links": [
+      2
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "CLIP",
+     "type": "CLIP",
+     "links": [
+      1
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "VAE",
+     "type": "VAE",
+     "links": null,
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CheckpointLoaderSimple"
+   },
+   "widgets_values": [
+    "sam3.1_multiplex_fp16.safetensors"
+   ],
+   "title": "1. SAM3 模型（同時給 MODEL 與 CLIP）"
+  },
+  {
+   "id": 2,
+   "type": "LoadImage",
+   "pos": [
+    40,
+    200
+   ],
+   "size": [
+    380,
+    320
+   ],
+   "flags": {},
+   "order": 1,
+   "mode": 0,
+   "inputs": [],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      3,
+      7
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": null,
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "LoadImage"
+   },
+   "widgets_values": [
+    "sam3_demo.png",
+    "image"
+   ],
+   "title": "2. 來源圖片"
+  },
+  {
+   "id": 3,
+   "type": "CLIPTextEncode",
+   "pos": [
+    460,
+    40
+   ],
+   "size": [
+    420,
+    140
+   ],
+   "flags": {},
+   "order": 2,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "clip",
+     "type": "CLIP",
+     "link": 1
+    }
+   ],
+   "outputs": [
+    {
+     "name": "CONDITIONING",
+     "type": "CONDITIONING",
+     "links": [
+      4
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "CLIPTextEncode"
+   },
+   "widgets_values": [
+    "person:2"
+   ],
+   "title": "3. 文字提示 ← 改這裡（:2 = 最多抓 2 個）"
+  },
+  {
+   "id": 4,
+   "type": "SAM3_Detect",
+   "pos": [
+    460,
+    230
+   ],
+   "size": [
+    420,
+    200
+   ],
+   "flags": {},
+   "order": 3,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "model",
+     "type": "MODEL",
+     "link": 2
+    },
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 3
+    },
+    {
+     "name": "conditioning",
+     "type": "CONDITIONING",
+     "link": 4
+    },
+    {
+     "name": "bboxes",
+     "type": "BOUNDING_BOX",
+     "link": null
+    },
+    {
+     "name": "positive_coords",
+     "type": "STRING",
+     "link": null
+    },
+    {
+     "name": "negative_coords",
+     "type": "STRING",
+     "link": null
+    }
+   ],
+   "outputs": [
+    {
+     "name": "masks",
+     "type": "MASK",
+     "links": [
+      5,
+      10
+     ],
+     "slot_index": 0
+    },
+    {
+     "name": "bboxes",
+     "type": "BOUNDING_BOX",
+     "links": null,
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "SAM3_Detect"
+   },
+   "widgets_values": [
+    0.3,
+    2,
+    true
+   ],
+   "title": "4. SAM3 偵測（個別 mask = true 才會每人一張）"
+  },
+  {
+   "id": 5,
+   "type": "MaskToImage",
+   "pos": [
+    930,
+    40
+   ],
+   "size": [
+    240,
+    50
+   ],
+   "flags": {},
+   "order": 4,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "mask",
+     "type": "MASK",
+     "link": 5
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      6
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "MaskToImage"
+   },
+   "widgets_values": []
+  },
+  {
+   "id": 6,
+   "type": "PreviewImage",
+   "pos": [
+    930,
+    140
+   ],
+   "size": [
+    330,
+    300
+   ],
+   "flags": {},
+   "order": 5,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 6
+    }
+   ],
+   "outputs": [],
+   "properties": {
+    "Node name for S&R": "PreviewImage"
+   },
+   "widgets_values": [],
+   "title": "遮罩預覽（白＝選中）"
+  },
+  {
+   "id": 9,
+   "type": "InvertMask",
+   "pos": [
+    930,
+    470
+   ],
+   "size": [
+    240,
+    50
+   ],
+   "flags": {},
+   "order": 8,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "mask",
+     "type": "MASK",
+     "link": 10
+    }
+   ],
+   "outputs": [
+    {
+     "name": "MASK",
+     "type": "MASK",
+     "links": [
+      8
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "InvertMask"
+   },
+   "widgets_values": [],
+   "title": "必要！JoinImageWithAlpha 會自己反相一次"
+  },
+  {
+   "id": 7,
+   "type": "JoinImageWithAlpha",
+   "pos": [
+    930,
+    560
+   ],
+   "size": [
+    260,
+    66
+   ],
+   "flags": {},
+   "order": 6,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "image",
+     "type": "IMAGE",
+     "link": 7
+    },
+    {
+     "name": "alpha",
+     "type": "MASK",
+     "link": 8
+    }
+   ],
+   "outputs": [
+    {
+     "name": "IMAGE",
+     "type": "IMAGE",
+     "links": [
+      9
+     ],
+     "slot_index": 0
+    }
+   ],
+   "properties": {
+    "Node name for S&R": "JoinImageWithAlpha"
+   },
+   "widgets_values": []
+  },
+  {
+   "id": 8,
+   "type": "SaveImage",
+   "pos": [
+    930,
+    670
+   ],
+   "size": [
+    330,
+    300
+   ],
+   "flags": {},
+   "order": 7,
+   "mode": 0,
+   "inputs": [
+    {
+     "name": "images",
+     "type": "IMAGE",
+     "link": 9
+    }
+   ],
+   "outputs": [],
+   "properties": {
+    "Node name for S&R": "SaveImage"
+   },
+   "widgets_values": [
+    "sam3_cutout"
+   ],
+   "title": "去背成品（每人一張 RGBA PNG）"
+  }
+ ],
+ "links": [
+  [
+   1,
+   1,
+   1,
+   3,
+   0,
+   "CLIP"
+  ],
+  [
+   2,
+   1,
+   0,
+   4,
+   0,
+   "MODEL"
+  ],
+  [
+   3,
+   2,
+   0,
+   4,
+   1,
+   "IMAGE"
+  ],
+  [
+   4,
+   3,
+   0,
+   4,
+   2,
+   "CONDITIONING"
+  ],
+  [
+   5,
+   4,
+   0,
+   5,
+   0,
+   "MASK"
+  ],
+  [
+   6,
+   5,
+   0,
+   6,
+   0,
+   "IMAGE"
+  ],
+  [
+   7,
+   2,
+   0,
+   7,
+   0,
+   "IMAGE"
+  ],
+  [
+   8,
+   9,
+   0,
+   7,
+   1,
+   "MASK"
+  ],
+  [
+   9,
+   7,
+   0,
+   8,
+   0,
+   "IMAGE"
+  ],
+  [
+   10,
+   4,
+   0,
+   9,
+   0,
+   "MASK"
+  ]
+ ],
+ "groups": [],
+ "config": {},
+ "extra": {},
+ "version": 0.4
+}

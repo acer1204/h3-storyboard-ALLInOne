@@ -1698,6 +1698,84 @@ def cut_gpu_block():
 
 
 
+
+# ---------- SAM3 person 閘 ----------
+# BiRefNet 是「顯著物件」分割，人坐在床上床就算主體——這是語意判斷，
+# 拉高解析度與換權重都量過，救不了。text prompt 的分割器根本沒有
+# 「顯著性」這個概念：說 person 就只有 person。
+SAM3_WF = os.path.join(ROOT, "workflows", "SAM3_人物分離去背.json")
+# 實測：一張畫面兩個人時，光寫 person 只抓到其中一個（覆蓋 27.6%），
+# person:2 兩個都抓到（65.2%）。:N 是注意力權重不是人數，而且會飽和——
+# :99 跟 :2 的結果一模一樣；畫面只有一個人時 person / :2 / :99 也完全相同。
+SAM3_PROMPT_DEF = "person:2"
+
+
+def sam3_ready():
+    """能不能用。任何一環不在就回 False，前端連選項都不會顯示。"""
+    if not os.path.exists(SAM3_WF):
+        return False
+    try:
+        return bool(comfy_api("/object_info/SAM3_Detect", timeout=6))
+    except Exception:
+        return False
+
+
+def sam3_mask(durl, prompt="", thr=0.3):
+    """跑使用者自己建的那個工作流，回一張帶 alpha 的 PNG dataURL。
+
+    individual_masks 強制轉 False：它預設會每個人各一張遮罩，
+    只拿到其中一張的話，畫面上另一個人會被當成背景刪掉——
+    實測時就是這樣把紫髮那個角色整個弄不見的。"""
+    from ui2api import ui_to_api
+    import urllib.parse as _p
+    with open(SAM3_WF, encoding="utf-8") as f:
+        ui = json.load(f)
+    api, _warn = ui_to_api(ui, comfy_api("/object_info", timeout=30))
+    head, b64 = (durl.split(",", 1) + [""])[:2] if "," in durl else ("", durl)
+    ext = "png" if "png" in head.lower() else "jpg"
+    name = "h3_sam3_%d.%s" % (int(time.time() * 1000), ext)
+    comfy_upload(name, base64.b64decode(b64), "image/" + ("png" if ext == "png" else "jpeg"))
+    for node in api.values():
+        ct = node.get("class_type")
+        if ct == "LoadImage":
+            node["inputs"]["image"] = name
+        elif ct == "CLIPTextEncode":
+            node["inputs"]["text"] = (prompt or SAM3_PROMPT_DEF).strip()
+        elif ct == "SAM3_Detect":
+            node["inputs"]["threshold"] = float(thr)
+            node["inputs"]["individual_masks"] = False
+    pid = comfy_api("/prompt", {"prompt": api}, timeout=60).get("prompt_id")
+    if not pid:
+        raise SubmitError("ComfyUI 沒收下這個工作流", 502)
+    t0 = time.time()
+    while time.time() - t0 < 300:
+        time.sleep(0.5)
+        h = comfy_api("/history/" + pid, timeout=30)
+        if h.get(pid):
+            break
+    else:
+        raise SubmitError("SAM3 跑太久（超過 300 秒）", 504)
+    # 這個工作流有兩個輸出節點：PreviewImage（遮罩轉 RGB，沒有 alpha）
+    # 與 SaveImage（RGBA）。拿到 RGB 那張的話 alpha 全是 255，前端會把它
+    # 當成「全部都是主體」而翻成全空。按 PNG 的 IHDR 色彩類型挑：
+    # 6=RGBA、4=灰階+alpha。不需要影像函式庫。
+    best = None
+    for _nid, d in (h[pid].get("outputs") or {}).items():
+        for im in (d.get("images") or []):
+            q = "?filename=%s&subfolder=%s&type=%s" % (
+                _p.quote(im["filename"]), _p.quote(im.get("subfolder", "")),
+                im.get("type", "output"))
+            raw = urllib.request.urlopen(COMFY_URL + "/view" + q, timeout=120).read()
+            ct = raw[25] if len(raw) > 25 and raw[1:4] == b"PNG" else -1
+            if ct in (4, 6):
+                return "data:image/png;base64," + base64.b64encode(raw).decode()
+            if best is None:
+                best = raw
+    if best is not None:
+        slog("  [sam3] 警告：所有輸出都沒有 alpha 通道，退而用第一張")
+        return "data:image/png;base64," + base64.b64encode(best).decode()
+    raise SubmitError("SAM3 沒有輸出圖片", 502)
+
 def comfy_submit(body):
     """一筆送單 -> ComfyUI 的 prompt_id。/api/comfy/run 與佇列派工共用，
     確保兩條路徑的圖片解析、上傳、建圖與參數覆寫完全一致。"""
@@ -3038,8 +3116,15 @@ class H(SimpleHTTPRequestHandler):
 
         if p == "/api/matte/models":
             h = cut_ping()
-            return self.send_json({"models": matte_models(),
+            ms = matte_models()
+            # SAM3 不是 BiRefNet 權重，是另一種方式；放同一個下拉選單是
+            # 因為使用者要選的就是「用哪一種去背」。環境不齊就不出現。
+            if sam3_ready():
+                ms = ms + [{"name": "sam3", "kind": "sam3", "mb": 1665, "image_size": 0,
+                            "label": "SAM3（文字指定主體）"}]
+            return self.send_json({"models": ms,
                                    "default": CONFIG.get("matte_model") or MATTE_DEFAULT,
+                                   "sam3_prompt": SAM3_PROMPT_DEF,
                                    "loaded": (h or {}).get("bref_loaded")})
 
         if p == "/api/gpu":
@@ -3651,6 +3736,28 @@ class H(SimpleHTTPRequestHandler):
             QWAKE.set()
             return self.send_json({"state": "canceled"})
 
+        if p == "/api/matte/sam3":
+            body = self.read_json()
+            if not isinstance(body, dict):
+                return self.send_json({"error": "empty body"}, 400)
+            if getattr(self, "body_too_big", 0):
+                return self.send_json({"error": "圖片太大（%.1f MB，上限 %d MB）"
+                                       % (self.body_too_big / 1048576.0, MAX_BODY // 1048576)}, 413)
+            if not sam3_ready():
+                return self.send_json({"error": "SAM3 用不了：需要 ComfyUI 在跑、有 SAM3_Detect 節點，且 workflows/ 裡有那個工作流。"}, 501)
+            t0 = time.time()
+            try:
+                png = sam3_mask(str(body.get("image") or ""),
+                                str(body.get("prompt") or ""),
+                                body.get("threshold") or 0.3)
+            except SubmitError as e:
+                slog("  [sam3] 失敗：%s" % e.msg)
+                return self.send_json({"error": e.msg}, e.code)
+            except Exception as e:
+                slog("  [sam3] 失敗：%s" % str(e)[:160])
+                return self.send_json({"error": str(e)[:200]}, 502)
+            slog("  [sam3] 遮罩完成 %.1fs" % (time.time() - t0))
+            return self.send_json({"png": png, "elapsed": round(time.time() - t0, 2)})
         if p == "/api/matte":
             body = self.read_json()
             if getattr(self, "body_too_big", 0):

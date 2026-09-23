@@ -272,6 +272,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 #cutBox .cutft{display:flex;align-items:center;gap:8px;padding:11px 14px;border-top:1px solid var(--line);
   flex-wrap:wrap}
 #cutBox .cutft .hint{font-size:11px;font-family:ui-monospace,Consolas,monospace}
+/* 選中的工具要一眼看得出來，否則會在不知道哪支筆開著的情況下塗下去。 */
+#cutBox .cutft button.on{border-color:var(--acc);color:var(--acc);background:rgba(255,255,255,.04)}
 #cutStage{position:relative}
 /* 遇到首次載入模型時要讓人看得出來它在動，不然會以為卡死 */
 #cutBusyBox{position:absolute;inset:0;display:none;flex-direction:column;align-items:center;
@@ -638,18 +640,34 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div id="cutBox">
       <div class="cuthd">
         <b>✂ 去背景</b>
-        <span class="hint">自動偵測主體，不用點選。換模型或底色會重新計算。</span>
+        <span class="hint">選好模式與底色再按執行。結果出來後可以用下方的筆刷修補。</span>
         <button class="ghost mini" id="cutX">關閉</button>
       </div>
       <div id="cutStage"><canvas id="cutCv"></canvas>
         <div id="cutBusyBox"><div class="spin"></div><b id="cutBusyMsg">處理中…</b>
           <span id="cutBusySub" class="hint"></span></div>
       </div>
+      <div class="cutft" id="cutTools" style="display:none">
+        <span class="hint" style="margin:0">修補</span>
+        <button class="ghost mini" id="cutErase">⬜ 擦除</button>
+        <button class="ghost mini" id="cutRestore">↺ 塗回原圖</button>
+        <label class="small" style="display:flex;align-items:center;gap:6px">筆刷
+          <input type="range" id="cutBrush" min="6" max="300" value="48"
+                 style="width:120px;min-height:0"></label>
+        <span class="hint" id="cutBrushN" style="margin:0;min-width:42px"></span>
+        <button class="ghost mini" id="cutUndo" disabled>↶ 復原</button>
+        <button class="ghost mini" id="cutReset">↻ 重來</button>
+        <span style="flex:1"></span>
+        <span class="hint" id="cutEditN" style="margin:0"></span>
+      </div>
       <div class="cutft">
         <button class="ghost mini" id="cutEye" disabled>👁 看原圖</button>
         <span style="flex:1"></span>
         <label class="small" style="display:flex;align-items:center;gap:6px">模型
           <select id="cutModel" class="no-i18n" style="width:auto;padding:3px 6px"></select></label>
+        <label class="small" id="cutPromptBox" style="display:none;align-items:center;gap:6px">主體
+          <input type="text" id="cutPrompt" class="no-i18n" placeholder="person"
+                 style="width:140px;padding:3px 6px" title="要留下來的東西，英文。例：person / person, dog"></label>
         <label class="small" style="display:flex;align-items:center;gap:6px">背景
           <select id="cutBg" class="no-i18n" style="width:auto;padding:3px 6px">
             <option value="">透明</option><option value="#808080">中性灰</option>
@@ -920,6 +938,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
         <div><label>第一張</label><select id="cutFirst">
           <option value="0">跳過不去背</option>
           <option value="1">也一起去背</option></select></div>
+        <div><label>SAM3 要留下的主體（英文）</label>
+          <input type="text" id="cutPromptDef" class="no-i18n" placeholder="person"></div>
         <div><label>去掉背景後填什麼</label><select id="cutBgDef" class="no-i18n">
           <option value="">透明（保留 alpha）</option>
           <option value="#808080">中性灰</option>
@@ -1183,7 +1203,7 @@ const FIELDS={tr:"#tr",
               retry:"#retry",retrylvl:"#retrylvl",mode:"#mode",
               wfps:"#wfps",wres:"#wres",wsteps:"#wsteps",wsv:"#wsv",wsa:"#wsa",wdur:"#wdur",
               cutBusy:"#cutBusy",matteModel:"#matteModel",cutFirst:"#cutFirst",
-              cutBgDef:"#cutBgDef"};
+              cutBgDef:"#cutBgDef",cutPromptDef:"#cutPromptDef"};
 /* 共用設定：這些鍵存在伺服器端 settings.json，換瀏覽器或換電腦都是同一份。
    只有介面語言留在本機——同一台電腦不同人用不同語言是合理的，
    其餘設定分歧只會造成困擾。讀取走記憶體鏡像 SHARED（開頁時由 /api/settings 灌入），
@@ -2573,7 +2593,10 @@ slotMenuAdd({id: "remove", label: "✕ 移除這格", hint: "清空這個格子"
 /* 去背用 BiRefNet：整張圖丟進去、模型自己判斷主體，沒有點選也沒有提示詞。
    輸出是連續 alpha（不是二值），面紗那種半透明才有辦法正確表達。 */
 const CUT = {file: null, slot: -1, img: null, url: "", busy: false, info: "",
-             cut: null, bg: "", preview: false, hasCut: false, models: null, loaded: null};
+             cut: null, bg: "", preview: false, hasCut: false, models: null, loaded: null,
+             /* edit 是可編輯的全解析度副本；cut 保持模型原始結果不動，
+                「重來」才有東西可以回去。 */
+             edit: null, tool: "", brush: 48, undo: [], strokes: 0, mx: -1, my: -1};
 
 /* 設定存的是 JSON 字串，store.get 不會替你 parse */
 function mattePref(){
@@ -2583,11 +2606,15 @@ function mattePref(){
 async function cutModels(force){
   if (CUT.models && !force) return CUT.models;
   try{
-    const r = await (await fetch("/api/matte/models")).json();
+    const r = await (await tfetch("/api/matte/models", null, 30000)).json();
     CUT.models = r.models || [];
     CUT.loaded = r.loaded || null;          // 已經在 VRAM 裡的模型名，用來決定提示文字
-    const opts = CUT.models.map(m =>
-      `<option value="${esc(m.name)}">${esc(m.name.replace(/\.safetensors$/, ""))} · ${m.mb}MB · ${m.image_size}px</option>`).join("");
+    CUT.sam3def = r.sam3_prompt || "person";
+    /* SAM3 不是 BiRefNet 權重，沒有 image_size 可講，標題另外給。 */
+    const opts = CUT.models.map(m => m.kind === "sam3"
+      ? `<option value="${esc(m.name)}">${esc(m.label || "SAM3")}</option>`
+      : `<option value="${esc(m.name)}">${esc(m.name.replace(/\.safetensors$/, ""))} · ${m.mb}MB · ${m.image_size}px</option>`
+    ).join("");
     const pref = mattePref() || r.default;
     for (const id of ["#cutModel", "#matteModel"]){
       const sel = $(id);
@@ -2627,12 +2654,18 @@ async function cutOpen(i){
     /* 畫面要等版面定案才量得到尺寸，所以走 rAF；但去背本身不需要版面，
        不能一起放進去——分頁切到背景時 rAF 不會觸發，整個就像卡死。 */
     cutDraw(); cutStatus();        // 先把原圖畫上去，畫布不要空白等結果
-    if (!CUT.hasCut){ cutRun(); return; }
+    /* 一開視窗就送 GPU 的話，卡住時使用者連「發生什麼事」都看不出來，
+       也沒機會先換模型或改參數。選好方式，按下去才跑。 */
+    if (typeof cutPromptSync === "function") cutPromptSync();
+    if (!CUT.hasCut){
+      CUT.info = " · 選好模式與底色，再按「▶ 執行」"; cutStatus(); return;
+    }
     /* 這格已經去過背就把現成的拿出來，不要一開就重跡。
        重跡會洗掉使用者調好的結果，而且白燒一次 GPU。 */
     const prev = new Image();
     prev.onload = () => {
       CUT.cut = prev;
+      cutEditInit();
       CUT.info = " · 這格已去過背，顯示現有結果（按「重算」重做）";
       cutDraw(); cutStatus();
     };
@@ -2648,6 +2681,7 @@ function cutClose(){
   $("#cutWrap").style.display = "none";
   if (CUT.url){ try{ URL.revokeObjectURL(CUT.url); }catch(e){} CUT.url = ""; }
   CUT.img = null; CUT.cut = null;
+  CUT.edit = null; CUT.undo = []; CUT.strokes = 0; CUT.tool = ""; CUT.mx = CUT.my = -1;
 }
 
 let CUT_REDRAW = null;
@@ -2684,9 +2718,94 @@ function cutDraw(){
           g.fillRect(x, y, t, t);
         }
     }
-    g.drawImage(CUT.cut, 0, 0, cv.width, cv.height);
+    g.drawImage(cutSurface(), 0, 0, cv.width, cv.height);
   }
   cv.dataset.scale = String(sc);
+  /* 筆刷圈：不畫的話完全不知道一筆會吃多大。 */
+  if (CUT.tool && CUT.mx >= 0 && !CUT.preview){
+    const r = CUT.brush * sc;
+    g.save();
+    g.lineWidth = 1.5; g.strokeStyle = CUT.tool === "erase" ? "#ff6b6b" : "#6bd18a";
+    g.beginPath(); g.arc(CUT.mx * sc, CUT.my * sc, r, 0, 6.2832); g.stroke();
+    g.strokeStyle = "rgba(0,0,0,.55)"; g.lineWidth = 1;
+    g.beginPath(); g.arc(CUT.mx * sc, CUT.my * sc, r + 1.2, 0, 6.2832); g.stroke();
+    g.restore();
+  }
+}
+
+/* ---------- 去背結果的手動修補 ----------
+   BiRefNet 是「顯著物件」分割：人物坐在床上，床就被算進主體。
+   實測過拉高 image_size（1024/1536/2048）與換模型都救不了——
+   那是語意判斷，不是解析度問題。能救的只有讓人自己指出哪一塊該去掉。 */
+function cutEditInit(){
+  CUT.edit = null; CUT.undo = []; CUT.strokes = 0; CUT.tool = "";
+  if (CUT.cut && CUT.img){
+    const c = document.createElement("canvas");
+    c.width = CUT.img.naturalWidth; c.height = CUT.img.naturalHeight;
+    c.getContext("2d").drawImage(CUT.cut, 0, 0, c.width, c.height);
+    CUT.edit = c;
+  }
+  cutToolsSync();
+}
+function cutSurface(){ return CUT.edit || CUT.cut; }
+function cutSnap(){
+  if (!CUT.edit) return;
+  const c = document.createElement("canvas");
+  c.width = CUT.edit.width; c.height = CUT.edit.height;
+  c.getContext("2d").drawImage(CUT.edit, 0, 0);
+  CUT.undo.push(c);
+  /* 一張全解析度 RGBA 就是十幾 MB，留太多步會把分頁吃掉。 */
+  while (CUT.undo.length > 6) CUT.undo.shift();
+}
+/* 筆刷邊緣做成軟的：硬邊在半透明的髮絲上會留一條明顯的弧。 */
+function cutBrushGrad(g, cx, cy, r){
+  const gr = g.createRadialGradient(cx, cy, r * 0.6, cx, cy, r);
+  gr.addColorStop(0, "rgba(0,0,0,1)");
+  gr.addColorStop(1, "rgba(0,0,0,0)");
+  return gr;
+}
+function cutDab(ix, iy){
+  if (!CUT.edit || !CUT.tool) return;
+  const r = Math.max(3, CUT.brush), g = CUT.edit.getContext("2d");
+  if (CUT.tool === "erase"){
+    g.save();
+    g.globalCompositeOperation = "destination-out";
+    g.fillStyle = cutBrushGrad(g, ix, iy, r);
+    g.beginPath(); g.arc(ix, iy, r, 0, 6.2832); g.fill();
+    g.restore();
+    return;
+  }
+  /* 塗回來＝把原圖那一塊貼回去。模型削掉的地方沒有「原本的 alpha」
+     可以回復，只能拿原圖的像素。暫存只做筆刷大小，不是整張——
+     一筆一張全解析度暫存的話，拖快一點就卡住了。 */
+  const d = Math.ceil(r * 2), t = document.createElement("canvas");
+  t.width = d; t.height = d;
+  const tg = t.getContext("2d");
+  tg.fillStyle = cutBrushGrad(tg, r, r, r);
+  tg.beginPath(); tg.arc(r, r, r, 0, 6.2832); tg.fill();
+  tg.globalCompositeOperation = "source-in";
+  tg.drawImage(CUT.img, ix - r, iy - r, d, d, 0, 0, d, d);
+  g.drawImage(t, ix - r, iy - r);
+}
+/* 拖得快時指標事件是跳躍的，不補中間點會寫成一顆一顆。 */
+function cutStroke(x0, y0, x1, y1){
+  const dx = x1 - x0, dy = y1 - y0;
+  const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / Math.max(3, CUT.brush * 0.3)));
+  for (let i = 1; i <= n; i++) cutDab(x0 + dx * i / n, y0 + dy * i / n);
+}
+function cutToolsSync(){
+  const bar = $("#cutTools");
+  if (bar) bar.style.display = CUT.edit ? "" : "none";
+  const on = (id, v) => { const b = $(id); if (b) b.classList.toggle("on", v); };
+  on("#cutErase", CUT.tool === "erase");
+  on("#cutRestore", CUT.tool === "restore");
+  if ($("#cutUndo")) $("#cutUndo").disabled = !CUT.undo.length;
+  if ($("#cutReset")) $("#cutReset").disabled = !CUT.strokes;
+  if ($("#cutBrushN")) $("#cutBrushN").textContent = CUT.brush + " px";
+  if ($("#cutEditN")) $("#cutEditN").textContent =
+    CUT.strokes ? ("已修補 " + CUT.strokes + " 筆") : "在圖上拖曳即可修補";
+  const cv = $("#cutCv");
+  if (cv) cv.style.cursor = CUT.tool ? "none" : "";
 }
 
 function cutStatus(){
@@ -2697,8 +2816,11 @@ function cutStatus(){
   const bb = $("#cutBusyBox");
   if (bb) bb.className = CUT.busy ? "on" : "";
   $("#cutRun").disabled = CUT.busy;
+  /* 沒結果時它是「執行」，有結果時才是「重算」——
+     一直寫「重算」會讓人以為已經跑過一次了。 */
+  $("#cutRun").textContent = cutSurface() ? "↻ 重算" : "▶ 執行";
   $("#cutModel").disabled = CUT.busy;
-  $("#cutApply").disabled = CUT.busy || !CUT.cut;
+  $("#cutApply").disabled = CUT.busy || !cutSurface();
   $("#cutOrig").disabled = CUT.busy || !CUT.hasCut;
   const eye = $("#cutEye");
   eye.disabled = CUT.busy || !CUT.cut;
@@ -2714,6 +2836,84 @@ function cutTick(stop){
   CUT_TICK = setInterval(() => {
     if (sub) sub.textContent = ((Date.now() - t0) / 1000).toFixed(1) + " s";
   }, 100);
+}
+/* ---------- SAM3 person 閘 ----------
+   BiRefNet 是「顯著物件」分割：人坐在床上，床就算主體。實測過拉高
+   解析度（1024/1536/2048）與換權重都救不了——那是語意判斷。
+   text prompt 的分割器根本沒有「顯著性」這個概念：說 person 就只有 person。
+   實測（使用者的失敗圖）：床整片消失、沙色殘留消失，角色完好；
+   三張本來就乾淨的主體保留 0.997-0.999、誤刪 0.07-0.18%。 */
+function cutDilate(mask, w, h){
+  /* 閘是否決，不是邊界：寧可放寬一點，也不要把髮絲切掉。
+     模糊再疊幾次，是 canvas 上最便宜的膨脹近似；逐像素跑迴圈在
+     兩千萬像素的圖上會明顯卡頓。 */
+  const r = Math.max(2, Math.round(Math.min(w, h) * 0.012));
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d");
+  g.filter = "blur(" + r + "px)";
+  for (let i = 0; i < 5; i++) g.drawImage(mask, 0, 0, w, h);
+  g.filter = "none";
+  return c;
+}
+async function cutSam3(brefImg, b64, prompt){
+  /* 要跑 ComfyUI，慢是正常的（實測 6-20 秒），但不能沒上限——
+     沒期限的 fetch 不回來，編輯器就永遠卡在處理中。 */
+  const r = await (await tfetch("/api/matte/sam3", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({image: b64, prompt: prompt})}, 180000)).json();
+  if (r.error) throw new Error(r.error);
+  const mk = await deadline(30000, "SAM3 遮罩解編碼", (ok, no) => {
+    const x = new Image();
+    x.onload = () => ok(x);
+    x.onerror = () => no(new Error("SAM3 遮罩讀不開"));
+    x.src = r.png;
+  });
+  const w = brefImg.naturalWidth, h = brefImg.naturalHeight;
+  /* 遮罩極性：跟 BiRefNet 重疊高的那個方向才是主體。
+     工作流裡有 InvertMask，而使用者隨時可能改接線，不能寫死。 */
+  const probe = (im) => {
+    const t = document.createElement("canvas");
+    t.width = 64; t.height = 64;
+    const tg = t.getContext("2d");
+    tg.drawImage(im, 0, 0, 64, 64);
+    const d = tg.getImageData(0, 0, 64, 64).data;
+    let sum = 0;
+    for (let i = 3; i < d.length; i += 4) sum += d[i];
+    return sum / (64 * 64 * 255);
+  };
+  let cov = probe(mk);
+  let src = mk;
+  if (cov > 0.92){
+    /* 幾乎全不透明＝拿到的是反面，翻過來。 */
+    const t = document.createElement("canvas");
+    t.width = w; t.height = h;
+    const tg = t.getContext("2d");
+    tg.fillStyle = "#000"; tg.fillRect(0, 0, w, h);
+    tg.globalCompositeOperation = "destination-out";
+    tg.drawImage(mk, 0, 0, w, h);
+    src = t; cov = probe(t);
+  }
+  /* 遮罩空掉或小得不像話時，相乘會同出一張全透明的圖。
+     寧可不閘，也不要還一張空白回去。 */
+  if (cov < 0.02) return {img: brefImg, skipped: "SAM3 沒找到主體，此次不閘", cov: cov};
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d");
+  g.drawImage(brefImg, 0, 0, w, h);
+  /* destination-in 就是 dst.alpha × src.alpha，正好是要的相乘。 */
+  g.globalCompositeOperation = "destination-in";
+  g.drawImage(cutDilate(src, w, h), 0, 0);
+  g.globalCompositeOperation = "source-over";
+  const out = await deadline(30000, "合成", (ok, no) =>
+    c.toBlob(b => b ? ok(b) : no(new Error("合成失敗")), "image/png"));
+  const im2 = await deadline(30000, "結果載入", (ok, no) => {
+    const x = new Image();
+    x.onload = () => { URL.revokeObjectURL(x.src); ok(x); };
+    x.onerror = () => no(new Error("合成結果讀不開"));
+    x.src = URL.createObjectURL(out);
+  });
+  return {img: im2, cov: cov, elapsed: r.elapsed};
 }
 async function cutRun(){
   if (CUT.busy || !CUT.file) return;
@@ -2731,17 +2931,37 @@ async function cutRun(){
       const fr = new FileReader(); fr.onload = () => res(fr.result);
       fr.onerror = () => rej(new Error("讀檔失敗")); fr.readAsDataURL(CUT.file);
     });
-    const r = await (await fetch("/api/matte", {method: "POST",
+    const sam3 = cutIsSam3();
+    /* 首次要搬權重進 VRAM，十幾秒跑不掉；但一定要有上限。 */
+    const r = await (await tfetch("/api/matte", {method: "POST",
       headers: {"Content-Type": "application/json"},
+      /* SAM3 模式下 BiRefNet 照跑，只是拿預設權重；它負責軟邊，
+         SAM3 只負責「什麼算主體」。 */
       body: JSON.stringify({image: b64, bg: null,        // 永遠要 alpha 版，底色本地合成
-        model: $("#cutModel") ? $("#cutModel").value : ""})})).json();
+        model: sam3 ? "" : ($("#cutModel") ? $("#cutModel").value : "")})}, 180000)).json();
     if (r.error){ CUT.info = " · " + r.error; CUT.busy = false; cutTick(true);
                   cutDraw(); cutStatus(); return; }
     const im = new Image();
-    im.onload = () => {
-      CUT.cut = im; CUT.busy = false; CUT.preview = false; CUT.loaded = r.model || CUT.loaded;
+    im.onload = async () => {
+      CUT.loaded = r.model || CUT.loaded;
+      let use = im, extra = "";
+      if (sam3){
+        const msg2 = $("#cutBusyMsg");
+        if (msg2) msg2.textContent = "SAM3 找主體中…";
+        try{
+          const g = await cutSam3(im, b64, ($("#cutPrompt") || {}).value || "");
+          use = g.img;
+          extra = g.skipped ? (" · " + g.skipped)
+                            : ` · SAM3 ${(g.cov * 100).toFixed(0)}%${g.elapsed ? " · " + g.elapsed + "s" : ""}`;
+        }catch(e){
+          /* SAM3 掛了就退回純 BiRefNet，不要讓整個去背失敗。 */
+          extra = " · SAM3 失敗，只用 BiRefNet：" + (e.message || e);
+        }
+      }
+      CUT.cut = use; CUT.busy = false; CUT.preview = false;
+      cutEditInit();               // 重算就是一張新的，舊的修補沒有地方可以貼
       cutTick(true);
-      CUT.info = ` · 保留 ${(r.covered * 100).toFixed(0)}% · 軟邊 ${r.soft} px · ${r.elapsed}s`;
+      CUT.info = ` · 保留 ${(r.covered * 100).toFixed(0)}% · 軟邊 ${r.soft} px · ${r.elapsed}s` + extra;
       cutDraw(); cutStatus();
     };
     im.onerror = () => { CUT.info = " · 結果讀不開"; CUT.busy = false; cutTick(true);
@@ -2754,12 +2974,12 @@ async function cutRun(){
 }
 
 async function cutApply(){
-  if (!CUT.cut) return;
+  if (!cutSurface()) return;
   const c = document.createElement("canvas");
   c.width = CUT.img.naturalWidth; c.height = CUT.img.naturalHeight;
   const g = c.getContext("2d");
   if (CUT.bg){ g.fillStyle = CUT.bg; g.fillRect(0, 0, c.width, c.height); }
-  g.drawImage(CUT.cut, 0, 0, c.width, c.height);
+  g.drawImage(cutSurface(), 0, 0, c.width, c.height);
   const blob = await new Promise(r => c.toBlob(r, "image/png"));
   const name = (CUT.file.name || "image").replace(/\.[^.]+$/, "") + "-cutout.png";
   setSlot(CUT.slot, new File([blob], name, {type: "image/png"}), CUT.file);
@@ -2876,7 +3096,22 @@ window.addEventListener("resize", () => {
   if ($("#cutWrap") && $("#cutWrap").style.display === "flex"){ cutDraw(); cutStatus(); }
 });
 $("#cutX") && ($("#cutX").onclick = cutClose);
-$("#cutModel") && ($("#cutModel").onchange = () => cutRun());
+function cutIsSam3(){ return ($("#cutModel") || {}).value === "sam3"; }
+function cutPromptSync(){
+  const box = $("#cutPromptBox");
+  if (box) box.style.display = cutIsSam3() ? "flex" : "none";
+  const inp = $("#cutPrompt");
+  if (inp && !inp.value){
+    let d = "";
+    try{ d = (JSON.parse(store.get(SKEY) || "{}") || {}).cutPromptDef || ""; }catch(e){}
+    inp.value = d || CUT.sam3def || "person";
+  }
+}
+/* 換模型不再偷偷重跑：同樣是「按了才跑」。 */
+$("#cutModel") && ($("#cutModel").onchange = () => {
+  cutPromptSync();
+  CUT.info = " · 已換模型，按「▶ 執行」重新計算"; cutStatus();
+});
 $("#cutBusy") && ($("#cutBusy").addEventListener("change", () => setTimeout(cutStatLoad, 600)));
 $("#matteModel") && ($("#matteModel").onchange = () => { saveSettings(); });
 $("#cutBg") && ($("#cutBg").onchange = e => { CUT.bg = e.target.value; cutDraw(); cutStatus(); });
@@ -2888,6 +3123,74 @@ $("#cutOrig") && ($("#cutOrig").onclick = () => {
   renderSlots(); saveDraft(); cutClose();
 });
 $("#cutApply") && ($("#cutApply").onclick = cutApply);
+
+/* ---- 修補工具的事件 ---- */
+function cutPick(t){ CUT.tool = (CUT.tool === t) ? "" : t; cutToolsSync(); cutDraw(); }
+$("#cutErase") && ($("#cutErase").onclick = () => cutPick("erase"));
+$("#cutRestore") && ($("#cutRestore").onclick = () => cutPick("restore"));
+$("#cutBrush") && ($("#cutBrush").oninput = e => {
+  CUT.brush = Math.max(6, parseInt(e.target.value) || 48);
+  cutToolsSync(); cutDraw();
+});
+$("#cutUndo") && ($("#cutUndo").onclick = () => {
+  const prev = CUT.undo.pop();
+  if (!prev) return;
+  CUT.edit = prev;
+  CUT.strokes = Math.max(0, CUT.strokes - 1);
+  cutToolsSync(); cutDraw(); cutStatus();
+});
+$("#cutReset") && ($("#cutReset").onclick = () => {
+  /* 重來＝回到模型原本的結果。CUT.cut 從頭到尾沒被動過，
+     所以不用重新去一次背，也不會碰到 GPU。 */
+  const t = CUT.tool;
+  cutEditInit(); CUT.tool = t;
+  cutToolsSync(); cutDraw(); cutStatus();
+});
+
+/* 畫布上的拖曳。座標要從顯示尺寸換回圖片像素：
+   canvas 的內部尺寸跟 CSS 尺寸不一定一致，不先除回去會差一個 DPR。 */
+(function cutPaintInit(){
+  const cv = $("#cutCv");
+  if (!cv) return;
+  let drawing = false, lx = 0, ly = 0;
+  const toImg = ev => {
+    const r = cv.getBoundingClientRect();
+    const sc = +cv.dataset.scale || 1;
+    return [(ev.clientX - r.left) * (cv.width / r.width) / sc,
+            (ev.clientY - r.top) * (cv.height / r.height) / sc];
+  };
+  cv.addEventListener("pointerdown", ev => {
+    if (!CUT.tool || !CUT.edit || CUT.busy || CUT.preview) return;
+    ev.preventDefault();
+    /* 一筆存一次，不是一點存一次——否則復原一次只退一個小圓點。 */
+    cutSnap(); CUT.strokes++;
+    drawing = true;
+    try{ cv.setPointerCapture(ev.pointerId); }catch(e){}
+    const [x, y] = toImg(ev);
+    lx = x; ly = y; CUT.mx = x; CUT.my = y;
+    cutDab(x, y); cutDraw(); cutToolsSync();
+  });
+  cv.addEventListener("pointermove", ev => {
+    if (!CUT.tool || CUT.preview) return;
+    const [x, y] = toImg(ev);
+    CUT.mx = x; CUT.my = y;
+    if (drawing){ cutStroke(lx, ly, x, y); lx = x; ly = y; }
+    cutDraw();
+  });
+  const end = ev => {
+    if (!drawing) return;
+    drawing = false;
+    try{ cv.releasePointerCapture(ev.pointerId); }catch(e){}
+    cutStatus();
+  };
+  cv.addEventListener("pointerup", end);
+  cv.addEventListener("pointercancel", end);
+  cv.addEventListener("pointerleave", ev => {
+    end(ev);
+    CUT.mx = CUT.my = -1;
+    if (CUT.tool) cutDraw();
+  });
+})();
 $("#cutWrap") && ($("#cutWrap").onclick = e => { if (e.target.id === "cutWrap") cutClose(); });
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && document.getElementById("qView")) qViewClose();
