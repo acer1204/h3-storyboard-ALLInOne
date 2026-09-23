@@ -295,6 +295,7 @@ def review_scan(rel, scene_thr=0.30, max_frames=24):
     ff = find_ffmpeg()
     if not ff:
         raise ValueError("找不到 ffmpeg")
+    media_fetch(rel)          # ComfyUI 在別台時先把成品拉回來
     ap = os.path.abspath(os.path.join(MEDIA_ROOT, rel.replace("\\", "/")))
     if not ap.startswith(os.path.abspath(MEDIA_ROOT)) or not os.path.exists(ap):
         raise ValueError("影片不存在或路徑不合法: %s" % rel)
@@ -382,6 +383,7 @@ def movie_concat(rel_files):
         raise ValueError("找不到 ffmpeg（PATH 或 ComfyUI 環境內都沒有）")
     abses = []
     for rf in rel_files:
+        media_fetch(rf)
         ap = os.path.abspath(os.path.join(MEDIA_ROOT, rf.replace("\\", "/")))
         if not ap.startswith(os.path.abspath(MEDIA_ROOT)) or not os.path.exists(ap):
             raise ValueError("片段不存在或路徑不合法: %s" % rf)
@@ -798,6 +800,86 @@ def media_path(rel):
     return fp
 
 
+# ── 遠端 ComfyUI 的成品鏡像 ────────────────────────────────────────────
+# ComfyUI 在別台機器時，它的 output 資料夾不在這台的磁碟上。可是審查抽幀、
+# 長片合併、縮圖、任務清單播放全都是讀 media_root 裡的本機檔案——以前
+# 同一台時理所當然，分開之後每一條都會變成「影片不存在」。
+# 缺檔時跟 ComfyUI 的 /view 要一份，放進 media_root 的同一個相對路徑，
+# 之後就是普通的本機檔案。ComfyUI 在本機且 media_root 指對時檔案本來就在，
+# 這裡一行都不會跑。
+MEDIA_FETCH_LOCK = threading.Lock()
+_media_fetching = {}     # 本機路徑 -> Event：同一個檔同時只抓一次，其他人等它
+_media_fetch_fail = {}   # 本機路徑 -> 失敗時間：一頁上百張封面別對同一個 404 反覆敲
+
+
+def _comfy_view_url(rel, extra=""):
+    rel = rel.replace("\\", "/").strip("/")
+    sub, name = rel.rsplit("/", 1) if "/" in rel else ("", rel)
+    return "%s/view?filename=%s&subfolder=%s&type=output%s" % (
+        COMFY_URL, quote(name), quote(sub), extra)
+
+
+def _comfy_view_read(url, out, budget):
+    """把 /view 串流寫進 out。urlopen 的 timeout 是單次 socket 操作的上限，
+    不是整份檔的——慢慢滴的連線可以永遠不觸發它，所以另外算牆鐘。"""
+    t_end = time.time() + budget
+    with urllib.request.urlopen(url, timeout=min(30, budget)) as r, open(out, "wb") as f:
+        while True:
+            b = r.read(1 << 20)
+            if not b:
+                break
+            f.write(b)
+            if time.time() > t_end:
+                raise TimeoutError("超過 %d 秒還沒下載完" % budget)
+
+
+def media_fetch(rel, budget=180):
+    """確保 rel 在 media_root 裡有一份；回傳本機路徑，拿不到回 None。"""
+    fp = media_path(rel)
+    if not fp:
+        return None
+    if os.path.isfile(fp):
+        return fp
+    if time.time() - _media_fetch_fail.get(fp, 0) < 60:
+        return None
+    with MEDIA_FETCH_LOCK:
+        ev = _media_fetching.get(fp)
+        mine = ev is None
+        if mine:
+            ev = _media_fetching[fp] = threading.Event()
+    if not mine:
+        ev.wait(budget)
+        return fp if os.path.isfile(fp) else None
+    tmp = fp + ".part"
+    try:
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        t0 = time.time()
+        _comfy_view_read(_comfy_view_url(rel), tmp, budget)
+        os.replace(tmp, fp)
+        slog("  [media] 從 ComfyUI 取回 %s（%.1f MB，%.1fs）" % (
+            rel, os.path.getsize(fp) / 1048576.0, time.time() - t0))
+        return fp
+    except Exception as e:
+        _media_fetch_fail[fp] = time.time()
+        slog("  [media] 從 ComfyUI 取回 %s 失敗：%s" % (rel, str(e)[:160]))
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return None
+    finally:
+        with MEDIA_FETCH_LOCK:
+            _media_fetching.pop(fp, None)
+        ev.set()
+
+
+def media_prefetch(*rels):
+    """任務一完成就在背景把成品拉回來，審查與長片的下一段不用再等下載。"""
+    rels = [r for r in rels if r]
+    if rels:
+        threading.Thread(target=lambda: [media_fetch(r) for r in rels], daemon=True).start()
+
+
 # ── 成品縮圖快取 ────────────────────────────────────────────────────────
 # 首幀 PNG 是全解析度的（實測平均 2.6 MB，931 個檔案共 2.4 GB）。
 # 任務清單一頁上百張卡片，直接送原檔等於要傳幾百 MB，捲動時就一片黑。
@@ -814,13 +896,13 @@ def media_thumb(rel):
     src = media_path(rel)
     if not src or not os.path.isfile(src):
         # 傳進來的是影片路徑時，先試它的首幀 PNG
-        base = os.path.splitext(rel)[0]
-        for cand in (base + "-first-frame.png",):
-            src = media_path(cand)
-            if src and os.path.isfile(src):
-                break
-        else:
-            return None
+        cand = os.path.splitext(rel)[0] + "-first-frame.png"
+        src = media_path(cand)
+        if not (src and os.path.isfile(src)):
+            # 本機沒有：多半是 ComfyUI 在別台。圖片直接跟它要縮小的版本，
+            # 影片則用它的首幀——不為了一張 320px 的封面搬整支影片回來。
+            img = rel if os.path.splitext(rel)[1].lower() in (".png", ".jpg", ".jpeg", ".webp") else cand
+            return media_thumb_remote(img)
     try:
         st = os.stat(src)
         key = hashlib.sha1(("%s|%d|%d|%d" % (src, st.st_size, int(st.st_mtime), THUMB_W))
@@ -855,6 +937,57 @@ def media_thumb(rel):
     except Exception:
         return None
     finally:
+        with THUMB_LOCK:
+            _thumb_busy.pop(key, None)
+
+
+def media_thumb_remote(rel):
+    """ComfyUI 在別台時的封面。首幀 PNG 是全解析度的（平均 2.6 MB），
+    一頁上百張卡片全搬回來就是幾百 MB 走外網。/view 的 preview 參數會在
+    ComfyUI 那邊先轉成 JPEG（實測約小十倍），拿它來縮就好；
+    完整的 PNG 等真的有人要看（或長片要拿尾幀）時才由 media_fetch 搬。"""
+    fp = media_path(rel)
+    if not fp:
+        return None
+    key = hashlib.sha1(("remote|%s|%d" % (rel.replace("\\", "/").strip("/"), THUMB_W))
+                       .encode("utf-8")).hexdigest()
+    out = os.path.join(MEDIA_THUMBS, key + ".jpg")
+    if os.path.exists(out):
+        return out
+    if time.time() - _media_fetch_fail.get("thumb|" + fp, 0) < 60:
+        return None
+    ff = find_ffmpeg()
+    if not ff:
+        return None
+    with THUMB_LOCK:
+        if os.path.exists(out):
+            return out
+        if _thumb_busy.get(key):
+            return None
+        _thumb_busy[key] = True
+    tmp_src = out + ".src.jpg"
+    try:
+        os.makedirs(MEDIA_THUMBS, exist_ok=True)
+        # 縮圖端點沒有前端期限可言（<img src> 接不上 AbortController），
+        # 這裡的上限就是全部。
+        _comfy_view_read(_comfy_view_url(rel, "&preview=jpeg;85"), tmp_src, 20)
+        tmp = out + ".tmp.jpg"
+        r = subprocess.run([ff, "-v", "error", "-y", "-i", tmp_src,
+                            "-frames:v", "1", "-vf", "scale=%d:-2" % THUMB_W,
+                            "-q:v", "5", tmp], capture_output=True, timeout=15)
+        if r.returncode != 0 or not os.path.exists(tmp):
+            return None
+        os.replace(tmp, out)
+        return out
+    except Exception as e:
+        _media_fetch_fail["thumb|" + fp] = time.time()
+        slog("  [media] 遠端縮圖 %s 失敗：%s" % (rel, str(e)[:120]))
+        return None
+    finally:
+        try:
+            os.unlink(tmp_src)
+        except OSError:
+            pass
         with THUMB_LOCK:
             _thumb_busy.pop(key, None)
 
@@ -2001,6 +2134,8 @@ def qreconcile(row):
              video=vid, first_frame=first,
              error="" if vid else (err or "ComfyUI 回報完成但沒有輸出影片"),
              t_end=int(time.time()))
+        if vid:
+            media_prefetch(vid, first, last)
         return True
     if st.get("status_str") == "error" or err:
         qset(row["id"], state="error", error=err or "ComfyUI 執行失敗", t_end=int(time.time()))
@@ -2050,10 +2185,18 @@ def _ws_connect():
     host = u.hostname or "127.0.0.1"
     port = u.port or (443 if u.scheme == "https" else 80)
     key = base64.b64encode(os.urandom(16)).decode()
-    req = ("GET /ws?clientId=%s HTTP/1.1" % WS_CLIENT_ID,
+    # ComfyUI 放在反向代理後面時，網址可能帶路徑前綴（https://host/comfy），
+    # /ws 要接在前綴之後，否則代理根本不會轉給 ComfyUI。
+    req = ("GET %s/ws?clientId=%s HTTP/1.1" % (u.path.rstrip("/"), WS_CLIENT_ID),
            "Host: %s:%d" % (host, port), "Upgrade: websocket", "Connection: Upgrade",
            "Sec-WebSocket-Key: " + key, "Sec-WebSocket-Version: 13", "", "")
     sock = socket.create_connection((host, port), timeout=15)
+    if u.scheme == "https":
+        # 走 https 的 ComfyUI（例如從外網經反向代理連進來）只收 TLS。
+        # 以前一律送明文握手，對方直接斷線，進度與即時預覽就永遠收不到，
+        # 而送單照常成功——看起來只是「進度條不動」。
+        import ssl
+        sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
     sock.sendall(("\r\n".join(req)).encode())
     buf = b""
     while b"\r\n\r\n" not in buf:
@@ -2582,7 +2725,7 @@ class H(SimpleHTTPRequestHandler):
     def do_HEAD(self):
         m = re.match(r"^/api/media/file/(.+)$", urlparse(self.path).path)
         if m:
-            fp = media_path(unquote(m.group(1)))
+            fp = media_fetch(unquote(m.group(1)))
             if not fp or not os.path.isfile(fp):
                 return self.send_json({"error": "not found"}, 404)
             size = os.path.getsize(fp)
@@ -2967,7 +3110,7 @@ class H(SimpleHTTPRequestHandler):
 
         m = re.match(r"^/api/media/file/(.+)$", p)
         if m:
-            fp = media_path(unquote(m.group(1)))
+            fp = media_fetch(unquote(m.group(1)))
             if not fp or not os.path.isfile(fp):
                 return self.send_json({"error": "not found"}, 404)
             dl = "dl=1" in (urlparse(self.path).query or "")
