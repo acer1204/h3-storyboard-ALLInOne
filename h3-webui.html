@@ -353,6 +353,11 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .qcard .qthumb img,.qcard .qthumb video{position:absolute;inset:0;width:100%;height:100%;
   object-fit:contain;display:block;background:#000}
 .qcard .qthumb video{z-index:1}
+/* 伺服器生不出縮圖時回的是 1×1 透明圖（/api/media/thumb），不是錯誤。
+   不處理的話卡片就是一塊黑，分不出是還在載、壞了，還是本來就沒有。 */
+.qcard .qthumb.nothumb img{display:none}
+.qnothumb{font-size:11px;line-height:1.5;color:var(--faint);padding:0 10px;text-align:center}
+.mdprev .qnothumb{position:absolute;inset:0;display:grid;place-items:center;z-index:1}
 .qcard .qtag{position:absolute;top:6px;left:6px;z-index:2;font-size:10px;line-height:1.6;
   padding:1px 7px;border-radius:99px;background:rgba(10,12,16,.74);border:1px solid transparent;
   backdrop-filter:blur(2px);pointer-events:none;max-width:calc(100% - 12px);
@@ -5344,12 +5349,24 @@ function qViewClose(){
   w.remove();
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
 }
+function qNoThumb(box, on){
+  if (!box) return;
+  box.classList.toggle("nothumb", on);
+  let s = box.querySelector(".qnothumb");
+  if (on && !s){
+    s = document.createElement("span"); s.className = "qnothumb";
+    s.textContent = "縮圖無法產生"; box.appendChild(s);
+  } else if (!on && s) s.remove();
+}
 function qUpdateCard(el, r){
   const th = el.querySelector(".qthumb");
   const src = qPoster(r);
   let img = th.querySelector("img");
   if (src){
     if (!img){ img = document.createElement("img"); img.loading = "lazy"; img.alt = "";
+               /* 1×1 就是伺服器那張佔位圖：ComfyUI 那邊拿不到首幀，或 ffmpeg 失敗 */
+               img.onload = () => qNoThumb(th, img.naturalWidth <= 1);
+               img.onerror = () => qNoThumb(th, true);
                th.insertBefore(img, th.firstChild); }
     if (img.getAttribute("src") !== src) img.setAttribute("src", src);
   } else if (img){ img.remove(); }
@@ -5650,6 +5667,9 @@ function renderMedia(){
 
 /* 影片縮圖：一次只開一條連線循序抓第一幀，避免佔滿瀏覽器對同源的連線池 */
 const thumbCache = new Map(), thumbPending = new Set();
+/* 抓不到的記下來：每次重畫清單都會重排一次，不記的話同一支壞檔
+   每次都要等滿 10 秒，還一直是空白。 */
+const thumbFail = new Set();
 let thumbQueue = [], thumbBusy = false;
 function thumbTarget(path){
   // 每次都重新找當下的 img——render 可能已經重畫過，抓舊參照會落空
@@ -5658,6 +5678,7 @@ function thumbTarget(path){
 }
 function queueThumb(f, imgEl){
   if (thumbCache.has(f.path)){ imgEl.src = thumbCache.get(f.path); return; }
+  if (thumbFail.has(f.path)){ qNoThumb(imgEl.parentElement, true); return; }
   if (thumbPending.has(f.path)) return;
   thumbPending.add(f.path);
   thumbQueue.push(f);
@@ -5671,7 +5692,12 @@ async function pumpThumbs(){
     if (!thumbCache.has(f.path)){
       try{
         thumbCache.set(f.path, await makeVideoThumb(mUrl(f)));
-      }catch(e){ thumbPending.delete(f.path); continue; }
+      }catch(e){
+        thumbPending.delete(f.path); thumbFail.add(f.path);
+        const el = thumbTarget(f.path);
+        if (el) qNoThumb(el.parentElement, true);
+        continue;
+      }
     }
     thumbPending.delete(f.path);
     const el = thumbTarget(f.path);
@@ -6737,7 +6763,7 @@ const EN = {
 "劇情提示（選填，重跑時會一起送給模型）":"Story hint (optional; sent along on rerun)",
 "重跑 Prompt":"Re-run prompt","🎬 送 ComfyUI 生成":"🎬 Send to ComfyUI","評價（看完影片後）":"Rating (after watching)",
 "👍 效果好":"👍 Good","👎 不好":"👎 Bad","儲存評價":"Save rating","🤖 AI 影片審查":"🤖 AI video review",
-"還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","▶ 看影片":"▶ Watch","▶ 成片":"▶ Film","讀取失敗":"Failed to load",
+"還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","縮圖無法產生":"No thumbnail","▶ 看影片":"▶ Watch","▶ 成片":"▶ Film","讀取失敗":"Failed to load",
 "▶ 可繼續":"▶ Continue","🔧 需調整":"🔧 Adjust","🎲 再賭一次（同劇情換 seed）":"🎲 Roll again (same story, new seed)",
 "🎬 用新劇情重跑影片":"🎬 Re-render with new story","▶ 就用目前影片，繼續":"▶ Keep this video, continue","依據▾":"why ▾",
 "🧭 本段任務（整體劇情規劃分配；可編輯）":"🧭 Segment beat (assigned by the plan; editable)",
