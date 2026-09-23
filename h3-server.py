@@ -2244,12 +2244,30 @@ def _ws_connect():
     return sock, rest
 
 
+def _ws_recv(sock, idle):
+    """ComfyUI 閒置時一句話都不說，socket 的 15 秒上限一到就丟例外。以前這就
+    當成斷線：重連、在主控台留一行，經過反向代理時每 18 秒一次，而且重連的
+    那幾秒裡來的進度會漏掉。改成讀不到就送一個 ping（用戶端的幀必須加 mask），
+    對方回 pong 就算活著；連三次什麼都沒回才當成真的斷了。"""
+    while True:
+        try:
+            d = sock.recv(65536)
+            idle[0] = 0
+            return d
+        except socket.timeout:
+            idle[0] += 1
+            if idle[0] > 3:
+                raise
+            sock.sendall(b"\x89\x80" + os.urandom(4))
+
+
 def _ws_frames(sock, rest):
     """產出 (opcode, payload)。只處理伺服器->用戶端方向（不會有 mask）。"""
     buf = rest
+    idle = [0]
     while True:
         while len(buf) < 2:
-            d = sock.recv(65536)
+            d = _ws_recv(sock, idle)
             if not d:
                 return
             buf += d
@@ -2259,14 +2277,14 @@ def _ws_frames(sock, rest):
         i = 2
         if ln == 126:
             while len(buf) < 4:
-                buf += sock.recv(65536)
+                buf += _ws_recv(sock, idle)
             ln = struct.unpack(">H", buf[2:4])[0]; i = 4
         elif ln == 127:
             while len(buf) < 10:
-                buf += sock.recv(65536)
+                buf += _ws_recv(sock, idle)
             ln = struct.unpack(">Q", buf[2:10])[0]; i = 10
         while len(buf) < i + ln:
-            d = sock.recv(65536)
+            d = _ws_recv(sock, idle)
             if not d:
                 return
             buf += d
