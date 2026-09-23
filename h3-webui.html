@@ -656,6 +656,10 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
         <span class="hint" style="margin:0">修補</span>
         <button class="ghost mini" id="cutErase">⬜ 擦除</button>
         <button class="ghost mini" id="cutRestore">↺ 塗回原圖</button>
+        <button class="ghost mini" id="cutPickOut"
+                title="點一下要去掉的物件（床、椅子、抱著的東西），SAM2 會把整個物件選起來擦掉">🎯 點選去除</button>
+        <button class="ghost mini" id="cutPickIn"
+                title="點一下被誤刪的物件，SAM2 會把整個物件從原圖補回來">🎯 點選補回</button>
         <label class="small" style="display:flex;align-items:center;gap:6px">筆刷
           <input type="range" id="cutBrush" min="6" max="300" value="48"
                  style="width:120px;min-height:0"></label>
@@ -2601,7 +2605,9 @@ const CUT = {file: null, slot: -1, img: null, url: "", busy: false, info: "",
              cut: null, bg: "", preview: false, hasCut: false, models: null, loaded: null,
              /* edit 是可編輯的全解析度副本；cut 保持模型原始結果不動，
                 「重來」才有東西可以回去。 */
-             edit: null, tool: "", brush: 48, undo: [], strokes: 0, mx: -1, my: -1};
+             edit: null, tool: "", brush: 48, undo: [], strokes: 0, mx: -1, my: -1,
+             /* b64：送 SAM2 的原圖，同一張點很多下時不用每次重讀檔 */
+             b64: "", picking: false};
 
 /* 設定存的是 JSON 字串，store.get 不會替你 parse */
 function mattePref(){
@@ -2642,7 +2648,7 @@ async function cutOpen(i){
   if (!orig && s._origHash)
     orig = await fileFromHash(s._origHash, s._origName || s.file.name.replace(/-cutout(?=\.[^.]+$)/, ""));
   if (orig) s._orig = orig;
-  CUT.slot = i; CUT.file = orig || s.file; CUT.cut = null; CUT.busy = false;
+  CUT.slot = i; CUT.file = orig || s.file; CUT.cut = null; CUT.busy = false; CUT.b64 = "";
   CUT.hasCut = !!orig; CUT.preview = false; CUT.info = "";
   CUT.bg = $("#cutBg") ? $("#cutBg").value : "";
   await cutModels(true);                    // 重新問一次：模型可能已經被閒置卸掉了
@@ -2687,6 +2693,7 @@ function cutClose(){
   if (CUT.url){ try{ URL.revokeObjectURL(CUT.url); }catch(e){} CUT.url = ""; }
   CUT.img = null; CUT.cut = null;
   CUT.edit = null; CUT.undo = []; CUT.strokes = 0; CUT.tool = ""; CUT.mx = CUT.my = -1;
+  CUT.b64 = "";
 }
 
 let CUT_REDRAW = null;
@@ -2727,7 +2734,7 @@ function cutDraw(){
   }
   cv.dataset.scale = String(sc);
   /* 筆刷圈：不畫的話完全不知道一筆會吃多大。 */
-  if (CUT.tool && CUT.mx >= 0 && !CUT.preview){
+  if (CUT.tool && !cutIsPick() && CUT.mx >= 0 && !CUT.preview){
     const r = CUT.brush * sc;
     g.save();
     g.lineWidth = 1.5; g.strokeStyle = CUT.tool === "erase" ? "#ff6b6b" : "#6bd18a";
@@ -2798,19 +2805,81 @@ function cutStroke(x0, y0, x1, y1){
   const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / Math.max(3, CUT.brush * 0.3)));
   for (let i = 1; i <= n; i++) cutDab(x0 + dx * i / n, y0 + dy * i / n);
 }
+function cutIsPick(){ return CUT.tool === "pickOut" || CUT.tool === "pickIn"; }
+/* ---------- SAM2 點選：一次一整個物件 ----------
+   筆刷適合修邊，但要擦掉一整張床得塗幾十筆。BiRefNet 錯的時候多半是
+   「整個物件被算成主體（或被丟掉）」，點一下讓 SAM2 把那個物件整塊選起來快得多。
+   遮罩是 SAM2 在「原圖」上算的，跟目前的去背結果無關：去除＝把那塊的 alpha 挖掉，
+   補回＝把原圖那塊貼回來。兩者都進同一個復原堆疊。
+   第一次用時去背服務要先下載 sam2_b.pt（約 160MB），會多等一下。 */
+function cutFeather(mask, w, h){
+  /* 只羽化幾個像素，不像 SAM3 閘那樣大幅膨脹——床緊貼著人的時候，
+     膨脹多少就會吃進人多少。 */
+  const r = Math.max(1, Math.round(Math.min(w, h) * 0.003));
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const g = c.getContext("2d");
+  g.filter = "blur(" + r + "px)";
+  g.drawImage(mask, 0, 0, w, h); g.drawImage(mask, 0, 0, w, h);
+  return c;
+}
+async function cutPickAt(x, y, out){
+  if (CUT.picking || CUT.busy || !CUT.edit || !CUT.file) return;
+  CUT.picking = true; CUT.busy = true;
+  const msg = $("#cutBusyMsg");
+  if (msg) msg.textContent = "SAM2 選取物件中…";
+  cutTick(false); cutStatus();
+  try{
+    if (!CUT.b64) CUT.b64 = await new Promise((res, rej) => {
+      const fr = new FileReader(); fr.onload = () => res(fr.result);
+      fr.onerror = () => rej(new Error("讀檔失敗")); fr.readAsDataURL(CUT.file);
+    });
+    const r = await (await tfetch("/api/cutout/segment", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({image: CUT.b64, points: [[Math.round(x), Math.round(y)]],
+                            labels: [1], refine: 2, bg: null})}, 200000)).json();
+    if (r.error) throw new Error(r.error);
+    const mk = await deadline(30000, "SAM2 遮罩解編碼", (ok, no) => {
+      const im = new Image();
+      im.onload = () => ok(im);
+      im.onerror = () => no(new Error("SAM2 遮罩讀不開"));
+      im.src = r.png;
+    });
+    cutSnap(); CUT.strokes++;
+    const w = CUT.edit.width, h = CUT.edit.height, g = CUT.edit.getContext("2d");
+    g.save();
+    if (out){
+      g.globalCompositeOperation = "destination-out";
+      g.drawImage(cutFeather(mk, w, h), 0, 0);
+    } else {
+      g.drawImage(mk, 0, 0, w, h);          /* 回傳的就是「原圖 × 遮罩」，直接疊上去 */
+    }
+    g.restore();
+    CUT.info = " · SAM2 " + (out ? "去除" : "補回") + " " + (r.covered * 100).toFixed(1)
+             + "% · " + r.elapsed + "s";
+  }catch(e){
+    CUT.info = " · SAM2 點選失敗：" + (e.message || e);
+  }finally{
+    CUT.picking = false; CUT.busy = false; cutTick(true);
+    cutToolsSync(); cutDraw(); cutStatus();
+  }
+}
 function cutToolsSync(){
   const bar = $("#cutTools");
   if (bar) bar.style.display = CUT.edit ? "" : "none";
   const on = (id, v) => { const b = $(id); if (b) b.classList.toggle("on", v); };
   on("#cutErase", CUT.tool === "erase");
   on("#cutRestore", CUT.tool === "restore");
+  on("#cutPickOut", CUT.tool === "pickOut");
+  on("#cutPickIn", CUT.tool === "pickIn");
   if ($("#cutUndo")) $("#cutUndo").disabled = !CUT.undo.length;
   if ($("#cutReset")) $("#cutReset").disabled = !CUT.strokes;
   if ($("#cutBrushN")) $("#cutBrushN").textContent = CUT.brush + " px";
   if ($("#cutEditN")) $("#cutEditN").textContent =
-    CUT.strokes ? ("已修補 " + CUT.strokes + " 筆") : "在圖上拖曳即可修補";
+    CUT.strokes ? ("已修補 " + CUT.strokes + " 筆")
+    : cutIsPick() ? "點一下物件，SAM2 會選整個物件" : "在圖上拖曳即可修補";
   const cv = $("#cutCv");
-  if (cv) cv.style.cursor = CUT.tool ? "none" : "";
+  if (cv) cv.style.cursor = !CUT.tool ? "" : cutIsPick() ? "crosshair" : "none";
 }
 
 function cutStatus(){
@@ -3133,6 +3202,8 @@ $("#cutApply") && ($("#cutApply").onclick = cutApply);
 function cutPick(t){ CUT.tool = (CUT.tool === t) ? "" : t; cutToolsSync(); cutDraw(); }
 $("#cutErase") && ($("#cutErase").onclick = () => cutPick("erase"));
 $("#cutRestore") && ($("#cutRestore").onclick = () => cutPick("restore"));
+$("#cutPickOut") && ($("#cutPickOut").onclick = () => cutPick("pickOut"));
+$("#cutPickIn") && ($("#cutPickIn").onclick = () => cutPick("pickIn"));
 $("#cutBrush") && ($("#cutBrush").oninput = e => {
   CUT.brush = Math.max(6, parseInt(e.target.value) || 48);
   cutToolsSync(); cutDraw();
@@ -3167,6 +3238,11 @@ $("#cutReset") && ($("#cutReset").onclick = () => {
   cv.addEventListener("pointerdown", ev => {
     if (!CUT.tool || !CUT.edit || CUT.busy || CUT.preview) return;
     ev.preventDefault();
+    if (cutIsPick()){
+      const [x, y] = toImg(ev);
+      cutPickAt(x, y, CUT.tool === "pickOut");
+      return;
+    }
     /* 一筆存一次，不是一點存一次——否則復原一次只退一個小圓點。 */
     cutSnap(); CUT.strokes++;
     drawing = true;
@@ -3176,7 +3252,7 @@ $("#cutReset") && ($("#cutReset").onclick = () => {
     cutDab(x, y); cutDraw(); cutToolsSync();
   });
   cv.addEventListener("pointermove", ev => {
-    if (!CUT.tool || CUT.preview) return;
+    if (!CUT.tool || CUT.preview || cutIsPick()) return;
     const [x, y] = toImg(ev);
     CUT.mx = x; CUT.my = y;
     if (drawing){ cutStroke(lx, ly, x, y); lx = x; ly = y; }
@@ -6763,7 +6839,8 @@ const EN = {
 "劇情提示（選填，重跑時會一起送給模型）":"Story hint (optional; sent along on rerun)",
 "重跑 Prompt":"Re-run prompt","🎬 送 ComfyUI 生成":"🎬 Send to ComfyUI","評價（看完影片後）":"Rating (after watching)",
 "👍 效果好":"👍 Good","👎 不好":"👎 Bad","儲存評價":"Save rating","🤖 AI 影片審查":"🤖 AI video review",
-"還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","縮圖無法產生":"No thumbnail","▶ 看影片":"▶ Watch","▶ 成片":"▶ Film","讀取失敗":"Failed to load",
+"還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","縮圖無法產生":"No thumbnail","🎯 點選去除":"🎯 Click to remove","🎯 點選補回":"🎯 Click to restore",
+"點一下物件，SAM2 會選整個物件":"Click an object - SAM2 selects all of it","SAM2 選取物件中…":"SAM2 is selecting the object…","▶ 看影片":"▶ Watch","▶ 成片":"▶ Film","讀取失敗":"Failed to load",
 "▶ 可繼續":"▶ Continue","🔧 需調整":"🔧 Adjust","🎲 再賭一次（同劇情換 seed）":"🎲 Roll again (same story, new seed)",
 "🎬 用新劇情重跑影片":"🎬 Re-render with new story","▶ 就用目前影片，繼續":"▶ Keep this video, continue","依據▾":"why ▾",
 "🧭 本段任務（整體劇情規劃分配；可編輯）":"🧭 Segment beat (assigned by the plan; editable)",

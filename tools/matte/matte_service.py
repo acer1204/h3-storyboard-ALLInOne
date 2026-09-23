@@ -38,13 +38,62 @@ def _weight_path():
     return os.path.join(MODELS_DIR, WEIGHT)
 
 
+class NotReady(Exception):
+    """權重還沒到。回 503 而不是 500：這不是壞掉，等一下再點就好。"""
+
+
+_dl = {"th": None, "err": "", "t0": 0.0}
+
+
+def _dl_parts():
+    import glob
+    return glob.glob(os.path.join(MODELS_DIR, "." + WEIGHT + ".*.part"))
+
+
+def _download_bg(path):
+    """ultralytics 的下載器寫的是 .<檔名>.<亂數>.part，中斷後不會續傳，
+    換一個亂數重來——所以舊的殘檔先清掉，進度才不會算到死掉那份上。"""
+    for old in _dl_parts():
+        try:
+            os.unlink(old)
+        except OSError:
+            pass
+
+    def run():
+        try:
+            from ultralytics.utils.downloads import attempt_download_asset
+            attempt_download_asset(path)
+            _dl["err"] = "" if os.path.exists(path) else "下載結束但找不到檔案"
+        except Exception as e:
+            _dl["err"] = str(e)[:200]
+        sys.stderr.write("SAM2 權重下載%s%s" % ("完成" if not _dl["err"] else "失敗：" + _dl["err"], chr(10)))
+    _dl["err"] = ""
+    _dl["t0"] = time.time()
+    _dl["th"] = threading.Thread(target=run, daemon=True)
+    _dl["th"].start()
+
+
 def get_model():
-    """延遲載入。ultralytics 首次會自動把權重下載到 _weight_path()。"""
+    """延遲載入。權重不在就在背景下載，這次先回 NotReady。
+
+    以前是讓 ultralytics 在第一次推論時同步下載。實測這條線（GitHub releases）
+    只有 50-100 KB/s，154MB 要二十幾分鐘；下載期間這把鎖一直握著，
+    連 BiRefNet 去背都跟著卡死，前端則是等滿逾時才知道出事。"""
     global _model
     with _lock:
         if _model is None:
+            path = _weight_path()
+            if not os.path.exists(path):
+                th = _dl["th"]
+                if not (th and th.is_alive()):
+                    if _dl["err"] and time.time() - _dl["t0"] < 60:
+                        raise NotReady("SAM2 權重下載失敗：%s（一分鐘後再試會重新下載）" % _dl["err"])
+                    _download_bg(path)
+                got = max([os.path.getsize(x) for x in _dl_parts()] or [0])
+                raise NotReady("SAM2 權重第一次使用要先下載（sam2_b.pt，約 154 MB），"
+                               "目前 %.1f MB——下載完再點一次" % (got / 1048576.0))
             from ultralytics import SAM
-            _model = SAM(_weight_path())
+            _model = SAM(path)
         return _model
 
 
@@ -407,6 +456,8 @@ class H(BaseHTTPRequestHandler):
                                "w": w, "h": h, "covered": float(mask.mean()),
                                "covered_raw": before, "refine": lvl,
                                "elapsed": round(time.time() - t0, 2)})
+        except NotReady as e:
+            return self._json({"error": str(e), "not_ready": True}, 503)
         except Exception as e:
             return self._json({"error": str(e)[:300]}, 500)
 
