@@ -1116,6 +1116,59 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
 <script>
 /* builtin system prompts live in sidecar .txt files (loaded in loadPrompts) */
+/* ===== 全域請求期限 =====================================================
+   瀏覽器對同一個 origin 只開六條連線。沒有期限的 fetch 會一直佔著其中一條，
+   而代理端自己的上限遠比任何人願意等的久（/api/llama/chat 是 600 秒）。
+   幾支卡住就把六條佔滿，之後連 F5 的文件請求都排不進去——畫面活著，
+   但什麼都不動。這個毛病已經一支一支修過五次，每次只修到剛好踩到的那一支。
+   這裡改成讓它不可能發生：預設就有期限，要更久的必須寫進 BUDGET。 */
+(function(){
+  const raw = window.fetch.bind(window);
+  /* 由上往下比，第一個命中的就是預算（毫秒）。每一條都要比伺服器端
+     自己的上限「長一點」，慢但正常的請求才不會被誤砍；同時要遠短於使用者
+     的耐心。括號裡是伺服器端對應的位置，改那邊的時候這邊要跟著改。 */
+  const BUDGET = [
+    [/^\/api\/llama\/chat/,          300000], // 代理端 600s
+    [/^\/api\/movie\/concat/,        330000], // ffmpeg concat 300s
+    [/^\/api\/comfy\/run/,           240000], // 上傳 60s/檔 + /prompt 60s
+    [/^\/api\/review\/scan/,         240000], // ffmpeg 兩輪 180s + 抽幀
+    [/^\/api\/cutout\/segment/,      200000], // 代理端 180s
+    [/^\/api\/matte/,                130000], // 代理端 110s
+    [/^\/api\/gpu\/prepare/,          90000], // 釋放分支最壞 ~68s
+    [/^\/api\/(orig|full|extra|audio|media|uploads)\//, 60000], // 整份檔的位元組
+    [/^\/api\/uploads\/register/,     60000], // 原圖可能很大
+    [/^\/api\/history/,               45000], // POST 帶滿解析度 base64
+    [/^\/api\/drafts/,                45000],
+    [/^\/api\/workflows\/upload/,     45000],
+  ];
+  const DEFAULT_MS = 30000;   // 其餘都是本機磁碟或記憶體回應，30 秒已經很寬
+  window.fetch = function(input, init){
+    const url = typeof input === "string" ? input : (input && input.url) || "";
+    /* data:/blob: 不走網路，沒有連線可佔；包了只是浪費。 */
+    if (/^(data|blob):/i.test(url)) return raw(input, init);
+    /* 呼叫端自己帶了 signal（cutFile 的 120 秒、tfetch）就別插手，
+       否則兩個期限疊在一起，短的那個會莫名其妙贏。 */
+    if (init && init.signal) return raw(input, init);
+    const path = url.replace(/^https?:\/\/[^/]+/i, "");
+    let ms = DEFAULT_MS;
+    for (let i = 0; i < BUDGET.length; i++){
+      if (BUDGET[i][0].test(path)){ ms = BUDGET[i][1]; break; }
+    }
+    const ctl = new AbortController();
+    /* 故意不 clearTimeout。fetch 的 promise 在「收到表頭」就 resolve，後面的
+       .json()/.blob() 還在讀 body——把計時器清掉，那一段就又沒有期限了。
+       body 讀完之後才觸發的 abort 是 no-op。 */
+    setTimeout(() => ctl.abort(), ms);
+    return raw(input, Object.assign({}, init || {}, {signal: ctl.signal}))
+      .catch(e => {
+        /* AbortError 的預設文字是「The user aborted a request」，只會更困惑。 */
+        if (e && e.name === "AbortError")
+          throw new Error("逾時（" + Math.round(ms / 1000) + " 秒沒有回應）：" + path);
+        throw e;
+      });
+  };
+})();
+
 const $ = s => document.querySelector(s);
 const esc = t => (t||"").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 /* v18 的影片輸出是 .webm（container=Auto），不再是 .mp4。凡是「哪個輸出是成品影片」
@@ -1604,7 +1657,16 @@ async function withContext(ctx, fn){
     if (ctx.prompt_id && prompts.some(x => x.id === ctx.prompt_id)){
       active = ctx.prompt_id;
       const pp = prompts.find(x => x.id === active);
-      if (pp && pp.text == null && onServer){ try{ pp.text = (await (await fetch(PAPI + "/" + active)).json()).text; }catch(e){ pp.text = ""; } }
+      /* 拿不到內容時以前填空字串繼續跑——這代表重跑會帶著
+         **空的 system prompt** 跑完，而且結果會當成正常的一次存進歷史紀錄。
+         以前只有伺服器整個掛掉才走得到，現在隨時會真的觸發。寫不出來就不要寫。 */
+      if (pp && pp.text == null && onServer){
+        try{ pp.text = (await (await fetch(PAPI + "/" + active)).json()).text; }
+        catch(e){
+          throw new Error("讀不到這筆紀錄當時用的 Prompt 組（" + (e.message || e)
+            + "）——已中止，沒有用空的 system prompt 跑下去");
+        }
+      }
     }
     /* LoRA restore removed — records re-run without LoRA */
     renderPrompts();
@@ -2933,15 +2995,28 @@ function trim(c){
 }
 
 async function chat(messages, opts={}){
-  /* llama 位址只存在伺服器端 config.json；瀏覽器一律走同源代理 */
-  const r = await fetch("/api/llama/chat", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({model:"qwen3.8-27b", messages, stream:false,
-      temperature: opts.temp ?? 1.0,
-      top_p: opts.topp ?? 0.95, top_k:20,
-      seed: opts.seed ?? Math.floor(Math.random()*2147483647),
-      max_tokens: opts.max ?? 1600,
-      chat_template_kwargs:{enable_thinking:false}})});
+  /* llama 位址只存在伺服器端 config.json；瀏覽器一律走同源代理。
+     一定要有上限：代理端等 600 秒，而批次翻譯每筆叫一次——
+     幾筆卡住就把瀏覽器對這個 origin 的六條連線佔滿，
+     連 F5 的文件請求都排不進去，畫面就是無限讀取。 */
+  let r;
+  try{
+    r = await tfetch("/api/llama/chat", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({model:"qwen3.8-27b", messages, stream:false,
+        temperature: opts.temp ?? 1.0,
+        top_p: opts.topp ?? 0.95, top_k:20,
+        seed: opts.seed ?? Math.floor(Math.random()*2147483647),
+        max_tokens: opts.max ?? 1600,
+        chat_template_kwargs:{enable_thinking:false}})},
+      opts.ms || 300000);   /* 長劇情真的會跑幾分鐘，給 5 分鐘；
+                               依然比代理端的 600 秒早放手。 */
+  }catch(e){
+    /* AbortError 的預設文字是「The user aborted a request」，看不出發生什麼事。 */
+    throw new Error(e.name === "AbortError"
+      ? "LLM 逾時（等滿 5 分鐘）——連線已放開，可以重試"
+      : (e.message || String(e)));
+  }
   if (!r.ok) throw new Error("HTTP "+r.status+" "+(await r.text()).slice(0,200));
   return r.json();
 }
@@ -2956,7 +3031,17 @@ async function gpuPrepare(target, onStep){
     try {
       j = await (await fetch("/api/gpu/prepare", {method:"POST",
         headers:{"Content-Type":"application/json"}, body: JSON.stringify({target})})).json();
-    } catch(e){ return; }                 // 協調端點不可用 → 直接放行，不擋生成
+    } catch(e){
+      /* 兩種失敗要分開。端點真的不在（連不上）→ 放行，不要因為
+         一個輔助功能掛掉就擋住生成。但如果是被我們自己的預算砍掉的，
+         那代表對方還在做事只是慢，直接放行等於繞過 GPU 協調——
+         回迴圈再問一次就好，外層的 400 次上限會擋住。 */
+      if (/逾時/.test(e.message || "")){
+        if (onStep) onStep("GPU 協調：等待回應…（已重試 " + (i + 1) + " 次）");
+        continue;
+      }
+      return;                             // 協調端點不可用 → 直接放行，不擋生成
+    }
     if (j.ready || j.error || j.state === "no_gpu_info") return;
     const used = j.gpu && j.gpu.used_mb != null ? (j.gpu.used_mb/1024).toFixed(1) + "GB" : "?";
     if (onStep) onStep(
@@ -4622,12 +4707,26 @@ $("#wfFile").onchange = async e => {
    所以同一張圖重複出現不會佔額外空間。 */
 let DRAFT_T = null, DRAFT_READY = false;
 let DRAFT_BUSY = false, DRAFT_AGAIN = false, DRAFT_HOLD = 0, DRAFT_PEND = false;
+const DRAFT_FAIL = [0];
+
+/* 帶期限的 fetch。沒期限的請求不只是這一次失敗——
+   它會把 DRAFT_BUSY 這類旗標永遠留在設下的狀態，把後續全部擋掉。 */
+async function tfetch(url, opts, ms){
+  const ctl = new AbortController();
+  /* 舊版在 finally 裡 clearTimeout。fetch 的 promise 在收到表頭就 resolve，
+     所以期限只蓋到表頭，後面的 .json()/.blob() 完全沒有上限——
+     抓全解析度 PNG 的那幾支正好踩在這個洞上。計時器留著就好。 */
+  setTimeout(() => ctl.abort(), ms || 30000);
+  return fetch(url, Object.assign({}, opts || {}, {signal: ctl.signal}));
+}
 
 async function regUpload(file){
   const e = await encode(file);
-  const r = await (await fetch("/api/uploads/register", {method:"POST",
+  /* 圖可能很大，給寬一點；但一定要有上限。 */
+  const r = await (await tfetch("/api/uploads/register", {method:"POST",
     headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({full: e.b64, thumb: e.thumb, orig: e.orig || null, name: file.name})})).json();
+    body: JSON.stringify({full: e.b64, thumb: e.thumb, orig: e.orig || null, name: file.name})},
+    60000)).json();
   return r.hash ? {hash: r.hash, name: file.name} : null;
 }
 async function fileFromHash(h, name){
@@ -4702,9 +4801,18 @@ function saveDraft(){
         }
         d.items.push(rec);
       }
-      await fetch("/api/drafts", {method:"POST", headers:{"Content-Type":"application/json"},
-                                  body: JSON.stringify(d)});
-    }catch(e){}
+      await tfetch("/api/drafts", {method:"POST", headers:{"Content-Type":"application/json"},
+                                   body: JSON.stringify(d)}, 45000);
+      DRAFT_FAIL[0] = 0;
+    }catch(e){
+      /* 默默吐掉的話，使用者是在別台電腦開起來才發現沒存到。 */
+      DRAFT_FAIL[0]++;
+      if (DRAFT_FAIL[0] === 1 || DRAFT_FAIL[0] % 5 === 0){
+        const st = $("#saved");
+        if (st) st.textContent = "⚠ 草稿存不進伺服器（已失敗 " + DRAFT_FAIL[0]
+          + " 次）——別台電腦看到的會是舊的。" + (e.message || e);
+      }
+    }
     finally{
       DRAFT_BUSY = false;
       if (DRAFT_AGAIN){ DRAFT_AGAIN = false; saveDraft(); }
@@ -4714,7 +4822,7 @@ function saveDraft(){
 async function loadDraft(){
   if (!onServer) return;
   let d = {};
-  try{ d = await (await fetch("/api/drafts")).json(); }catch(e){ d = {}; }
+  try{ d = await (await tfetch("/api/drafts", null, 45000)).json(); }catch(e){ d = {}; }
   try{
     for (const [m, arr] of Object.entries(d.slots || {})){
       const out = [];

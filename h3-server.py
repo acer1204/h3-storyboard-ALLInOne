@@ -52,7 +52,7 @@ H3 Prompt 批次產生器 - 本機服務
   POST   /api/loras             -> 新增或更新 {id?, name, main, subs}
   DELETE /api/loras/<id>        -> 刪除
 """
-import argparse, base64, hashlib, io, json, os, re, socket, struct, subprocess, sys, threading, time
+import argparse, base64, hashlib, io, json, os, queue, re, socket, struct, subprocess, sys, threading, time
 import urllib.request
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, parse_qs, quote
@@ -339,11 +339,18 @@ def review_scan(rel, scene_thr=0.30, max_frames=24):
         times.add(round(max(0.0, dur - 0.08), 2))
     times = sorted(times)[:max_frames]
     frames = []
+    # 下面那個 except 會把 TimeoutExpired 一起吞掉，所以 24 張全卡住時
+    # 每張都燒滿自己的上限而不會提早跳出——整個請求因此可以拖到十幾分鐘。
+    # 改成整段一個牆鐘預算：超過就拿已經抓到的回去，有幾張算幾張。
+    t_budget = time.time() + 60
     for t in times:
+        if time.time() > t_budget:
+            slog("  [scan] 抽幀超過 60 秒，已取得 %d/%d 張，先回傳" % (len(frames), len(times)))
+            break
         try:
             fr = sp.run([ff, "-ss", str(t), "-i", ap, "-frames:v", "1",
                          "-vf", "scale=448:-2", "-q:v", "7", "-f", "image2pipe", "-vcodec", "mjpeg", "-"],
-                        capture_output=True, timeout=30)
+                        capture_output=True, timeout=10)
             if fr.stdout:
                 frames.append({"t": t, "b64": b64mod.b64encode(fr.stdout).decode()})
         except Exception:
@@ -411,6 +418,40 @@ MEDIA_EXT = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktim
              ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif",
              ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
              ".m4a": "audio/mp4"}
+# 主控台被 QuickEdit 暫停時（在視窗裡點一下或選到文字），往它寫東西
+# 會永遠卡住。而每一個 /api/ 請求都會寫一行 log，於是整個 API 停擺、
+# 靜態檔卻照常送——看起來就是「網頁活著但什麼都不能按」。
+# 改成投進有上限的佇列，背景執行緒去寫；主控台卡住就丟幾行 log，
+# 請求永遠不會被擋住。
+_LOGQ = queue.Queue(maxsize=4000)
+_LOGDROP = [0]
+
+
+def slog(line):
+    """絕不阻塞的 log。佇列滿了就丟，寧可掉訊息也不能掉服務。"""
+    if not line.endswith(chr(10)):
+        line += chr(10)
+    try:
+        _LOGQ.put_nowait(line)
+    except queue.Full:
+        _LOGDROP[0] += 1
+
+
+def _log_worker():
+    while True:
+        line = _LOGQ.get()
+        try:
+            n = _LOGDROP[0]
+            if n:
+                _LOGDROP[0] = 0
+                line = "  [log] 主控台停住期間丟掉 %d 行" % n + chr(10) + line
+            sys.stderr.write(line)
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+
+threading.Thread(target=_log_worker, daemon=True).start()
 LOCK = threading.Lock()
 # QLOCK 保護記憶體內的佇列快取／進度／預覽；LOCK 仍只保護磁碟索引的讀改寫。
 # 規則：需要兩者時一律先 QLOCK 再 LOCK；兩者都不得在呼叫 ComfyUI 期間持有。
@@ -804,7 +845,9 @@ def media_thumb(rel):
         r = subprocess.run([ff, "-v", "error", "-y", "-i", src,
                             "-frames:v", "1", "-vf", "scale=%d:-2" % THUMB_W,
                             "-q:v", "5", tmp],
-                           capture_output=True, timeout=60)
+                           # 一張 320px 的抽幀要 60 秒的話早就失敗了。而且 <img src>
+                           # 沒辦法在前端設期限，這裡是唯一能擋的地方。
+                           capture_output=True, timeout=15)
         if r.returncode != 0 or not os.path.exists(tmp):
             return None
         os.replace(tmp, out)
@@ -853,7 +896,7 @@ def comfy_api(path, data=None, timeout=30):
     return r
 
 
-def llama_api(path, data=None, timeout=600):
+def llama_api(path, data=None, timeout=30):
     """代理 llama-server：位址只存在 config.json，瀏覽器一律走同源 /api/llama/*。"""
     import urllib.request as _u
     base = CONFIG["llama_url"].rstrip("/")
@@ -861,6 +904,13 @@ def llama_api(path, data=None, timeout=600):
                      data=json.dumps(data).encode() if data is not None else None,
                      headers={"Content-Type": "application/json"} if data is not None else {})
     return json.loads(_u.urlopen(req, timeout=timeout).read() or b"{}")
+
+
+# 一次 /api/comfy/run 最多傳 12 個檔，每個各等 60 秒的話光上傳就 720 秒，
+# 遠超過前端給的 240 秒。改成整批共用一個截止時間。
+# thread-local 而不是模組全域：這是多執行緒伺服器，兩個同時送單會互相
+# 蓋掉，而且殘留的截止時間會害到後面單獨呼叫 comfy_upload 的地方。
+COMFY_UP = threading.local()
 
 
 def comfy_upload(name, blob, ctype="image/jpeg"):
@@ -878,7 +928,13 @@ def comfy_upload(name, blob, ctype="image/jpeg"):
     w(f"--{bnd}--\r\n")
     req = _u.Request(COMFY_URL + "/upload/image", data=body.getvalue(),
                      headers={"Content-Type": "multipart/form-data; boundary=" + bnd})
-    return json.loads(_u.urlopen(req, timeout=60).read())
+    left = 60.0
+    dl = getattr(COMFY_UP, "deadline", 0.0)
+    if dl:
+        left = dl - time.time()
+        if left <= 1:
+            raise SubmitError("上傳素材超過時限（整批 120 秒）", 504)
+    return json.loads(_u.urlopen(req, timeout=min(60.0, left)).read())
 
 
 # ============================== 慣性偵測（第 1 層，純統計） ==============================
@@ -1505,6 +1561,7 @@ def matte_models():
     return out
 CUT_PY = os.path.join(CUT_DIR, ".venv", "Scripts", "python.exe")
 CUT_APP = os.path.join(CUT_DIR, "matte_service.py")
+CUT_LOG = os.path.join(ROOT, "h3-matte.log")
 CUT_LOCK = threading.RLock()
 # CUT_LOCK 管的是「把服務拉起來」；CUT_BUSY 管的是「一次只送一張進去」。
 # 兩件事不能共用一把鎖：拉服務要阻塞等，送圖要立刻拒絕。
@@ -1532,13 +1589,21 @@ def cut_ensure(wait=40):
         return h
     if not cut_installed():
         raise SubmitError("去背服務環境還沒安裝（預期在 %s）" % CUT_DIR, 501)
-    with CUT_LOCK:
+    # 不帶上限的 with CUT_LOCK 會讓 wait 形同虛設：排在別人後面的人可能先
+    # 花掉對方的 40 秒，自己的 8 秒才開始算。拿不到鎖就直接講，別默默等。
+    if not CUT_LOCK.acquire(timeout=max(1.0, wait)):
+        raise SubmitError("去背服務正在啟動中，稍後再試", 503)
+    try:
         h = cut_ping()
         if h:
             return h
         try:
+            # 以前它的輸出直接丟進 DEVNULL，去背出事時什麼都查不到。
+            # 改成寫檔，並把路徑印在主控台上。
+            lf = open(CUT_LOG, "ab", buffering=0)
+            slog("  [cut] 啟動去背服務，log：%s" % CUT_LOG)
             subprocess.Popen([CUT_PY, CUT_APP], cwd=CUT_DIR,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             stdout=lf, stderr=lf,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception as e:
             raise SubmitError("去背服務啟動失敗: %s" % e, 500)
@@ -1548,6 +1613,8 @@ def cut_ensure(wait=40):
             h = cut_ping()
             if h:
                 return h
+    finally:
+        CUT_LOCK.release()
     raise SubmitError("去背服務啟動逾時", 504)
 
 
@@ -1714,6 +1781,9 @@ def comfy_submit(body):
     md = re.search(r"\d+", str(body.get("dur") or ""))
     if md:
         dur = int(md.group(0))
+    # 整批上傳共用 120 秒；不設的話 12 個檔各等 60 秒就是 720 秒，
+    # 而前端給這條路線的預算是 240 秒。
+    COMFY_UP.deadline = time.time() + 120
     try:
         up_name = None
         if blob is not None:
@@ -1751,6 +1821,10 @@ def comfy_submit(body):
             try: detail = e.read().decode("utf-8", "replace")[:500]
             except Exception: pass
         raise SubmitError("送出失敗: %s %s" % (e, detail), 502)
+    finally:
+        # keep-alive 下同一條執行緒會處理下一個請求，殘留的截止時間
+        # 會被它繼承，下一次上傳會莫名其妙地馬上逾時。
+        COMFY_UP.deadline = 0.0
     if "prompt_id" not in r:
         raise SubmitError("ComfyUI 拒收: %s" % json.dumps(r, ensure_ascii=False)[:500], 502)
     # ComfyUI 對每個輸出節點分開驗證：只要還有一個過關就回 200，被判掉的只寫在 node_errors。
@@ -2455,7 +2529,7 @@ class H(SimpleHTTPRequestHandler):
         # buries everything useful. The status handler logs state TRANSITIONS itself instead.
         if pth.startswith("/api/comfy/status/"):
             return
-        sys.stderr.write("  %s %s\n" % (self.command, pth))
+        slog("  %s %s" % (self.command, pth))
 
     def guess_type(self, path):
         """標準函式庫送 text/html 時不帶 charset，瀏覽器會按系統預設去猜而變亂碼。"""
@@ -2801,10 +2875,17 @@ class H(SimpleHTTPRequestHandler):
                 self.send_header("Cache-Control", "public, max-age=604800")
                 self.end_headers()
                 return self.wfile.write(b)
-            fp = media_path(rel)              # 生不出縮圖就退回原檔，總比空白好
-            if fp and os.path.isfile(fp):
-                return self.send_media(fp, False)
-            return self.send_json({"error": "not found"}, 404)
+            # 以前生不出縮圖就退回原檔。但 <img src> 沒辦法在前端設期限，
+            # 而一頁二十張縮圖退成二十張全解析度影片，會把同一個 origin 的
+            # 六條連線整個卡死——畫面就是「載很久然後什麼都按不動」。
+            # 寧可給一張透明的佔位圖，版面撐得住、不吃頻寬。
+            px = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01" b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01" b"\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(px)))
+            self.send_header("Cache-Control", "no-store")   # 下次要再試一次
+            self.end_headers()
+            return self.wfile.write(px)
 
         m = re.match(r"^/api/media/file/(.+)$", p)
         if m:
@@ -3034,7 +3115,10 @@ class H(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "empty body"}, 400)
             with QLOCK: LLAMA_INFLIGHT[0] += 1
             try:
-                return self.send_json(llama_api("/v1/chat/completions", body, timeout=600))
+                # 前端 300 秒就放棄，而中止傳不到這裡——llama_api 會繼續坐在
+                # urlopen 裡等滿自己的上限，而 LLAMA_INFLIGHT 在那段期間一直 > 0，
+                # GPU 閘門會跟著以為 llama 還在用卡。比前端早一點放手。
+                return self.send_json(llama_api("/v1/chat/completions", body, timeout=280))
             except Exception as e:
                 return self.send_json({"error": "llama-server: %s" % e}, 502)
             finally:
@@ -3580,14 +3664,17 @@ class H(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "empty body"}, 400)
             why = cut_gpu_block()
             if why:
+                slog("  [cut] 擋下：%s" % why)
                 return self.send_json({"error": why + "——去背已暫停。"
                                                 "要同時使用請到「系統設定 → 去背景」開啟。",
                                        "blocked": True}, 409)
             try:
                 cut_ensure()
             except SubmitError as e:
+                slog("  [cut] 服務拉不起來：%s" % e.msg)
                 return self.send_json({"error": e.msg}, e.code)
             if not CUT_BUSY.acquire(blocking=False):
+                slog("  [cut] 上一張還在跑，拒絕這一張")
                 return self.send_json({"error": "上一張還在去背——同一張卡一次只做一張，"
                                                 "等它完成再送。", "blocked": True}, 409)
             try:
