@@ -146,11 +146,20 @@ def maybe_reload_config():
 
 
 def save_config():
-    """Persist the editable keys to config.json and refresh module globals."""
+    """Persist the editable keys to config.json and refresh module globals.
+
+    同一份 config.json 會被 Windows 上的 start_app.bat 與 docker 容器輪流讀。
+    等於內建預設的值寫成空字串（讀回來就是當下環境的預設：F:/.../workflows
+    或 /app/workflows），環境變數給的值則不寫回去——否則在容器裡按一次
+    儲存，就把 /app/... 這種路徑寫進檔案，換回 bat 啟動時整個指錯。"""
     global MEDIA_ROOT, COMFY_URL
     MEDIA_ROOT = CONFIG["media_root"]
     COMFY_URL = CONFIG["comfy_url"].rstrip("/")
-    keep = {k: CONFIG[k] for k in CONFIG_DEFAULTS if k not in ("bind", "port")}
+    keep = {}
+    for k in CONFIG_DEFAULTS:
+        if k in ("bind", "port") or os.environ.get("H3_" + k.upper()):
+            continue
+        keep[k] = "" if CONFIG[k] == CONFIG_DEFAULTS[k] else CONFIG[k]
     try:
         with open(CONFIG_PATH, encoding="utf-8") as f:
             cur = json.load(f)
@@ -1670,10 +1679,17 @@ def _node_errors_text(ne, limit=6):
 # 而且不該為了省磁碟去動 ComfyUI 那個環境的 numpy/opencv。
 CUT_DIR = os.environ.get("CUT_DIR", r"E:/h3-matte")
 CUT_PORT = int(os.environ.get("CUT_PORT", "9996"))
-CUT_URL = "http://127.0.0.1:%d" % CUT_PORT
-# 去背權重沒必要再複製一份，直接用 ComfyUI 那份
-MATTE_DIR = os.environ.get("BREF_MODELS",
-                           "E:/ComfyUI-MiniMaxH3/ComfyUI/models/background_removal")
+# 去背服務由別人管的時候（docker compose 裡的另一個容器）給完整網址。
+# 這時不會 subprocess 拉它——容器裡根本沒有那個 venv——只等它回應。
+# 沒給就照舊：本機按需啟動、閒置自己結束。
+CUT_EXTERNAL = os.environ.get("CUT_URL", "").strip().rstrip("/")
+CUT_URL = CUT_EXTERNAL or "http://127.0.0.1:%d" % CUT_PORT
+# 去背權重：ComfyUI 在同一台時直接用它那份，沒必要再複製。
+# ComfyUI 搬到別台之後就只能自己放一份——放在 repo 的 models/ 底下（不進 git）。
+_MATTE_LOCAL = os.path.join(ROOT, "models", "background_removal")
+MATTE_DIR = os.environ.get("BREF_MODELS") or (
+    _MATTE_LOCAL if os.path.isdir(_MATTE_LOCAL)
+    else "E:/ComfyUI-MiniMaxH3/ComfyUI/models/background_removal")
 MATTE_DEFAULT = "birefnet.safetensors"
 
 
@@ -1704,6 +1720,8 @@ CUT_BUSY = threading.Semaphore(1)
 
 
 def cut_installed():
+    if CUT_EXTERNAL:
+        return True
     return os.path.exists(CUT_PY) and os.path.exists(CUT_APP)
 
 
@@ -1720,6 +1738,16 @@ def cut_ensure(wait=40):
     h = cut_ping()
     if h:
         return h
+    if CUT_EXTERNAL:
+        # 容器重啟要幾秒，等一下就好；但不能照本機啟動的 40 秒等，
+        # 容器真的倒了的話那只是讓人多盯著轉圈。
+        t0 = time.time()
+        while time.time() - t0 < min(wait, 15):
+            time.sleep(0.6)
+            h = cut_ping()
+            if h:
+                return h
+        raise SubmitError("去背服務（%s）沒有回應，請確認容器有在跑" % CUT_EXTERNAL, 503)
     if not cut_installed():
         raise SubmitError("去背服務環境還沒安裝（預期在 %s）" % CUT_DIR, 501)
     # 不帶上限的 with CUT_LOCK 會讓 wait 形同虛設：排在別人後面的人可能先
@@ -1735,7 +1763,10 @@ def cut_ensure(wait=40):
             # 改成寫檔，並把路徑印在主控台上。
             lf = open(CUT_LOG, "ab", buffering=0)
             slog("  [cut] 啟動去背服務，log：%s" % CUT_LOG)
+            # 權重位置由這邊決定再交給它，兩邊才不會各自猜出不同的資料夾
+            # （這邊的下拉選單列的是 MATTE_DIR，它載的卻是自己預設的那份）。
             subprocess.Popen([CUT_PY, CUT_APP], cwd=CUT_DIR,
+                             env=dict(os.environ, BREF_MODELS=MATTE_DIR),
                              stdout=lf, stderr=lf,
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception as e:
@@ -1766,7 +1797,10 @@ def cut_unload(timeout=20):
         return None
 
 
-LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", ""}
+# host.docker.internal：h3-server 在容器裡、ComfyUI／LLM 在同一台主機上時用的名字。
+# 那是同一張卡，不能因為名字不像本機就當成別台而放行。
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "",
+               "host.docker.internal", "gateway.docker.internal"}
 
 
 def is_local_url(u):
@@ -3242,7 +3276,7 @@ class H(SimpleHTTPRequestHandler):
                                    "loaded": bool(h and h.get("loaded")),
                                    "bref_loaded": (h or {}).get("bref_loaded"),
                                    "comfy_local": comfy_here, "llama_local": llama_here,
-                                   "blocked": cut_gpu_block(), "dir": CUT_DIR})
+                                   "blocked": cut_gpu_block(), "dir": CUT_EXTERNAL or CUT_DIR})
 
         if p == "/api/matte/warm":
             # 不讓預熱踩到 GPU 閘門，否則算圖時右鍵選單會出錯
@@ -4310,6 +4344,10 @@ def main():
     MEDIA_ROOT = a.media_root
     COMFY_URL = CONFIG["comfy_url"]
     ensure()
+    if os.path.abspath(MEDIA_ROOT) == os.path.abspath(CONFIG_DEFAULTS["media_root"]):
+        # 預設的 output/ 是遠端 ComfyUI 成品的本機鏡像，第一次跑時還不存在。
+        # 只建預設那個：使用者自己填的路徑不存在是設定錯，不該默默幫他建一個空的。
+        os.makedirs(MEDIA_ROOT, exist_ok=True)
     try:
         n_bf = upload_backfill()
         if n_bf:
@@ -4335,6 +4373,8 @@ def main():
     md = media_list(limit=1)
     print("  媒體庫   : %s   （%s）" % (MEDIA_ROOT,
           ("%d 個檔案" % md["total"]) if md else "資料夾不存在"))
+    print("  去背服務 : %s" % (CUT_EXTERNAL or ("%s（按需啟動，port %d）" % (CUT_DIR, CUT_PORT))))
+    print("  去背權重 : %s   （%d 個）" % (MATTE_DIR, len(matte_models())))
     print("  按 Ctrl+C 停止")
     print("-" * 60)
     try:

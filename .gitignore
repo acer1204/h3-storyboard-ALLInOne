@@ -26,3 +26,6 @@ settings.json
 drafts.json
 thumbs/
 .venv/
+output/
+models/
+h3-matte.log

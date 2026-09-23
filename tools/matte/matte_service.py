@@ -10,7 +10,8 @@
 行為：
   - 模型延遲載入，閒置 IDLE_UNLOAD 秒後自動卸掉並清空 CUDA 快取
   - 沒有任何請求超過 IDLE_EXIT 秒就整支結束，由 h3-server 下次再拉起來
-  - 只聽 127.0.0.1
+    （IDLE_EXIT=0 就永遠不結束——跑在容器裡時由 docker 管生命週期）
+  - 預設只聽 127.0.0.1；容器裡用 MATTE_BIND=0.0.0.0，h3-server 才連得到
 """
 import io, json, os, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,7 +20,8 @@ PORT = int(os.environ.get("MATTE_PORT", "9996"))
 MODELS_DIR = os.environ.get("SAM_MODELS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"))
 WEIGHT = os.environ.get("SAM_WEIGHT", "sam2_b.pt")
 IDLE_UNLOAD = float(os.environ.get("MATTE_IDLE_UNLOAD", "180"))   # 卸模型
-IDLE_EXIT = float(os.environ.get("MATTE_IDLE_EXIT", "5400"))      # 整支結束
+IDLE_EXIT = float(os.environ.get("MATTE_IDLE_EXIT", "5400"))      # 整支結束；0＝不結束
+BIND = os.environ.get("MATTE_BIND", "127.0.0.1")
 # BiRefNet 權重直接沿用 ComfyUI 那份，不再複製一份占磁碟
 BREF_DIR = os.environ.get("BREF_MODELS",
                           "E:/ComfyUI-MiniMaxH3/ComfyUI/models/background_removal")
@@ -413,7 +415,7 @@ def janitor():
     while True:
         time.sleep(10)
         idle = time.time() - _last
-        if idle > IDLE_EXIT:
+        if IDLE_EXIT > 0 and idle > IDLE_EXIT:
             os._exit(0)                     # h3-server 下次會重新拉起來
         if idle > IDLE_UNLOAD and (_model is not None or _bref is not None):
             unload()
@@ -421,7 +423,7 @@ def janitor():
 
 if __name__ == "__main__":
     threading.Thread(target=janitor, daemon=True).start()
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
-    sys.stderr.write("matte service on 127.0.0.1:%d  models=%s%s" % (PORT, MODELS_DIR, chr(10)))
+    srv = ThreadingHTTPServer((BIND, PORT), H)
+    sys.stderr.write("matte service on %s:%d  models=%s  bref=%s%s" % (BIND, PORT, MODELS_DIR, BREF_DIR, chr(10)))
     sys.stderr.flush()
     srv.serve_forever()

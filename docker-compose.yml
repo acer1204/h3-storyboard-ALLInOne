@@ -1,0 +1,63 @@
+# H3 Storyboard 本機 docker 部署
+#
+#   h3-server  網頁與 API（http://localhost:9998/）。整個 repo 掛進 /app，
+#              歷史、上傳、草稿、設定都留在這個資料夾，跟用 start_app.bat 時同一份。
+#   h3-matte   去背服務（BiRefNet／SAM2），用本機 GPU。
+#
+# llama-server 與 ComfyUI 不在這裡，位址寫在 config.json。
+# ComfyUI 在別台時，成品會在第一次被讀到時從它的 /view 拉回 output/ 當鏡像。
+#
+#   docker compose up -d --build        建置並啟動
+#   docker compose restart h3-server    改了 h3-server.py 之後
+#   docker compose logs -f h3-server    看主控台
+name: h3-storyboard
+
+services:
+  h3-server:
+    build: docker/h3-server
+    image: h3-storyboard-server:latest
+    container_name: h3-storyboard
+    restart: unless-stopped
+    ports:
+      - "9998:9998"
+    volumes:
+      - ./:/app
+    environment:
+      # 去背服務是另一個容器，不要 subprocess 拉本機 venv
+      CUT_URL: http://h3-matte:9996
+      BREF_MODELS: /app/models/background_removal
+    depends_on:
+      - h3-matte
+    healthcheck:
+      # 打首頁的 HEAD：不經過 /api/，不會每 30 秒在主控台留一行 log
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:9998/', method='HEAD'), timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  h3-matte:
+    build: tools/matte
+    image: h3-storyboard-matte:latest
+    container_name: h3-matte
+    restart: unless-stopped
+    volumes:
+      - ./models:/models
+      # 掛進來而不是只用映像裡那份：改了 matte_service.py 重啟容器就生效
+      - ./tools/matte:/app:ro
+    ports:
+      # 只開給本機除錯（curl localhost:9996/health）；h3-server 走容器網路
+      - "127.0.0.1:9996:9996"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:9996/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
