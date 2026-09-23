@@ -1399,6 +1399,15 @@ function activeText(){
       + t;
   return t;
 }
+/* 跑到一半切走選單再切回來，進度就不見了——
+   #prog 是十三個地方各自命令式寫入的，而 setMode 在切回「生成」時
+   會無條件把它重寫成閒置文字，進度要等下一筆才重新出現。
+   跑批期間的文字記在 PROG，閒置文字走 progIdle()，有 PROG 就讓路。 */
+let PROG = "";
+function progRun(t){ PROG = t; const e = $("#prog"); if (e) e.textContent = t; }
+function progEnd(t){ PROG = ""; const e = $("#prog"); if (e) e.textContent = t; }
+/* 不只是不寫，是把 PROG 補回去：別人清掉了也能復原。 */
+function progIdle(t){ const e = $("#prog"); if (e) e.textContent = PROG || t; }
 window.setMode = m => {
   if (!MODES[m]) return;
   $("#mode").value = m;
@@ -1421,7 +1430,7 @@ window.setMode = m => {
   if (typeof renderSlots === "function") renderSlots();   // 各模式格子獨立保存，切換不清空
   if (typeof modeItems === "function"){
     $("#run").disabled = !modeItems().length;
-    $("#prog").textContent = modeItems().length ? `${modeItems().length} 筆待處理` : "";
+    progIdle(modeItems().length ? `${modeItems().length} 筆待處理` : "");
     updateNavCounts();
   }
   if (typeof render === "function") render();
@@ -2749,7 +2758,7 @@ function composeSlots(){
   saveDraft();
   renderSlots();
   render(); $("#run").disabled = !modeItems().length;
-  $("#prog").textContent = `${modeItems().length} 筆待處理`;
+  progIdle(`${modeItems().length} 筆待處理`);
   updateNavCounts();
   return true;
 }
@@ -3276,7 +3285,7 @@ $("#t2vaAdd").onclick = () => {
   $("#t2vaModeHint").textContent = "";
   saveDraft();
   render(); $("#run").disabled = !modeItems().length;
-  $("#prog").textContent = `${modeItems().length} 筆待處理`;
+  progIdle(`${modeItems().length} 筆待處理`);
   updateNavCounts();
 };
 
@@ -3354,13 +3363,13 @@ async function t2vaDrainSends(){
       if (k < 0) break;
       const it = items[k];
       it._autoSend = false;
-      $("#prog").textContent = `T2VA 影片階段 — ${it.name}`;
+      progRun(`T2VA 影片階段 — ${it.name}`);
       try{
         if (it.direct) await t2DirectSend(k);
         else await comfyFromItem(k, null);
       }catch(e){}
     }
-    $("#prog").textContent = "T2VA 影片階段完成";
+    progEnd("T2VA 影片階段完成");
   } finally { t2vaDrainSends.busy = false; }
 }
 /* 直接使用潤飾劇本送 ComfyUI（中文劇本＝最終 prompt；審查修劇情＝重寫劇本） */
@@ -3468,12 +3477,12 @@ async function runQueue(list, label){
   for (const it of list){
     if (abort) break;
     it.state="running"; it.keep=true; it.zh=null; render();
-    $("#prog").textContent = `${label} ${++n}/${list.length} — ${it.name}`;
+    progRun(`${label} ${++n}/${list.length} — ${it.name}`);
     try{ await runOne(it); }
     catch(e){ it.state="error"; it.err=e.message; render(); }
   }
   setRunning(false);
-  $("#prog").textContent = abort ? `已停止（完成 ${n} 筆）` : `${label}完成，共 ${n} 筆`;
+  progEnd(abort ? `已停止（完成 ${n} 筆）` : `${label}完成，共 ${n} 筆`);
   updateNavCounts();
   convergence(); updateFilterBar();
   // T2VA 全自動：llama 階段全部結束後，才開始逐支送 ComfyUI（避免與 llama 同時上卡）
@@ -3489,14 +3498,14 @@ $("#run").onclick = () => {
   runQueue(modeItems().filter(i=>i.state==="pending"||i.state==="error"), "處理中");
 };
 $("#frerun").onclick = () => runQueue(visibleItems().filter(i => i.state !== "running"), "重跑");
-$("#stop").onclick=()=>{abort=true;$("#prog").textContent="停止中…"};
+$("#stop").onclick=()=>{abort=true;progRun("停止中…")};
 $("#clear").onclick=()=>{
   // 只清空目前模式的清單，其他模式的項目不動
   const m = curMode();
   items.forEach(i => { if ((i.mode||"i2va")===m && i.preview) URL.revokeObjectURL(i.preview); });
   items = items.filter(i => (i.mode||"i2va") !== m);
   render();$("#conv").style.display="none";
-  $("#prog").textContent="";$("#run").disabled=!modeItems().length;updateNavCounts();
+  progEnd("");$("#run").disabled=!modeItems().length;updateNavCounts();
   if (!modeItems().length) $("#fbar").style.display="none";};
 
 /* ================= 收斂統計 ================= */
@@ -3734,11 +3743,11 @@ $("#comfysel").onclick = async () => {
   $("#comfysel").disabled = true;
   let n = 0;
   for (const {it, k} of list){
-    $("#prog").textContent = `送 ComfyUI ${++n}/${list.length} — ${it.name}`;
+    progRun(`送 ComfyUI ${++n}/${list.length} — ${it.name}`);
     comfyFromItem(k, null);                       // each card shows its own queue/render status
     await new Promise(r => setTimeout(r, 400));   // stagger so ComfyUI queues them in order
   }
-  $("#prog").textContent = `已送出 ${n} 張到 ComfyUI（各卡片顯示進度）`;
+  progEnd(`已送出 ${n} 張到 ComfyUI（各卡片顯示進度）`);
   updateSelBtns();
 };
 window.redo = async k => { const it=items[k]; it.state="running"; it.keep=true; it.zh=null; render();
@@ -3755,7 +3764,7 @@ window.removeItem = k => {
   render();
   $("#run").disabled = !modeItems().length;
   updateNavCounts();
-  $("#prog").textContent = modeItems().length ? `${modeItems().length} 筆` : "";
+  progIdle(modeItems().length ? `${modeItems().length} 筆` : "");
   if (!modeItems().length){ $("#conv").style.display = "none"; $("#fbar").style.display = "none"; }
 };
 /* 放回上方格子重新調整。圖片放錯時原本只能整張刪掉重來，很煩。
@@ -3803,7 +3812,7 @@ window.editItem = k => {
   renderSlots(); render();
   $("#run").disabled = !modeItems().length;
   updateNavCounts();
-  $("#prog").textContent = modeItems().length ? `${modeItems().length} 筆` : "";
+  progIdle(modeItems().length ? `${modeItems().length} 筆` : "");
   if (!modeItems().length){ $("#conv").style.display = "none"; $("#fbar").style.display = "none"; }
   const st = $("#slotStat"); if (st) st.textContent = "已放回格子 — 調整完再按「加入生成清單」";
   const z = $("#slotzone") || $("#t2vaZone"); if (z) z.scrollIntoView({behavior: "smooth", block: "center"});
@@ -4080,7 +4089,7 @@ $("#himport") && ($("#himport").onclick = async () => {
   saveDraft();
   render();
   $("#run").disabled = !modeItems().length;
-  $("#prog").textContent = `${modeItems().length} 筆待處理`;
+  progIdle(`${modeItems().length} 筆待處理`);
   updateNavCounts();
   hSel.clear(); renderHist();
   setView("run");
