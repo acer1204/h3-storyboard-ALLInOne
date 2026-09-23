@@ -178,7 +178,7 @@ def gpu_mem():
 def comfy_busy():
     """True＝在算圖或有排隊；False＝確定不忙；None＝問不到且可疑。
 
-    None 會讓去背被擋，所以不能濺b地回——根本沒在跑 ComfyUI 的人
+    None 會讓去背被擋，所以不能隨便回——根本沒在跑 ComfyUI 的人
     不該因此永遠不能去背。本機沒開的埠在這台機器上是 timeout
     而不是連線被拒，所以分不出來；改用「之前聯絡上過嗎」判：
     剛還好好的、現在不回話＝忙；從來沒聯絡上＝沒在跑。
@@ -1672,7 +1672,7 @@ def cut_gpu_block():
     if mode == "1":
         return ""                          # 使用者強制允許同時使用
     if mode == "auto":
-        # 兩個都在別台機器：没有任何予盾，直接放行
+        # 兩個都在別台機器：沒有任何矛盾，直接放行
         if not comfy_here and not llama_here:
             return ""
         if LLAMA_INFLIGHT[0] > 0 and llama_here:

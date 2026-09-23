@@ -1981,7 +1981,7 @@ async function cutStatLoad(){
     const r = await (await fetch("/api/cutout/status")).json();
     const bits = [];
     /* 舊版伺服器沒有這兩個欄位。缺時不能隨便討——敲成「別台機器」
-       會讓人以為沒有予盾，恰好是最寬鬆也最誤導的那個方向。 */
+       會讓人以為沒有矛盾，恰好是最寬鬆也最誤導的那個方向。 */
     if (r.comfy_local !== undefined && r.llama_local !== undefined){
       const where = t => t ? "本機" : "別台機器";
       bits.push(`ComfyUI 在${where(r.comfy_local)}`, `LLM 在${where(r.llama_local)}`);
@@ -2660,8 +2660,8 @@ async function cutOpen(i){
     if (!CUT.hasCut){
       CUT.info = " · 選好模式與底色，再按「▶ 執行」"; cutStatus(); return;
     }
-    /* 這格已經去過背就把現成的拿出來，不要一開就重跡。
-       重跡會洗掉使用者調好的結果，而且白燒一次 GPU。 */
+    /* 這格已經去過背就把現成的拿出來，不要一開就重跑。
+       重跑會洗掉使用者調好的結果，而且白燒一次 GPU。 */
     const prev = new Image();
     prev.onload = () => {
       CUT.cut = prev;
