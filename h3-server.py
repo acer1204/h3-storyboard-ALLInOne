@@ -55,7 +55,7 @@ H3 Prompt 批次產生器 - 本機服務
 import argparse, base64, hashlib, io, json, os, queue, re, socket, struct, subprocess, sys, threading, time
 import urllib.request
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-from urllib.parse import urlparse, unquote, parse_qs, quote
+from urllib.parse import urlparse, unquote, parse_qs, quote, urlencode
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 HIST = os.path.join(ROOT, "history")
@@ -908,10 +908,8 @@ def media_thumb(rel):
         cand = os.path.splitext(rel)[0] + "-first-frame.png"
         src = media_path(cand)
         if not (src and os.path.isfile(src)):
-            # 本機沒有：多半是 ComfyUI 在別台。圖片直接跟它要縮小的版本，
-            # 影片則用它的首幀——不為了一張 320px 的封面搬整支影片回來。
-            img = rel if os.path.splitext(rel)[1].lower() in (".png", ".jpg", ".jpeg", ".webp") else cand
-            return media_thumb_remote(img)
+            # 本機沒有：多半是 ComfyUI 在別台，交給遠端那條路
+            return media_thumb_remote(rel)
     try:
         st = os.stat(src)
         key = hashlib.sha1(("%s|%d|%d|%d" % (src, st.st_size, int(st.st_mtime), THUMB_W))
@@ -954,10 +952,25 @@ def media_thumb_remote(rel):
     """ComfyUI 在別台時的封面。首幀 PNG 是全解析度的（平均 2.6 MB），
     一頁上百張卡片全搬回來就是幾百 MB 走外網。/view 的 preview 參數會在
     ComfyUI 那邊先轉成 JPEG（實測約小十倍），拿它來縮就好；
-    完整的 PNG 等真的有人要看（或長片要拿尾幀）時才由 media_fetch 搬。"""
+    完整的 PNG 等真的有人要看（或長片要拿尾幀）時才由 media_fetch 搬。
+
+    影片不為了一張 320px 的封面整支搬回來：先找它旁邊的圖（v18 的
+    -first-frame.png、VHS 的同名 .png），用那張的預覽。實測 1529 支影片裡
+    1136 支有首幀、6 支有同名圖；剩下 387 支一張都沒有，才讓 ffmpeg 直接讀
+    遠端的 /view——它支援 Range，ffmpeg 只抓得到第一格所需的那一小段。"""
     fp = media_path(rel)
     if not fp:
         return None
+    src_rel, from_video = rel, False
+    if os.path.splitext(rel)[1].lower() not in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+        base = os.path.splitext(rel)[0]
+        cands = [base + "-first-frame.png", base + ".png", re.sub(r"[-_]audio$", "", base) + ".png"]
+        known = ASSETS["rows"]
+        if known:
+            src_rel = next((c for c in cands if c in known), None)
+            from_video = src_rel is None
+        else:
+            src_rel = cands[0]          # 沒有清單可查：照舊猜首幀
     key = hashlib.sha1(("remote|%s|%d" % (rel.replace("\\", "/").strip("/"), THUMB_W))
                        .encode("utf-8")).hexdigest()
     out = os.path.join(MEDIA_THUMBS, key + ".jpg")
@@ -979,11 +992,17 @@ def media_thumb_remote(rel):
         os.makedirs(MEDIA_THUMBS, exist_ok=True)
         # 縮圖端點沒有前端期限可言（<img src> 接不上 AbortController），
         # 這裡的上限就是全部。
-        _comfy_view_read(_comfy_view_url(rel, "&preview=jpeg;85"), tmp_src, 20)
         tmp = out + ".tmp.jpg"
-        r = subprocess.run([ff, "-v", "error", "-y", "-i", tmp_src,
+        if from_video:
+            # -rw_timeout（微秒）是單次讀寫的上限；整段再用 subprocess 的 timeout 封頂
+            inp, budget = _comfy_view_url(rel), 30
+            extra = ["-rw_timeout", "15000000"]
+        else:
+            _comfy_view_read(_comfy_view_url(src_rel, "&preview=jpeg;85"), tmp_src, 20)
+            inp, budget, extra = tmp_src, 15, []
+        r = subprocess.run([ff, "-v", "error", "-y"] + extra + ["-i", inp,
                             "-frames:v", "1", "-vf", "scale=%d:-2" % THUMB_W,
-                            "-q:v", "5", tmp], capture_output=True, timeout=15)
+                            "-q:v", "5", tmp], capture_output=True, timeout=budget)
         if r.returncode != 0 or not os.path.exists(tmp):
             return None
         os.replace(tmp, out)
@@ -1001,30 +1020,190 @@ def media_thumb_remote(rel):
             _thumb_busy.pop(key, None)
 
 
-def media_list(limit=1000):
-    rows = []
+# ── ComfyUI 那台的檔案清單 ────────────────────────────────────────────
+# 鏡像只有「被拉回來過」的檔案。要看 ComfyUI 那邊的全部，只有 /api/assets
+# 列得出來——它要 ComfyUI 啟動時加 --enable-assets。實測其他兩條都不行：
+# /internal/files/output 用 os.scandir 不遞迴，3975 個檔只看得到根目錄的 177 個；
+# /history 只記得這次啟動後跑過的工作。assets 分頁拉完 3973 筆約 2.6 秒
+# （差的 2 筆是 0 byte 空檔，它本來就跳過）。
+# DELETE /api/assets/{id} 只刪它自己資料庫的紀錄、不碰磁碟——這裡也不會去呼叫。
+ASSETS = {"t": 0.0, "rows": None, "off_until": 0.0, "err": ""}
+ASSETS_LOCK = threading.Lock()      # 保護 ASSETS
+ASSETS_FETCH = threading.Lock()     # 同一時間只拉一份，其他人等它的結果
+ASSETS_TTL = 60
+# created_at 是被索引的時間不是檔案時間（第一次掃描時全部同一秒），沒有可用的
+# 檔案時間。成品的路徑本身就帶著：video/2026-09-22/004740_00001_audio.webm。
+_PATH_TIME = re.compile(r"(?:^|/)(\d{4})-(\d{2})-(\d{2})/(\d{2})(\d{2})(\d{2})_")
+# 路徑裡沒有時間的（根目錄那些）跟 /view 要 Last-Modified。一個檔一次，存檔，
+# 檔名是 ComfyUI 的流水號、不會被覆寫，所以不用失效。
+REMOTE_MTIME_PATH = os.path.join(ROOT, "thumbs", "remote-mtime.json")
+REMOTE_MTIME = {}
+REMOTE_MTIME_LOCK = threading.Lock()
+_remote_mtime_busy = [False]
+
+
+def _path_time(p):
+    m = _PATH_TIME.search(p)
+    if not m:
+        return 0
+    y, mo, d, h, mi, s = (int(x) for x in m.groups())
+    if not (1 <= mo <= 12 and 1 <= d <= 31 and h < 24 and mi < 60 and s < 60):
+        return 0
+    try:
+        return int(time.mktime((y, mo, d, h, mi, s, 0, 0, -1)))   # ComfyUI 那台的本地時間
+    except (OverflowError, ValueError):
+        return 0
+
+
+def _remote_mtime_load():
+    if REMOTE_MTIME:
+        return
+    try:
+        with open(REMOTE_MTIME_PATH, encoding="utf-8") as f:
+            REMOTE_MTIME.update(json.load(f))
+    except Exception:
+        pass
+
+
+def _remote_mtime_fill(paths, wait_s):
+    """同時開 8 條去問 Last-Modified。第一次約 190 個檔，一條條問要快一分鐘；
+    這個請求最多等 wait_s 秒，剩下的在背景問完、下一次清單就有。"""
+    import concurrent.futures as cf
+    from email.utils import parsedate_to_datetime
+
+    def one(p):
+        req = urllib.request.Request(_comfy_view_url(p), method="HEAD")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            lm = r.headers.get("Last-Modified")
+        if lm:
+            with REMOTE_MTIME_LOCK:
+                REMOTE_MTIME[p] = int(parsedate_to_datetime(lm).timestamp())
+
+    def save():
+        try:
+            os.makedirs(os.path.dirname(REMOTE_MTIME_PATH), exist_ok=True)
+            with REMOTE_MTIME_LOCK:
+                data = json.dumps(REMOTE_MTIME)
+            tmp = REMOTE_MTIME_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(data)
+            os.replace(tmp, REMOTE_MTIME_PATH)
+        except Exception:
+            pass
+
+    if _remote_mtime_busy[0] or not paths:
+        return
+    _remote_mtime_busy[0] = True
+    ex = cf.ThreadPoolExecutor(max_workers=8)
+    futs = [ex.submit(one, p) for p in paths]
+    cf.wait(futs, timeout=wait_s)
+
+    def finish():
+        cf.wait(futs)
+        ex.shutdown(wait=False)
+        save()
+        _remote_mtime_busy[0] = False
+    threading.Thread(target=finish, daemon=True).start()
+
+
+def comfy_assets(fresh=False):
+    """ComfyUI 那台 output 的完整清單：{相對路徑: {size, mtime}}。
+    沒開 --enable-assets 或連不上時回 None（拉過的話回上一份）。"""
+    now = time.time()
+    with ASSETS_LOCK:
+        if not fresh and ASSETS["rows"] is not None and now - ASSETS["t"] < ASSETS_TTL:
+            return ASSETS["rows"]
+        if now < ASSETS["off_until"]:
+            return ASSETS["rows"]
+    if not ASSETS_FETCH.acquire(timeout=25):
+        return ASSETS["rows"]
+    try:
+        with ASSETS_LOCK:          # 等鎖的時候別人可能已經拉好了
+            if ASSETS["t"] > now:
+                return ASSETS["rows"]
+        rows, after, t_end = {}, None, time.time() + 20
+        while True:
+            q = {"tags_all": "output", "limit": 500, "sort": "name", "order": "asc"}
+            if after:
+                q["after"] = after
+            j = comfy_api("/api/assets?" + urlencode(q), timeout=15)
+            for a in j.get("assets") or []:
+                p = str(a.get("loader_path") or "").replace("\\", "/").strip("/")
+                if p and os.path.splitext(p)[1].lower() in MEDIA_EXT and ".." not in p.split("/"):
+                    rows[p] = {"size": int(a.get("size") or 0), "mtime": _path_time(p)}
+            after = j.get("next_cursor")
+            if not j.get("has_more") or not after:
+                break
+            if time.time() > t_end:
+                raise TimeoutError("清單超過 20 秒還沒拉完")
+        _remote_mtime_load()
+        missing = []
+        for p, r in rows.items():
+            if not r["mtime"]:
+                r["mtime"] = REMOTE_MTIME.get(p, 0)
+                if not r["mtime"]:
+                    missing.append(p)
+        if missing:
+            _remote_mtime_fill(missing, 10)
+            for p in missing:
+                rows[p]["mtime"] = REMOTE_MTIME.get(p, 0)
+        with ASSETS_LOCK:
+            ASSETS.update(t=time.time(), rows=rows, err="", off_until=0.0)
+        return rows
+    except Exception as e:
+        # 404＝ComfyUI 沒開 --enable-assets：五分鐘內別再問。其他錯誤三十秒後再試。
+        msg = str(e)
+        with ASSETS_LOCK:
+            ASSETS["off_until"] = time.time() + (300 if "404" in msg else 30)
+            ASSETS["err"] = ("ComfyUI 沒有開 --enable-assets" if "404" in msg else msg[:160])
+            return ASSETS["rows"]
+    finally:
+        ASSETS_FETCH.release()
+
+
+def media_list(limit=5000, remote=True, fresh=False):
+    """本機 media_root（ComfyUI 在別台時就是鏡像）＋ ComfyUI 那台的清單，以路徑合併。
+    local/remote 兩個旗標讓前端知道哪些能刪（只有這台有的副本能刪）。"""
+    local = {}
     root = os.path.realpath(MEDIA_ROOT)
-    if not os.path.isdir(root):
+    if os.path.isdir(root):
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            for name in filenames:
+                ext = os.path.splitext(name)[1].lower()
+                if ext not in MEDIA_EXT:
+                    continue
+                fp = os.path.join(dirpath, name)
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                mime = MEDIA_EXT[ext]
+                p = os.path.relpath(fp, root).replace(os.sep, "/")
+                local[p] = {"path": p, "name": name, "size": st.st_size,
+                            "mtime": int(st.st_mtime), "kind": mime.split("/")[0],
+                            "mime": mime, "local": True, "remote": False}
+    rem = comfy_assets(fresh) if remote else None
+    if rem is None and not os.path.isdir(root):
         return None
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-        for name in filenames:
-            ext = os.path.splitext(name)[1].lower()
-            if ext not in MEDIA_EXT:
-                continue
-            fp = os.path.join(dirpath, name)
-            try:
-                st = os.stat(fp)
-            except OSError:
-                continue
-            mime = MEDIA_EXT[ext]
-            rows.append({"path": os.path.relpath(fp, root).replace(os.sep, "/"),
-                         "name": name, "size": st.st_size,
-                         "mtime": int(st.st_mtime),
-                         "kind": mime.split("/")[0], "mime": mime})
-    rows.sort(key=lambda r: r["mtime"], reverse=True)
-    total = len(rows)
-    return {"total": total, "truncated": total > limit, "files": rows[:limit]}
+    rows = dict(local)
+    for p, a in (rem or {}).items():
+        if p in rows:
+            # 鏡像檔的 mtime 是「拉回來的時間」，排序要用它真正產生的時間
+            rows[p]["remote"] = True
+            if a["mtime"]:
+                rows[p]["mtime"] = a["mtime"]
+            continue
+        mime = MEDIA_EXT[os.path.splitext(p)[1].lower()]
+        rows[p] = {"path": p, "name": p.rsplit("/", 1)[-1], "size": a["size"],
+                   "mtime": a["mtime"], "kind": mime.split("/")[0], "mime": mime,
+                   "local": False, "remote": True}
+    out = sorted(rows.values(), key=lambda r: r["mtime"], reverse=True)
+    total = len(out)
+    return {"total": total, "truncated": total > limit, "files": out[:limit],
+            "remote": {"enabled": rem is not None, "count": len(rem or {}),
+                       "only": sum(1 for r in out if not r["local"]),
+                       "error": ASSETS["err"] if remote else ""}}
 
 
 def comfy_api(path, data=None, timeout=30):
@@ -3131,7 +3310,8 @@ class H(SimpleHTTPRequestHandler):
             return self.send_json({"state": "unknown"})
 
         if p == "/api/media":
-            data = media_list()
+            # fresh=1 是「重新整理」按鈕：跳過 60 秒的清單快取，剛算完的馬上看得到
+            data = media_list(fresh="fresh=1" in (urlparse(self.path).query or ""))
             if data is None:
                 return self.send_json({"error": "媒體資料夾不存在: " + MEDIA_ROOT}, 404)
             return self.send_json(data)
@@ -4403,7 +4583,7 @@ def main():
     print("  設定檔   : %s" % (CONFIG_PATH if os.path.exists(CONFIG_PATH) else "(無 config.json，用預設 / 參數)"))
     print("  紀錄存放 : %s   （目前 %d 筆）" % (HIST, len(load_index())))
     print("  提示詞庫 : %s   （目前 %d 組）" % (PROMPTS, len(load_pindex())))
-    md = media_list(limit=1)
+    md = media_list(limit=1, remote=False)   # 啟動時不去拉遠端清單，那要好幾秒
     print("  媒體庫   : %s   （%s）" % (MEDIA_ROOT,
           ("%d 個檔案" % md["total"]) if md else "資料夾不存在"))
     print("  去背服務 : %s" % (CUT_EXTERNAL or ("%s（按需啟動，port %d）" % (CUT_DIR, CUT_PORT))))
