@@ -140,11 +140,3 @@ h3-server 的視窗會印 log。**請把「快速編輯模式」關掉**
 不會再卡住服務，但暫停期間的 log 會被丟掉（會印一行說丟了幾行）。
 
 去背服務的輸出在 `h3-matte.log`。Docker 沒有這個問題，log 用 `docker compose logs` 看。
-
-## Claude Desktop
-
-工作資料夾選到這個 repo，它會讀 `CLAUDE.md`——裡面有架構、慣例，
-以及一整節「踩過的坑」。那節是這個專案最難重新發現的部分，值得先看。
-
-**`~/.claude/.../memory/MEMORY.md` 是那台機器上的個人記憶，不會跟著 repo 走。**
-要轉移的東西請寫進 `CLAUDE.md`，那份才會跟著專案跑。
