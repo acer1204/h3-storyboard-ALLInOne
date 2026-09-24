@@ -358,6 +358,9 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .qcard .qthumb.nothumb img{display:none}
 .qnothumb{font-size:11px;line-height:1.5;color:var(--faint);padding:0 10px;text-align:center}
 .mdprev .qnothumb{position:absolute;inset:0;display:grid;place-items:center;z-index:1}
+/* 只在 ComfyUI 那台、這裡還沒有副本的檔案。點開才下載，也不能從這裡刪。 */
+.mdprev .mdremote{position:absolute;top:6px;left:6px;z-index:2;font-size:10px;line-height:1.6;
+  padding:1px 7px;border-radius:99px;background:rgba(10,12,16,.74);color:#fff;pointer-events:none}
 .qcard .qtag{position:absolute;top:6px;left:6px;z-index:2;font-size:10px;line-height:1.6;
   padding:1px 7px;border-radius:99px;background:rgba(10,12,16,.74);border:1px solid transparent;
   backdrop-filter:blur(2px);pointer-events:none;max-width:calc(100% - 12px);
@@ -395,6 +398,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .t-ok{color:var(--ok)}.t-warn{color:var(--warn)}.t-fail{color:var(--acc)}
 
 .mdgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:13px}
+.mdgrid .mdmore{grid-column:1/-1;text-align:center;color:var(--faint);font-size:12px;padding:10px;cursor:pointer}
 /* ---- 上傳媒體庫 ---- */
 .upgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:13px}
 .upcell{position:relative;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--bg);transition:border-color .12s,transform .12s,box-shadow .12s}
@@ -5578,14 +5582,22 @@ const fmtTime = t => { const d = new Date(t*1000);
   return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`; };
 const mUrl = (f, dl) => MAPI + "/file/" + f.path.split("/").map(encodeURIComponent).join("/") + (dl ? "?dl=1" : "");
 
-async function loadMedia(){
+let mdRemote = null;     // 伺服器回報的 ComfyUI 清單狀態 {enabled, count, only, error}
+async function loadMedia(fresh){
   if (!onServer){ $("#mdcount").textContent = "需要透過 start_app.bat 啟動的服務"; return; }
   try{
-    const r = await fetch(MAPI);
+    const r = await fetch(MAPI + (fresh === true ? "?fresh=1" : ""));
     const j = await r.json();
     if (j.error){ media = []; $("#mdcount").textContent = j.error; renderMedia(); return; }
     media = j.files || [];
+    mdRemote = j.remote || null;
     $("#navMedia").textContent = j.total || "";
+    const sub = $("#mediaSub");
+    if (sub) sub.textContent = mdRemote && mdRemote.enabled
+      ? "ComfyUI 那台的輸出資料夾（經由 /api/assets 列出）。標「遠端」的點開時才下載，只有這台的副本可以刪除。"
+      : mdRemote && mdRemote.error
+        ? "只列得出已經拉回這台的檔案：" + mdRemote.error
+        : "ComfyUI 的輸出資料夾。點卡片放大預覽，可下載或刪除。";
     renderMedia();
   }catch(e){ $("#mdcount").textContent = "讀取失敗：" + e.message; }
 }
@@ -5640,6 +5652,7 @@ let mlbUpload = null;   // which upload the lightbox is showing (null = a ComfyU
 window.openUpload = i => {
   const u = uploads[i]; if (!u) return;
   mlbUpload = u.id;
+  $("#mlbDel").disabled = false; $("#mlbDel").title = "";
   $("#mlbName").textContent = u.name || "(未命名)";
   const odim = (u.ow&&u.oh) ? `${u.ow}×${u.oh}（原圖）` : ((u.w&&u.h) ? `${u.w}×${u.h}（僅 1024 工作副本）` : "");
   $("#mlbMeta").textContent = `${odim?odim+" · ":""}${(u.osize||u.size)?fmtSize(u.osize||u.size)+" · ":""}被 ${u.refs||0} 筆歷史紀錄使用 · ${u.ts||""}`;
@@ -5724,97 +5737,66 @@ function renderMedia(){
   const rows = media.filter(f => (mdKind==="all" || f.kind===mdKind)
     && (!q || f.path.toLowerCase().includes(q)));
   const totalSize = rows.reduce((a,f)=>a+f.size,0);
-  $("#mdcount").textContent = `${rows.length} / ${media.length} 個檔案 · ${fmtSize(totalSize)}`;
-  $("#mdgrid").innerHTML = rows.map(f => {
-    const i = media.indexOf(f);
-    const prev = f.kind === "image"
-      ? `<img src="${mUrl(f)}" loading="lazy">`
-      : f.kind === "video"
-        ? `<img data-vthumb="${esc(f.path)}" alt=""><span class="play"><span>▶</span></span>`
+  const onlyRemote = rows.filter(f => f.local === false).length;
+  $("#mdcount").textContent = `${rows.length} / ${media.length} 個檔案 · ${fmtSize(totalSize)}`
+    + (onlyRemote ? ` · 其中 ${onlyRemote} 個只在 ComfyUI 那台` : "");
+  /* 一次只畫一批，捲到底再接下一批。ComfyUI 那台有四千個檔，一次全畫是
+     三萬多個節點，篩選框每打一個字就整批重排一次。 */
+  mdRows = rows; mdShown = 0;
+  const idx = new Map(media.map((f, i) => [f, i]));
+  mdIdx = f => idx.get(f);
+  $("#mdgrid").innerHTML = rows.length ? "" : '<span class="hint">沒有符合的檔案</span>';
+  mdMore();
+}
+const MD_PAGE = 240;
+let mdRows = [], mdShown = 0, mdIdx = f => media.indexOf(f), mdIO = null;
+function mdMore(){
+  const grid = $("#mdgrid");
+  const old = grid.querySelector(".mdmore");
+  if (old){ if (mdIO) mdIO.unobserve(old); old.remove(); }
+  const next = mdRows.slice(mdShown, mdShown + MD_PAGE);
+  mdShown += next.length;
+  grid.insertAdjacentHTML("beforeend", next.map(mdCell).join(""));
+  if (mdShown < mdRows.length){
+    /* 捲到這條就自動接下一批；點它也行——分頁在背景時瀏覽器不觸發
+       IntersectionObserver，回到前景前總要有個手動的辦法。 */
+    grid.insertAdjacentHTML("beforeend",
+      `<div class="mdmore" onclick="mdMore()">已顯示 ${mdShown} / ${mdRows.length}，往下捲或點這裡載入更多</div>`);
+    if (!mdIO) mdIO = new IntersectionObserver(es => {
+      if (es.some(e => e.isIntersecting)) mdMore();
+    }, {rootMargin: "900px"});
+    mdIO.observe(grid.querySelector(".mdmore"));
+  }
+}
+function mdCell(f){
+    const i = mdIdx(f);
+    /* 縮圖一律由伺服器給（320px JPEG、有快取）。以前影片是瀏覽器整支載下來再
+       截一格——ComfyUI 那台有 35 GB，捲一頁就是幾百 MB 走外網。 */
+    const th = `<img src="${mThumb(f)}" loading="lazy" alt="" onload="mdThumbChk(this)" onerror="mdThumbChk(this,1)">`;
+    const prev = f.kind === "image" ? th
+      : f.kind === "video" ? th + `<span class="play"><span>▶</span></span>`
         : `<span style="display:grid;place-items:center;aspect-ratio:16/10;color:var(--faint);font-size:32px">♪</span>`;
+    const tag = f.local === false ? `<span class="mdremote" title="在 ComfyUI 那台，點開時才下載">遠端</span>` : "";
+    /* 這裡只刪得到這台的檔案。ComfyUI 那台的原檔沒有 API 可刪，也不該從這裡刪。 */
+    const del = f.local === false ? ""
+      : `<button onclick="delMedia(${i})">${f.remote ? "刪本機副本" : "刪除"}</button>`;
     return `<div class="mdcell">
-      <button class="mdprev" onclick="openMedia(${i})">${prev}</button>
+      <button class="mdprev" onclick="openMedia(${i})">${tag}${prev}</button>
       <div class="mdcap" title="${esc(f.path)}">${esc(f.name)}</div>
-      <div class="mdcap t">${fmtSize(f.size)} · ${fmtTime(f.mtime)}</div>
+      <div class="mdcap t">${fmtSize(f.size)} · ${f.mtime ? fmtTime(f.mtime) : "時間未知"}</div>
       <div class="mdrow">
         <a href="${mUrl(f, true)}">下載</a>
-        <button onclick="delMedia(${i})">刪除</button>
+        ${del}
       </div></div>`;
-  }).join("") || '<span class="hint">沒有符合的檔案</span>';
-  document.querySelectorAll("#mdgrid img[data-vthumb]").forEach(img => {
-    const f = media.find(x => x.path === img.dataset.vthumb);
-    if (f) queueThumb(f, img);
-  });
 }
+const mThumb = f => "/api/media/thumb/" + f.path.split("/").map(encodeURIComponent).join("/");
+/* 伺服器生不出縮圖時回 1×1 透明圖，不是錯誤——要看解出來的尺寸才知道 */
+window.mdThumbChk = (img, err) => qNoThumb(img.parentElement, !!err || img.naturalWidth <= 1);
 
-/* 影片縮圖：一次只開一條連線循序抓第一幀，避免佔滿瀏覽器對同源的連線池 */
-const thumbCache = new Map(), thumbPending = new Set();
-/* 抓不到的記下來：每次重畫清單都會重排一次，不記的話同一支壞檔
-   每次都要等滿 10 秒，還一直是空白。 */
-const thumbFail = new Set();
-let thumbQueue = [], thumbBusy = false;
-function thumbTarget(path){
-  // 每次都重新找當下的 img——render 可能已經重畫過，抓舊參照會落空
-  return [...document.querySelectorAll("#mdgrid img[data-vthumb]")]
-    .find(el => el.dataset.vthumb === path) || null;
-}
-function queueThumb(f, imgEl){
-  if (thumbCache.has(f.path)){ imgEl.src = thumbCache.get(f.path); return; }
-  if (thumbFail.has(f.path)){ qNoThumb(imgEl.parentElement, true); return; }
-  if (thumbPending.has(f.path)) return;
-  thumbPending.add(f.path);
-  thumbQueue.push(f);
-  pumpThumbs();
-}
-async function pumpThumbs(){
-  if (thumbBusy) return;
-  thumbBusy = true;
-  while (thumbQueue.length){
-    const f = thumbQueue.shift();
-    if (!thumbCache.has(f.path)){
-      try{
-        thumbCache.set(f.path, await makeVideoThumb(mUrl(f)));
-      }catch(e){
-        thumbPending.delete(f.path); thumbFail.add(f.path);
-        const el = thumbTarget(f.path);
-        if (el) qNoThumb(el.parentElement, true);
-        continue;
-      }
-    }
-    thumbPending.delete(f.path);
-    const el = thumbTarget(f.path);
-    if (el) el.src = thumbCache.get(f.path);
-  }
-  thumbBusy = false;
-}
-function makeVideoThumb(src){
-  return new Promise((res, rej) => {
-    const v = document.createElement("video");
-    v.muted = true; v.preload = "metadata";
-    const done = (fn, arg) => { v.onerror = v.onseeked = v.onloadedmetadata = null;
-      v.removeAttribute("src"); v.load(); clearTimeout(bail); fn(arg); };
-    const bail = setTimeout(() => done(rej, new Error("timeout")), 10000);
-    v.onloadedmetadata = () => {
-      try { v.currentTime = Math.min(Math.max(0.4, (v.duration || 1) * 0.1), Math.max(0.1, (v.duration || 1) - 0.05)); }
-      catch(e){}
-    };
-    v.onseeked = () => {
-      try{
-        const sc = 320 / Math.max(v.videoWidth || 1, v.videoHeight || 1);
-        const c = document.createElement("canvas");
-        c.width = Math.max(1, Math.round(v.videoWidth * sc));
-        c.height = Math.max(1, Math.round(v.videoHeight * sc));
-        c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
-        done(res, c.toDataURL("image/jpeg", 0.72));
-      }catch(e){ done(rej, e); }
-    };
-    v.onerror = () => done(rej, new Error("video error"));
-    v.src = src;
-  });
-}
 window.setMdKind = k => { mdKind = k; renderMedia(); };
-$("#mdfilter").oninput = renderMedia;
-$("#mdrefresh").onclick = loadMedia;
+let MD_FILTER_T = null;
+$("#mdfilter").oninput = () => { clearTimeout(MD_FILTER_T); MD_FILTER_T = setTimeout(renderMedia, 200); };
+$("#mdrefresh").onclick = () => loadMedia(true);
 
 window.openMedia = i => {
   const f = media[i]; if (!f) return;
@@ -5822,6 +5804,8 @@ window.openMedia = i => {
   $("#mlbName").textContent = f.name;
   $("#mlbMeta").textContent = `${f.path} · ${fmtSize(f.size)} · ${fmtTime(f.mtime)}`;
   $("#mlbDl").href = mUrl(f, true);
+  $("#mlbDel").disabled = f.local === false;
+  $("#mlbDel").title = f.local === false ? "在 ComfyUI 那台，這裡不能刪" : "";
   $("#mlbBody").innerHTML = f.kind === "image"
     ? `<img src="${mUrl(f)}">`
     : f.kind === "video"
@@ -5837,7 +5821,10 @@ function closeMlb(){
 }
 window.delMedia = async i => {
   const f = media[i]; if (!f) return;
-  if (!confirm(`刪除「${f.name}」？檔案會從磁碟移除，無法復原。`)) return;
+  if (f.local === false) return;
+  if (!confirm(f.remote
+      ? `刪除「${f.name}」在這台的副本？ComfyUI 那台的原檔不受影響，之後有人要看時會再下載一次。`
+      : `刪除「${f.name}」？檔案會從磁碟移除，無法復原。`)) return;
   const r = await fetch(mUrl(f), {method:"DELETE"});
   const j = await r.json().catch(() => ({}));
   if (!r.ok){ alert("刪除失敗：" + (j.error || r.status)); return; }
@@ -6845,7 +6832,7 @@ const EN = {
 "劇情提示（選填，重跑時會一起送給模型）":"Story hint (optional; sent along on rerun)",
 "重跑 Prompt":"Re-run prompt","🎬 送 ComfyUI 生成":"🎬 Send to ComfyUI","評價（看完影片後）":"Rating (after watching)",
 "👍 效果好":"👍 Good","👎 不好":"👎 Bad","儲存評價":"Save rating","🤖 AI 影片審查":"🤖 AI video review",
-"還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","縮圖無法產生":"No thumbnail","🎯 點選去除":"🎯 Click to remove","🎯 點選補回":"🎯 Click to restore",
+"還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","縮圖無法產生":"No thumbnail","遠端":"Remote","刪本機副本":"Delete local copy","時間未知":"Unknown time","🎯 點選去除":"🎯 Click to remove","🎯 點選補回":"🎯 Click to restore",
 "點一下物件，SAM2 會選整個物件":"Click an object - SAM2 selects all of it","SAM2 選取物件中…":"SAM2 is selecting the object…","▶ 看影片":"▶ Watch","▶ 成片":"▶ Film","讀取失敗":"Failed to load",
 "▶ 可繼續":"▶ Continue","🔧 需調整":"🔧 Adjust","🎲 再賭一次（同劇情換 seed）":"🎲 Roll again (same story, new seed)",
 "🎬 用新劇情重跑影片":"🎬 Re-render with new story","▶ 就用目前影片，繼續":"▶ Keep this video, continue","依據▾":"why ▾",
