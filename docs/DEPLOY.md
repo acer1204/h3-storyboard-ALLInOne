@@ -49,7 +49,9 @@ Docker 則是直接用 repo 裡的 `tools/matte/` 建映像，不需要那個資
 - ComfyUI **在同一台**時，`media_root` 可以直接指到它的 `output` 目錄（不是 `output/video`）。
 - ComfyUI **在別台**時 `media_root` 留空。它的 output 不在這台的磁碟上，成品會在任務完成時
   從 ComfyUI 的 `/view` 拉回 `output/`，審查、長片合併、封面讀的都是這份鏡像。
-  媒體庫因此只看得到拉回來過的檔案，不是 ComfyUI 那邊的全部。
+  媒體庫要看到 ComfyUI 那邊的全部，ComfyUI 啟動時要加 **`--enable-assets`**
+  （它會在背景索引 output，只讀檔案資訊，四千個檔幾秒）。沒加的話媒體庫只看得到拉回來過的檔案。
+  列出來但還沒拉回來的標「遠端」：點開時才下載，也不能從這裡刪。
 - `https://` 的 ComfyUI（反向代理後面）也可以：進度與即時預覽的 websocket 會走 TLS。
   網址帶路徑前綴（`https://host/comfy`）也行。
 - `bind: "0.0.0.0"` 才能從區網其他機器連進來。
@@ -125,6 +127,8 @@ docker compose logs -f h3-server    # 主控台
 6. 想用 SAM3 的話，ComfyUI 那台要有 `SAM3_Detect` 節點與
    `sam3.1_multiplex_fp16.safetensors`；沒有的話模型下拉選單就不會出現 SAM3
 7. 打開任務清單，已完成的卡片要有封面（ComfyUI 在別台時是從它那邊拉回來的）
+8. 打開 ComfyUI 媒體庫，說明文字要寫「經由 /api/assets 列出」；
+   寫「只列得出已經拉回這台的檔案」就是 ComfyUI 沒加 `--enable-assets`
 
 ## 主控台（start_app.bat）
 

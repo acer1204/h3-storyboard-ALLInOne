@@ -128,8 +128,20 @@ ComfyUI 搬到別台之後每一條都會變成「影片不存在」。現在缺
 ComfyUI 的 `/view` 拉一份放進 `output/` 同一個相對路徑；任務完成時也會先在背景拉。
 封面走 `media_thumb_remote()`，用 `/view?...&preview=jpeg;85`（實測小十倍）來縮。
 
-ComfyUI 的 `/internal/files/output` **只列最上層**，影片在 `video/<日期>/` 底下看不到，
-所以媒體庫只列得出鏡像裡有的檔案。
+媒體庫要看 ComfyUI 那台的全部檔案，只有 `/api/assets` 列得出來（`comfy_assets()`），
+而且 **ComfyUI 啟動要加 `--enable-assets`**，沒加就回 404，媒體庫退回只列鏡像。
+其他兩條都量過、不能用：`/internal/files/output` 用 `os.scandir` **不遞迴**
+（3975 個檔只看得到根目錄的 177 個）；`/history` 只記得這次啟動後的工作。
+
+- assets 的 `created_at` 是**被索引的時間**，第一次掃描全部同一秒，不能拿來排序。
+  時間從路徑解析（`video/2026-09-22/004740_...`）；路徑裡沒有的跟 `/view` 打 HEAD
+  拿 `Last-Modified`，存在 `thumbs/remote-mtime.json`。
+- 縮圖一律由伺服器給。影片先找旁邊的 `-first-frame.png`／同名 `.png`，一張都沒有
+  （約四分之一）才讓 ffmpeg 直接讀遠端 `/view`——它支援 Range，只抓得到開頭。
+  **不要回到瀏覽器整支載影片再截圖**：那台有 35 GB。
+- 前端一次只畫 240 張，捲到底（或點底下那條）再接下一批。四千張一次畫是三萬多個節點。
+- `DELETE /api/assets/{id}` 只刪它資料庫的紀錄、不碰磁碟。這邊從來不呼叫它；
+  媒體庫只刪得到這台的副本。
 
 ### 10. 反向代理後面的服務
 
@@ -206,8 +218,13 @@ bash heredoc 會吃掉一層跳脫（`\x89`、`\n` 都會被解讀），**長補
 
 權威來源是 `git log` 與 GitHub releases。
 
-已發佈到 **v2.5**。這台機器用 **Docker** 在跑（`h3-storyboard` 與 `h3-matte` 兩個容器），
+已發佈到 **v2.5.1**。這台機器用 **Docker** 在跑（`h3-storyboard` 與 `h3-matte` 兩個容器），
 llama-server 與 ComfyUI 都在別台，透過 https 反向代理連線。
+
+### v2.5.1
+
+- 媒體庫改用 ComfyUI 的 `/api/assets` 列出那台的全部成品（ComfyUI 要加 `--enable-assets`），
+  封面由伺服器產生、檔案點開才下載、遠端獨有的檔案不能刪；一次只畫 240 張（見第 9 節）
 
 ### v2.5 做了什麼
 
@@ -238,7 +255,6 @@ llama-server 與 ComfyUI 都在別台，透過 https 反向代理連線。
 - 還沒在 Docker 版上實際送過一支影片到 ComfyUI（只驗證了既有任務的鏡像、封面與審查抽幀）
 - 換 BiRefNet 權重（`BiRefNet-portrait` / `-matting`，MIT，885MB）——
   機制正確但全部在照片上訓練，沒有插畫上的公開評測；SAM3 已經夠用，暫不動
-- 媒體庫只列得出鏡像裡的檔案（ComfyUI 沒有列子資料夾的 API）
 
 ---
 

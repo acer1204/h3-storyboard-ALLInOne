@@ -120,8 +120,8 @@ Pick any workflow .json from your workflow folder (or upload one from the page) 
   預設參數（fps／解析度／步數／shift…）可逐項覆寫；留空一律照模板原值。
 - Finished videos embed the full workflow metadata — including the canvas actually applied — so dragging a video back into ComfyUI restores the exact graph and prompt.  
   成品影片內嵌完整工作流參數（含當次實際套用的畫布尺寸），拖回 ComfyUI 即還原當時的節點圖與 Prompt。
-- A media library page browses everything in the ComfyUI output folder.  
-  媒體庫頁可瀏覽 ComfyUI 輸出資料夾的所有成品。
+- A media library page browses everything in the ComfyUI output folder. When ComfyUI is on another machine and started with `--enable-assets`, the page lists all of its outputs through `/api/assets`, with covers made on the server and each file downloaded only when it is opened. Without that flag, it lists what has been mirrored.  
+  媒體庫頁可瀏覽 ComfyUI 輸出資料夾的所有成品。ComfyUI 在別台、且啟動時加了 `--enable-assets` 時，會透過 `/api/assets` 列出那台的全部成品，封面由伺服器產生，檔案點開時才下載；沒加的話只列出已經拉回本機的檔案。
 - ComfyUI can live on another machine, even behind an https reverse proxy: progress and live previews arrive over TLS, and finished videos and their first/last frames are pulled back through ComfyUI's `/view` into a local `output/` mirror the moment a job completes — so review, movie merging, covers and playback all read local files. Covers are made from a JPEG preview ComfyUI renders on its side, about ten times smaller than the full PNG.  
   ComfyUI 可以在別台機器，甚至在 https 反向代理後面：進度與即時預覽走 TLS，任務一完成就透過 ComfyUI 的 `/view` 把成品與首尾幀拉回本機 `output/` 鏡像——審查、長片合併、封面與播放讀的都是本機檔案。封面用 ComfyUI 那邊先轉好的 JPEG 預覽來縮，比完整 PNG 小約十倍。
 
