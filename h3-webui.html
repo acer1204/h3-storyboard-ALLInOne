@@ -259,6 +259,9 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .xedit:hover{border-color:var(--acc);color:var(--acc)}
 .xedit:disabled{opacity:.35;cursor:not-allowed}
 .xedit + .xdel{margin-left:5px}
+/* 全域 button 帶著 padding:9px 17px，這兩顆只有 26px 寬，不歸零的話
+   左右 34px 的內距會把符號擠到右下角。 */
+.xdel,.xedit{padding:0;display:inline-grid;place-items:center;font-weight:400}
 #cutWrap{display:none;position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.66);
   align-items:center;justify-content:center;padding:24px}
 #cutBox{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);
