@@ -2277,6 +2277,11 @@ def comfy_submit(body):
                     rec_audio_blobs.append((open(fp3, "rb").read(), a.get("ext") or "mp3"))
         except Exception:
             pass
+    # 空白 prompt 不能送。external_prompt_overwrite 是空的時候 Director 會退回模板裡存的
+    # simple_prompt——那是上一次在 ComfyUI 跑過的舊劇情（實查模板裡還帶著別的 LoRA
+    # 觸發詞），影片照樣算出來，內容卻跟這張卡毫無關係，而且沒有任何地方會說。
+    if not full_prompt.strip():
+        raise SubmitError("這筆沒有 prompt 可以送（內容是空的）", 400)
     if blob is None:
         blob, ext2 = parse_data_image(body.get("image"))
         if blob is not None:
