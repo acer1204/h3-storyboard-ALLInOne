@@ -30,7 +30,7 @@ compatibility: Portable to any agent that can read local files — no external A
 6. When the output feeds MiniMax H3, load `h3-prompt-writing` as well and fold the selected actions into `integrated_multimodal_description` as visible movement with per-shot timing.
 
 ## Vocabulary Rules
-- Prefer the common English terms from the library glossary: oral / blowjob, deepthroat, anal, titjob / titty fuck, sex / penetration / thrusting, cock / dick, head / tip, balls, clit, pussy lips, pussy / hole, ass / asshole, tits / breasts, nipples, cum, orgasm / cumming, stroking / jerking, sucking, licking, grinding, riding / cowgirl, doggy, missionary, palpation, dilation, enema, forced exam, nozzle.
+- Prefer the common English terms from the library glossary: oral / blowjob, deepthroat, anal, titjob / titty fuck, sex / penetration / thrusting, cock / dick, head / tip, balls, clit, pussy lips, pussy / hole, anus, tits / breasts, nipples, cum, orgasm / cumming, stroking / jerking, sucking, licking, grinding, riding / cowgirl, doggy, missionary, palpation, dilation, enema, forced exam, nozzle.
 - Avoid rare, clinical, or overly formal anatomical words.
 - Keep one term per concept for the whole piece.
 - The story material is written in Chinese. Map it straight across, never through a softer word:
