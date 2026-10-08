@@ -2979,6 +2979,10 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
 
     swaps = {old_bs_str: ins["builder_state"], old_tl_str: ins["timeline_data"]}
     swaps.update(apply_lora_stack(g, wf))
+    # 實際執行的 LoRA 串，等下要寫進 UI 圖的 properties（下面的 wf 會被改指到 UI 工作流）
+    _lora_stack = (next((n["inputs"].get("stack_data") for n in g.values()
+                         if n.get("class_type") == LORA_NODE), None)
+                   if isinstance((wf or {}).get("loras"), list) else None)
     # v18 沒有 seed / noise_seed 這兩個輸入了——取樣噪聲來自 DaSiWa_SeedControl，欄位叫
     # seed_value，所以原本只認那兩個名字的隨機化整個沒生效。那個節點只有在 seed_value
     # 為 0 時才會自己重骰（IS_CHANGED 其餘一律回 False），而模板裡存的是 ComfyUI 面板
@@ -3044,6 +3048,24 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
                     wv[0] = dmode
                 if full_prompt and str(full_prompt).strip() and len(wv) >= 2 and isinstance(wv[1], str):
                     wv[1] = str(full_prompt)
+
+    # LoRA 節點的面板（DaSiWa 的 JS）以 properties.stack_data 為準，同步時還會拿它蓋掉
+    # widgets_values。只改 widget 的話，影片拖回 ComfyUI 看到的是模板原本的 LoRA——
+    # 在那裡直接重送，用的也會是舊的那組（實測：執行的是新的，拖回去顯示舊的）。
+    # 兩份都設成這次實際執行的；不靠「舊值相同才換」，兩份的寫法不保證一字不差。
+    if _lora_stack is not None:
+        _ui_nodes = list(wf.get("nodes") or [])
+        for _sg in ((wf.get("definitions") or {}).get("subgraphs") or []):
+            _ui_nodes.extend(_sg.get("nodes") or [])
+        for n in _ui_nodes:
+            if n.get("type") != LORA_NODE:
+                continue
+            props = n.setdefault("properties", {})
+            if isinstance(props, dict):
+                props["stack_data"] = _lora_stack
+            wv = n.get("widgets_values")
+            if isinstance(wv, list) and wv and isinstance(wv[0], str) and wv[0].lstrip().startswith("["):
+                wv[0] = _lora_stack
 
     extra = dict(extra)
     extra["client_id"] = "h3-webui"
