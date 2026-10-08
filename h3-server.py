@@ -1106,6 +1106,22 @@ def _remote_mtime_fill(paths, wait_s):
     threading.Thread(target=finish, daemon=True).start()
 
 
+def comfy_assets_all(tags_all, budget=20):
+    """把 /api/assets 某個標籤底下的紀錄全部分頁拉完。沒開 --enable-assets 會丟 404。"""
+    out, after, t_end = [], None, time.time() + budget
+    while True:
+        q = {"tags_all": tags_all, "limit": 500, "sort": "name", "order": "asc"}
+        if after:
+            q["after"] = after
+        j = comfy_api("/api/assets?" + urlencode(q), timeout=15)
+        out.extend(j.get("assets") or [])
+        after = j.get("next_cursor")
+        if not j.get("has_more") or not after:
+            return out
+        if time.time() > t_end:
+            raise TimeoutError("清單超過 %d 秒還沒拉完" % budget)
+
+
 def comfy_assets(fresh=False):
     """ComfyUI 那台 output 的完整清單：{相對路徑: {size, mtime}}。
     沒開 --enable-assets 或連不上時回 None（拉過的話回上一份）。"""
@@ -1121,21 +1137,11 @@ def comfy_assets(fresh=False):
         with ASSETS_LOCK:          # 等鎖的時候別人可能已經拉好了
             if ASSETS["t"] > now:
                 return ASSETS["rows"]
-        rows, after, t_end = {}, None, time.time() + 20
-        while True:
-            q = {"tags_all": "output", "limit": 500, "sort": "name", "order": "asc"}
-            if after:
-                q["after"] = after
-            j = comfy_api("/api/assets?" + urlencode(q), timeout=15)
-            for a in j.get("assets") or []:
-                p = str(a.get("loader_path") or "").replace("\\", "/").strip("/")
-                if p and os.path.splitext(p)[1].lower() in MEDIA_EXT and ".." not in p.split("/"):
-                    rows[p] = {"size": int(a.get("size") or 0), "mtime": _path_time(p)}
-            after = j.get("next_cursor")
-            if not j.get("has_more") or not after:
-                break
-            if time.time() > t_end:
-                raise TimeoutError("清單超過 20 秒還沒拉完")
+        rows = {}
+        for a in comfy_assets_all("output"):
+            p = str(a.get("loader_path") or "").replace("\\", "/").strip("/")
+            if p and os.path.splitext(p)[1].lower() in MEDIA_EXT and ".." not in p.split("/"):
+                rows[p] = {"size": int(a.get("size") or 0), "mtime": _path_time(p)}
         _remote_mtime_load()
         missing = []
         for p, r in rows.items():
@@ -1159,6 +1165,104 @@ def comfy_assets(fresh=False):
             return ASSETS["rows"]
     finally:
         ASSETS_FETCH.release()
+
+
+# ── LoRA：清單與送單時的替換 ───────────────────────────────────────────
+# 工作流裡載 LoRA 的是 DaSiWa_LTX2LoraLoader，內容整串放在 stack_data（JSON 字串）。
+# 後端逐筆套用、沒有格數上限——UI 上的 7 格只是面板預設，有 +/- 可增減——所以
+# 「必須 5 個＋配方 10 個」最多 15 筆直接寫進去就行。找不到的檔案節點只會記一行
+# log 然後略過，影片照樣算出來，所以送單前要自己先確認檔案存在。
+LORA_NODE = "DaSiWa_LTX2LoraLoader"
+LORA_CACHE = {"t": 0.0, "rows": None}
+LORA_LOCK = threading.Lock()
+
+
+def comfy_loras(fresh=False):
+    """ComfyUI 那台的 LoRA 清單：[{name, size, trained_words, base_model}]。
+
+    名字一律用 /models/loras 的寫法：那就是 LoraLoader 下拉選單的值，ComfyUI 在
+    Windows 上是反斜線（MiniMax H3\\x.safetensors），寫進 stack_data 必須一字不差。
+    /api/assets 回的是正斜線，只拿來補大小、觸發詞（trained_words，讀自檔案內嵌
+    的訓練資料，沒寫的就沒有）與底模；沒開 --enable-assets 就退回 experiment 那條補大小。"""
+    with LORA_LOCK:
+        if not fresh and LORA_CACHE["rows"] is not None and time.time() - LORA_CACHE["t"] < 60:
+            return LORA_CACHE["rows"]
+    names = comfy_api("/models/loras", timeout=15)
+    if not isinstance(names, list):
+        raise ValueError("ComfyUI 的 /models/loras 回應不是清單")
+    meta = {}
+    try:
+        for a in comfy_assets_all("model_type:loras", budget=15):
+            md = a.get("metadata") or {}
+            tw = md.get("trained_words")
+            meta[str(a.get("loader_path") or "").replace("\\", "/")] = {
+                "size": int(a.get("size") or 0),
+                "trained_words": [str(x) for x in tw][:12] if isinstance(tw, list) else [],
+                "base_model": str(md.get("base_model") or "")[:60]}
+    except Exception:
+        try:
+            for x in comfy_api("/experiment/models/loras", timeout=15) or []:
+                meta[str(x.get("name") or "").replace("\\", "/")] = {"size": int(x.get("size") or 0)}
+        except Exception:
+            pass
+    rows = []
+    for n in names:
+        n = str(n)
+        m = meta.get(n.replace("\\", "/"), {})
+        rows.append({"name": n, "size": m.get("size", 0),
+                     "trained_words": m.get("trained_words", []), "base_model": m.get("base_model", "")})
+    with LORA_LOCK:
+        LORA_CACHE.update(t=time.time(), rows=rows)
+    return rows
+
+
+def apply_lora_stack(g, wf):
+    """把 wf["loras"]（前端算好的「必須＋配方」）寫進 LoRA 節點的 stack_data。
+
+    wf 沒帶 loras＝使用者兩邊都沒設定，模板原封不動——舊的用法不受影響。
+    回傳 {舊字串: 新字串}，交給 UI 工作流同步，拖回 ComfyUI 看到的才是這支實際用的 LoRA。"""
+    loras = (wf or {}).get("loras")
+    if not isinstance(loras, list):
+        return {}
+    rows, seen = [], set()
+    for x in loras[:30]:
+        if not isinstance(x, dict):
+            continue
+        name = str(x.get("lora") or "").strip()
+        if not name or name == "None" or name in seen:
+            continue
+        try:
+            st = float(x.get("str", 1.0))
+        except (TypeError, ValueError):
+            st = 1.0
+        seen.add(name)
+        # vs／as 是 LTX-2.3 模式的影像／音訊倍率；Basic 模式實際強度＝str×vs。都給 1，
+        # 權重只放在 str，兩種模式下意思都一樣。
+        rows.append({"on": True, "lora": name, "str": round(max(-10.0, min(10.0, st)), 4),
+                     "vs": 1, "as": 1})
+    targets = [n for n in g.values() if n.get("class_type") == LORA_NODE]
+    if not targets:
+        raise SubmitError("這個工作流沒有 %s 節點，LoRA（必須／配方）套不上去。"
+                          "換一個有 LoRA 載入節點的工作流，或把 LoRA 設定清空。" % LORA_NODE, 400)
+    if rows:
+        have = {r["name"] for r in comfy_loras()}
+        missing = [r["lora"] for r in rows if r["lora"] not in have]
+        if missing:
+            have = {r["name"] for r in comfy_loras(fresh=True)}   # 可能是剛放進去的，快取還沒更新
+            missing = [r["lora"] for r in rows if r["lora"] not in have]
+        if missing:
+            raise SubmitError("ComfyUI 上找不到這些 LoRA：%s——檔案被移走或改名了？"
+                              "請到 ComfyUI 設定的 LoRA 面板更新。" % "、".join(missing), 400)
+    # 前端是 JSON.stringify 的格式（沒有空白），寫成一樣的，面板讀回去不會被當成改過
+    new = json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
+    swaps = {}
+    for node in targets:
+        ins = node.setdefault("inputs", {})
+        old = ins.get("stack_data")
+        ins["stack_data"] = new
+        if isinstance(old, str) and old != new:
+            swaps[old] = new
+    return swaps
 
 
 def media_list(limit=5000, remote=True, fresh=False):
@@ -1731,6 +1835,8 @@ SHARED_DEFAULTS = {
     # 換台電腦側欄與停留的頁面還是回到預設，等於那次「改成共用」從來沒生效。
     "h3.side.collapsed.v1": None,
     "h3.view.v1": None,
+    "h3.lora.req.v1": None,     # LoRA（必須）：每次送 ComfyUI 都會套用，最多 5 個
+    "h3.lora.recipes.v1": None, # LoRA（配方）：最多 20 組，每組最多 10 個
 }
 
 
@@ -2867,6 +2973,7 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
         pass
 
     swaps = {old_bs_str: ins["builder_state"], old_tl_str: ins["timeline_data"]}
+    swaps.update(apply_lora_stack(g, wf))
     # v18 沒有 seed / noise_seed 這兩個輸入了——取樣噪聲來自 DaSiWa_SeedControl，欄位叫
     # seed_value，所以原本只認那兩個名字的隨機化整個沒生效。那個節點只有在 seed_value
     # 為 0 時才會自己重骰（IS_CHANGED 其餘一律回 False），而模板裡存的是 ComfyUI 面板
@@ -3508,6 +3615,13 @@ class H(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self.send_json({"skipped": str(e)[:120]})
 
+        if p == "/api/comfy/loras":
+            try:
+                rows = comfy_loras(fresh="fresh=1" in (urlparse(self.path).query or ""))
+            except Exception as e:
+                return self.send_json({"error": "讀不到 ComfyUI 的 LoRA 清單：%s" % str(e)[:200]}, 502)
+            return self.send_json({"loras": rows, "node": LORA_NODE})
+
         if p == "/api/matte/models":
             h = cut_ping()
             ms = matte_models()
@@ -3713,6 +3827,7 @@ class H(SimpleHTTPRequestHandler):
                    "up_ts": time.strftime("%Y-%m-%d %H:%M:%S"),
                    "title": str(body.get("title") or "")[:80],
                    "aspect": str(body.get("aspect") or "auto")[:12],
+                   "recipe": str(body.get("recipe") or "")[:40],
                    "global_hint": str(body.get("global_hint") or "")[:2000],
                    "global_plan": str(body.get("global_plan") or "")[:4000],
                    "status": str(body.get("status") or "editing")[:20],

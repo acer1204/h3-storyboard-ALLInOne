@@ -259,6 +259,40 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .xedit:hover{border-color:var(--acc);color:var(--acc)}
 .xedit:disabled{opacity:.35;cursor:not-allowed}
 .xedit + .xdel{margin-left:5px}
+/* ---- LoRA（必須／配方）：ComfyUI 設定頁的面板與卡片上的配方選單 ---- */
+.lrwrap{display:grid;grid-template-columns:minmax(240px,1fr) minmax(0,1.4fr);gap:16px;margin-top:12px}
+@media (max-width:900px){.lrwrap{grid-template-columns:1fr}}
+.lravail .row{gap:6px;margin:0 0 6px;flex-wrap:nowrap}
+.lravail .row button{flex:none;white-space:nowrap}
+.lravail input[type=text]{min-height:0;padding:5px 9px;font-size:13px}
+.lrlist{max-height:460px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:6px;
+  display:flex;flex-direction:column;gap:4px}
+.lritem{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:8px;border:1px solid transparent;
+  background:var(--code);cursor:grab;user-select:none;font-size:12.5px}
+.lritem:hover{border-color:var(--acc)}
+.lritem.in{opacity:.45}
+.lritem .lrn,.lrrow .lrn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lrf{color:var(--faint);font-size:11px}
+.lrtw{font-size:10.5px;padding:0 6px;border-radius:99px;border:1px solid var(--line);color:var(--mut);white-space:nowrap}
+.lrsec{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px;cursor:pointer}
+/* 點 LoRA 會加到哪一格要看得出來——觸控螢幕沒有拖曳，只能靠點 */
+.lrsec.target{border-color:var(--acc)}
+.lrhd{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.lrhd b{font-size:13.5px}
+.lrdrop{min-height:52px;border:1.5px dashed var(--line);border-radius:9px;padding:6px;display:flex;flex-direction:column;gap:4px}
+.lrdrop.over{border-color:var(--acc);background:var(--hover)}
+.lrempty{color:var(--faint);font-size:12px;padding:11px;text-align:center}
+.lrrow{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;background:var(--code);font-size:12.5px;cursor:default}
+.lrrow.miss{outline:1px solid var(--warn)}
+.lrgrip{cursor:grab;color:var(--faint)}
+.lrrow input.lrw{width:76px;flex:none;min-height:0;padding:3px 6px;font-size:12.5px}
+.lrrecipes{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.lrrecipes .fchip.on{border-color:var(--acc);color:var(--acc)}
+.lred .row{gap:6px;margin:0 0 8px;align-items:center}
+.lred input#lrName{max-width:240px;min-height:0;padding:5px 9px;font-size:13px}
+.lrsel{width:100%;max-width:200px;font-size:12px;padding:3px 6px;min-height:0}
+.lrsum{font-size:10.5px;color:var(--faint);margin-top:3px;line-height:1.4}
+.lrsum.warn{color:var(--warn)}
 /* 全域 button 帶著 padding:9px 17px，這兩顆只有 26px 寬，不歸零的話
    左右 34px 的內距會把符號擠到右下角。 */
 .xdel,.xedit{padding:0;display:inline-grid;place-items:center;font-weight:400}
@@ -722,6 +756,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <div class="row">
       <button class="ghost mini" id="mvClear">清空格子</button>
       <span id="mvArBox"></span>
+      <div id="mvLrBox"></div>
       <span class="status" id="mvCount" style="margin:0"></span>
     </div>
     <div class="note-wrap" style="margin-top:10px"><label>整體劇情提示（選填，作為整體劇情規劃的方向）</label>
@@ -885,6 +920,44 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div><label>shift_audio</label><input type="number" id="wsa" min="0.01" max="100" step="0.5" placeholder="模板值"></div>
     </div>
     <p class="status" id="wfstat" style="margin-top:8px"></p>
+  </div>
+
+  <div class="panel" id="lrPanel">
+    <h3>🧩 LoRA</h3>
+    <p class="ph">送 ComfyUI 生成時，工作流裡 LoRA 載入節點的內容會換成「必須」＋該卡片選的「配方」。兩邊都沒設定時照工作流原本的 LoRA。
+      把左邊的 LoRA 拖進右邊的框；觸控螢幕可以先點框、再點 LoRA。同一個 LoRA 兩邊都有時用配方的權重。</p>
+    <div class="lrwrap">
+      <div class="lravail">
+        <div class="row">
+          <input type="text" id="lrFilter" placeholder="篩選 LoRA">
+          <button class="ghost mini" id="lrRefresh">重新整理</button>
+        </div>
+        <div class="hint" id="lrAvailStat" style="margin:0 0 6px">—</div>
+        <div id="lrAvail" class="lrlist"></div>
+      </div>
+      <div>
+        <div class="lrsec" data-target="req">
+          <div class="lrhd"><b>LoRA（必須）</b><span class="hint" style="margin:0">每次送單都會套用 · 最多 5 個</span></div>
+          <div class="lrdrop" id="lrReq" data-zone="req"></div>
+        </div>
+        <div class="lrsec" data-target="rec">
+          <div class="lrhd"><b>LoRA（配方）</b><span class="hint" style="margin:0">最多 20 組，每組最多 10 個 · 在生成清單的卡片上選用</span>
+            <button class="ghost mini" id="lrNew">＋ 新增配方</button></div>
+          <div id="lrRecipes" class="lrrecipes"></div>
+          <div id="lrEditor" class="lred" style="display:none">
+            <div class="row">
+              <input type="text" id="lrName" placeholder="配方名稱" maxlength="40">
+              <button class="mini" id="lrSaveBtn">💾 儲存</button>
+              <button class="ghost mini" id="lrRevertBtn">取消變更</button>
+              <button class="ghost mini" id="lrDelBtn">🗑 刪除</button>
+              <span class="status" id="lrEdStat" style="margin:0"></span>
+            </div>
+            <div class="lrdrop" id="lrRec" data-zone="rec"></div>
+          </div>
+        </div>
+        <span class="status" id="lrMsg" style="margin:0"></span>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -1226,7 +1299,8 @@ const FIELDS={tr:"#tr",
    寫入同時更新本機與伺服器，且有 400ms 節流。 */
 const SHARED_KEYS = new Set(["h3.settings.v1","h3.review.v1","h3.reviewsys.v1","h3.sp.v1",
                              "h3.t2vasp.v1","h3.skills.v1","h3.styleskill.v1","h3.prompt.all.v1",
-                             "h3.refrule.v1","h3.side.collapsed.v1","h3.view.v1"]);
+                             "h3.refrule.v1","h3.side.collapsed.v1","h3.view.v1",
+                             "h3.lora.req.v1","h3.lora.recipes.v1"]);
 let SHARED = {}, sharedTimer = null;
 function pushShared(){
   clearTimeout(sharedTimer);
@@ -1982,7 +2056,8 @@ function setView(v){
   store.set(VKEY, v);
   window.scrollTo(0, 0);
   if (v === "hist") loadHist();
-  if (v === "comfy") { loadWfParams(); if (typeof loadComfyCfg === "function") loadComfyCfg(); }
+  if (v === "comfy") { loadWfParams(); if (typeof loadComfyCfg === "function") loadComfyCfg();
+                       if (typeof lrLoadAvail === "function") lrLoadAvail(false); }
   if (v === "media") loadMedia();
   if (v === "mvhist" && typeof loadMvHist === "function") loadMvHist();
   if (v === "queue" && typeof loadQueue === "function") loadQueue();
@@ -3897,7 +3972,7 @@ window.t2DirectSend = async k => {
     try{ await record(w); it.rec_id = w.rec_id; }catch(e){}
   }
   const stat = document.querySelector(`[data-cstat="${k}"]`);
-  const payload = {dur: durStr(), wf: wfOverrides(),
+  const payload = {dur: durStr(), wf: wfFor(it),
                    mode: "t2va", content: it.polished, ...comfyFields(it.polished, "t2va")};
   if (!rvEnabled("t2va")){
     // 不需審查：交給伺服器佇列，網頁可以直接關掉
@@ -4154,6 +4229,298 @@ window.arSet = (k, v, scope) => {
   else { saveDraft(); render(); }
 };
 
+/* ================= LoRA（必須／配方） =================
+   送 ComfyUI 時，工作流裡 LoRA 載入節點（DaSiWa_LTX2LoraLoader）的內容換成
+   「必須」＋這張卡選的「配方」，由伺服器寫進 stack_data。兩邊都沒設定就不帶，
+   模板原封不動——還沒設定過的人、以前的用法都不受影響。
+   名字一律用 ComfyUI /models/loras 的寫法（Windows 那台是反斜線）：那是節點下拉
+   選單的值，寫進去必須一字不差，所以這裡從不自己改寫路徑。 */
+const LR_REQ_KEY = "h3.lora.req.v1", LR_REC_KEY = "h3.lora.recipes.v1";
+const LR_REQ_MAX = 5, LR_REC_MAX = 20, LR_REC_LORAS = 10;
+let LR_AVAIL = null, LR_TARGET = "req", LR_ED = null, LR_ED_DIRTY = false, LR_MSG_T = null;
+const lrParse = k => { try{ const v = JSON.parse(store.get(k) || "null"); return Array.isArray(v) ? v : []; }catch(e){ return []; } };
+const lrW = v => { const n = parseFloat(v); return isFinite(n) ? Math.max(-10, Math.min(10, n)) : 1; };
+const lrReq = () => lrParse(LR_REQ_KEY).filter(x => x && x.lora).slice(0, LR_REQ_MAX)
+  .map(x => ({lora: String(x.lora), str: lrW(x.str)}));
+const lrRecipes = () => lrParse(LR_REC_KEY).filter(r => r && r.id).slice(0, LR_REC_MAX)
+  .map(r => ({id: String(r.id), name: String(r.name || "未命名配方"),
+              loras: (Array.isArray(r.loras) ? r.loras : []).filter(x => x && x.lora).slice(0, LR_REC_LORAS)
+                .map(x => ({lora: String(x.lora), str: lrW(x.str)}))}));
+const lrRecipe = id => id ? (lrRecipes().find(r => r.id === id) || null) : null;
+const lrBase = n => String(n).split(/[\\/]/).pop().replace(/\.safetensors$/i, "");
+const lrDir = n => { const p = String(n).split(/[\\/]/); p.pop(); return p.join("/"); };
+const escA = t => esc(String(t == null ? "" : t)).replace(/"/g, "&quot;");
+
+/* 必須＋配方合成一份。同一個 LoRA 兩邊都有時只套一次、用配方的權重——
+   配方是針對這張卡的選擇，比每次都套的預設更具體。
+   卡片指向的配方已被刪掉時當成沒選：只剩必須的，絕不能退成空清單，
+   那會把工作流裡原本的 LoRA（例如加速用的 turbo）一起拿掉。 */
+function lrStack(t){
+  const req = lrReq(), rc = lrRecipe(t && t.recipe);
+  if (!req.length && !rc) return null;
+  const out = req.slice();
+  for (const x of (rc ? rc.loras : [])){
+    const hit = out.find(o => o.lora === x.lora);
+    if (hit) hit.str = x.str; else out.push({...x});
+  }
+  return out;
+}
+const lrPayload = t => { const st = lrStack(t); return st ? {loras: st} : {}; };
+/* 送單用的 wf：全域覆寫＋這張卡的比例＋LoRA。五個送單的地方都走這裡，
+   以前各自拼，T2VA 直接送那條就漏了比例。 */
+function wfFor(t){ return {...(wfOverrides() || {}), ...arPayload(t), ...lrPayload(t)}; }
+
+/* 卡片／長片上的配方選單（比例下方） */
+function lrSel(k, t, scope){
+  const rs = lrRecipes(), req = lrReq(), id = (t && t.recipe) || "";
+  const gone = !!id && !rs.some(r => r.id === id);
+  const st = lrStack(t);
+  const tip = st ? st.map(x => lrBase(x.lora) + " × " + x.str).join("\n")
+                 : "沒有設定 LoRA：送出時照工作流原本的 LoRA";
+  const opts = [`<option value="">${req.length ? "配方：不加" : "LoRA：照工作流"}</option>`]
+    .concat(rs.map(r => `<option value="${escA(r.id)}"${r.id === id ? " selected" : ""}>🧩 ${esc(r.name)}（${r.loras.length}）</option>`));
+  if (gone) opts.push(`<option value="${escA(id)}" selected>⚠ 配方已刪除</option>`);
+  const sum = gone ? `<div class="lrsum warn">這個配方已被刪除，只會套用必須的 ${req.length} 個</div>`
+    : st ? `<div class="lrsum" title="${escA(tip)}">LoRA ${st.length} 個${req.length ? `（必須 ${req.length}）` : ""}</div>` : "";
+  return `<select class="lrsel" title="${escA(tip)}" onchange="lrPick(${k}, this.value, '${scope}')">${opts.join("")}</select>${sum}`;
+}
+window.lrPick = (k, v, scope) => {
+  const t = scope === "movie" ? MV : items[k];
+  if (!t) return;
+  t.recipe = v || "";
+  if (scope === "movie"){ mvSave(false); mvDraw(); }
+  else { saveDraft(); render(); }
+};
+
+/* ---- ComfyUI 設定頁的面板 ---- */
+function lrMsg(t){
+  const el = $("#lrMsg"); if (!el) return;
+  el.textContent = t || "";
+  clearTimeout(LR_MSG_T);
+  if (t) LR_MSG_T = setTimeout(() => { el.textContent = ""; }, 3500);
+}
+async function lrLoadAvail(fresh){
+  const st = $("#lrAvailStat");
+  if (!st) return;
+  lrRenderPanel();                     // 必須與配方不用等清單，先畫
+  try{
+    const j = await (await fetch("/api/comfy/loras" + (fresh ? "?fresh=1" : ""))).json();
+    if (j.error) throw new Error(j.error);
+    LR_AVAIL = j.loras || [];
+    st.textContent = `ComfyUI 上有 ${LR_AVAIL.length} 個 LoRA`;
+  }catch(e){
+    st.textContent = "讀不到 ComfyUI 的 LoRA 清單：" + (e.message || e);
+  }
+  lrRenderPanel();
+}
+const lrKnown = n => !LR_AVAIL || LR_AVAIL.some(r => r.name === n);
+function lrZoneList(zone){ return zone === "req" ? lrReq() : (LR_ED ? LR_ED.loras : null); }
+function lrRenderAvail(){
+  const box = $("#lrAvail"); if (!box) return;
+  if (!LR_AVAIL){ box.innerHTML = `<div class="lrempty">讀取中…</div>`; return; }
+  const q = ($("#lrFilter").value || "").trim().toLowerCase();
+  const inZone = new Set((lrZoneList(LR_TARGET) || []).map(x => x.lora));
+  const rows = LR_AVAIL.filter(r => !q || r.name.toLowerCase().includes(q)
+    || (r.trained_words || []).some(w => w.toLowerCase().includes(q)));
+  box.innerHTML = rows.map(r => {
+    const tw = (r.trained_words || []).join(", ");
+    const tip = r.name + (r.base_model ? "\n底模：" + r.base_model : "") + (tw ? "\n觸發詞：" + tw : "")
+      + "\n拖到右邊的框，或點一下加到目前選中的框";
+    return `<div class="lritem${inZone.has(r.name) ? " in" : ""}" draggable="true" data-lora="${escA(r.name)}" title="${escA(tip)}">
+      <span class="lrn">${esc(lrBase(r.name))} <span class="lrf">${esc(lrDir(r.name))}</span></span>
+      ${tw ? `<span class="lrtw" title="觸發詞（讀自檔案內嵌的訓練資料）">🔑 ${esc(tw)}</span>` : ""}
+      <span class="lrf">${r.size ? fmtSize(r.size) : ""}</span></div>`;
+  }).join("") || `<div class="lrempty">${q ? "沒有符合的 LoRA" : "ComfyUI 上沒有 LoRA"}</div>`;
+}
+function lrRowsHtml(list, zone){
+  if (!list.length) return `<div class="lrempty">把左邊的 LoRA 拖到這裡${zone === "req" ? "（每次送單都會套用）" : ""}</div>`;
+  return list.map((x, i) => {
+    const miss = !lrKnown(x.lora);
+    return `<div class="lrrow${miss ? " miss" : ""}" draggable="true" data-zone="${zone}" data-i="${i}">
+      <span class="lrgrip" title="拖曳調整順序">⠿</span>
+      <span class="lrn" title="${escA(x.lora + (miss ? "\nComfyUI 上找不到這個檔案，送單會被擋下" : ""))}">${miss ? "⚠ " : ""}${esc(lrBase(x.lora))} <span class="lrf">${esc(lrDir(x.lora))}</span></span>
+      <input type="number" class="lrw" step="0.05" min="-5" max="5" value="${x.str}" data-zone="${zone}" data-i="${i}" title="權重">
+      <button class="xdel" data-rm="${zone}" data-i="${i}" title="移除">✕</button></div>`;
+  }).join("");
+}
+function lrRenderPanel(){
+  if (!$("#lrPanel")) return;
+  document.querySelectorAll("#lrPanel .lrsec").forEach(el =>
+    el.classList.toggle("target", el.dataset.target === LR_TARGET));
+  $("#lrReq").innerHTML = lrRowsHtml(lrReq(), "req");
+  const rs = lrRecipes();
+  $("#lrRecipes").innerHTML = rs.map(r => `<button class="fchip${LR_ED && LR_ED.id === r.id ? " on" : ""}" data-edit="${escA(r.id)}">${esc(r.name)}<span class="n">${r.loras.length}</span></button>`).join("")
+    + (LR_ED && LR_ED._new ? `<button class="fchip on">${esc(LR_ED.name || "新配方")}（未儲存）</button>` : "")
+    + (!rs.length && !LR_ED ? `<span class="hint" style="margin:0">還沒有配方，按「＋ 新增配方」</span>` : "");
+  $("#lrNew").disabled = rs.length >= LR_REC_MAX;
+  $("#lrNew").title = rs.length >= LR_REC_MAX ? `已經有 ${LR_REC_MAX} 組，先刪掉一組` : "";
+  const ed = $("#lrEditor");
+  ed.style.display = LR_ED ? "" : "none";
+  if (LR_ED){
+    if (document.activeElement !== $("#lrName")) $("#lrName").value = LR_ED.name;
+    $("#lrRec").innerHTML = lrRowsHtml(LR_ED.loras, "rec");
+    $("#lrEdStat").textContent = LR_ED_DIRTY ? "● 尚未儲存" : "";
+    $("#lrDelBtn").textContent = LR_ED._new ? "捨棄" : "🗑 刪除";
+  }
+  lrRenderAvail();
+}
+function lrSaveReq(list){
+  store.set(LR_REQ_KEY, JSON.stringify(list));
+  render();                            // 卡片上的「LoRA N 個」跟著變
+  if (typeof mvDraw === "function") mvDraw();
+}
+function lrAdd(zone, name){
+  const list = lrZoneList(zone);
+  if (!list){ lrMsg("先選一組配方，或按「＋ 新增配方」"); return; }
+  if (list.some(x => x.lora === name)){ lrMsg("這個 LoRA 已經在裡面了"); return; }
+  const max = zone === "req" ? LR_REQ_MAX : LR_REC_LORAS;
+  if (list.length >= max){ lrMsg(`${zone === "req" ? "必須" : "一組配方"}最多 ${max} 個`); return; }
+  list.push({lora: name, str: 1});
+  if (zone === "req") lrSaveReq(list); else LR_ED_DIRTY = true;
+  lrRenderPanel();
+}
+function lrRemove(zone, i){
+  const list = lrZoneList(zone); if (!list) return;
+  list.splice(i, 1);
+  if (zone === "req") lrSaveReq(list); else LR_ED_DIRTY = true;
+  lrRenderPanel();
+}
+function lrMove(zone, from, to){
+  const list = lrZoneList(zone); if (!list || from === to) return;
+  const [x] = list.splice(from, 1);
+  list.splice(Math.max(0, Math.min(list.length, to)), 0, x);
+  if (zone === "req") lrSaveReq(list); else LR_ED_DIRTY = true;
+  lrRenderPanel();
+}
+const lrDiscardOk = () => !LR_ED_DIRTY || confirm("這組配方有沒儲存的修改，要放棄嗎？");
+function lrEdit(id){
+  if (LR_ED && LR_ED.id === id) return;
+  if (!lrDiscardOk()) return;
+  const r = lrRecipe(id); if (!r) return;
+  LR_ED = JSON.parse(JSON.stringify(r)); LR_ED_DIRTY = false; LR_TARGET = "rec";
+  lrRenderPanel();
+}
+function lrNewRecipe(){
+  const rs = lrRecipes();
+  if (rs.length >= LR_REC_MAX){ lrMsg(`配方最多 ${LR_REC_MAX} 組`); return; }
+  if (!lrDiscardOk()) return;
+  LR_ED = {id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+           name: "配方 " + (rs.length + 1), loras: [], _new: true};
+  LR_ED_DIRTY = true; LR_TARGET = "rec";
+  lrRenderPanel();
+  const n = $("#lrName"); if (n){ n.focus(); n.select(); }
+}
+function lrSaveRecipe(){
+  if (!LR_ED) return;
+  const rs = lrRecipes();
+  const name = ($("#lrName").value || "").trim() || LR_ED.name || "未命名配方";
+  const rec = {id: LR_ED.id, name: name.slice(0, 40), loras: LR_ED.loras.slice(0, LR_REC_LORAS)};
+  const i = rs.findIndex(r => r.id === rec.id);
+  if (i >= 0) rs[i] = rec;
+  else if (rs.length >= LR_REC_MAX){ lrMsg(`配方最多 ${LR_REC_MAX} 組`); return; }
+  else rs.push(rec);
+  store.set(LR_REC_KEY, JSON.stringify(rs));
+  LR_ED = JSON.parse(JSON.stringify(rec)); LR_ED_DIRTY = false;
+  lrMsg(`已儲存「${rec.name}」`);
+  lrRenderPanel(); render();
+  if (typeof mvDraw === "function") mvDraw();
+}
+function lrRevertRecipe(){
+  if (!LR_ED) return;
+  if (LR_ED._new){ LR_ED = null; LR_ED_DIRTY = false; lrRenderPanel(); return; }
+  const r = lrRecipe(LR_ED.id);
+  LR_ED = r ? JSON.parse(JSON.stringify(r)) : null; LR_ED_DIRTY = false;
+  lrRenderPanel();
+}
+function lrDeleteRecipe(){
+  if (!LR_ED) return;
+  if (LR_ED._new){ lrRevertRecipe(); return; }
+  if (!confirm(`刪除配方「${LR_ED.name}」？選用它的卡片會改成不加配方。`)) return;
+  const id = LR_ED.id;
+  store.set(LR_REC_KEY, JSON.stringify(lrRecipes().filter(r => r.id !== id)));
+  /* 選了這組的卡片一起改掉，不然它們會一直顯示「已刪除」，送單時也只剩必須的 */
+  let touched = false;
+  for (const it of items) if (it.recipe === id){ it.recipe = ""; touched = true; }
+  if (touched) saveDraft();
+  if (MV.recipe === id){ MV.recipe = ""; mvSave(false); }
+  LR_ED = null; LR_ED_DIRTY = false;
+  lrMsg("配方已刪除");
+  lrRenderPanel(); render();
+  if (typeof mvDraw === "function") mvDraw();
+}
+(function lrWire(){
+  const pnl = $("#lrPanel"); if (!pnl) return;
+  $("#lrFilter").addEventListener("input", lrRenderAvail);
+  $("#lrRefresh").onclick = () => lrLoadAvail(true);
+  $("#lrNew").onclick = lrNewRecipe;
+  $("#lrSaveBtn").onclick = lrSaveRecipe;
+  $("#lrRevertBtn").onclick = lrRevertRecipe;
+  $("#lrDelBtn").onclick = lrDeleteRecipe;
+  $("#lrName").addEventListener("input", e => {
+    if (!LR_ED) return;
+    LR_ED.name = e.target.value; LR_ED_DIRTY = true;
+    $("#lrEdStat").textContent = "● 尚未儲存";
+  });
+  /* 點：選目標框／加 LoRA／移除／切換配方 */
+  pnl.addEventListener("click", e => {
+    const rm = e.target.closest("[data-rm]");
+    if (rm){ lrRemove(rm.dataset.rm, +rm.dataset.i); return; }
+    const ed = e.target.closest("[data-edit]");
+    if (ed){ lrEdit(ed.dataset.edit); return; }
+    const it = e.target.closest(".lritem");
+    if (it){ lrAdd(LR_TARGET, it.dataset.lora); return; }
+    if (e.target.closest("input,button,select")) return;
+    const sec = e.target.closest(".lrsec");
+    if (sec && sec.dataset.target !== LR_TARGET){ LR_TARGET = sec.dataset.target; lrRenderPanel(); }
+  });
+  /* 權重：必須的直接存；配方的等按儲存。不重畫，免得輸入框被換掉、游標跳走 */
+  pnl.addEventListener("input", e => {
+    const w = e.target.closest("input.lrw"); if (!w) return;
+    const list = lrZoneList(w.dataset.zone); if (!list || !list[+w.dataset.i]) return;
+    list[+w.dataset.i].str = lrW(w.value);
+    if (w.dataset.zone === "req"){ store.set(LR_REQ_KEY, JSON.stringify(list)); }
+    else { LR_ED_DIRTY = true; $("#lrEdStat").textContent = "● 尚未儲存"; }
+  });
+  pnl.addEventListener("change", e => {
+    if (e.target.closest("input.lrw") && e.target.dataset.zone === "req"){ render(); }
+  });
+  /* 拖曳：左邊的 LoRA 拖進框裡；框裡的列拖曳調整順序 */
+  pnl.addEventListener("dragstart", e => {
+    const it = e.target.closest(".lritem");
+    if (it){ e.dataTransfer.setData("text/x-lora", it.dataset.lora); e.dataTransfer.effectAllowed = "copy"; return; }
+    const row = e.target.closest(".lrrow");
+    if (row){
+      if (e.target.closest("input")){ e.preventDefault(); return; }   // 拖權重框裡的數字不算搬列
+      e.dataTransfer.setData("text/x-lrrow", row.dataset.zone + "|" + row.dataset.i);
+      e.dataTransfer.effectAllowed = "move";
+    }
+  });
+  pnl.addEventListener("dragover", e => {
+    const z = e.target.closest(".lrdrop"); if (!z) return;
+    const ty = e.dataTransfer.types;
+    if (ty.includes("text/x-lora") || ty.includes("text/x-lrrow")){ e.preventDefault(); z.classList.add("over"); }
+  });
+  pnl.addEventListener("dragleave", e => {
+    const z = e.target.closest(".lrdrop");
+    if (z && !z.contains(e.relatedTarget)) z.classList.remove("over");
+  });
+  pnl.addEventListener("drop", e => {
+    const z = e.target.closest(".lrdrop"); if (!z) return;
+    e.preventDefault(); z.classList.remove("over");
+    const zone = z.dataset.zone;
+    const name = e.dataTransfer.getData("text/x-lora");
+    if (name){ LR_TARGET = zone; lrAdd(zone, name); return; }
+    const src = e.dataTransfer.getData("text/x-lrrow");
+    if (src){
+      const [sz, si] = src.split("|");
+      if (sz !== zone){ lrMsg("只能在同一個框裡調整順序"); return; }
+      const over = e.target.closest(".lrrow");
+      const to = over ? +over.dataset.i : (lrZoneList(zone) || []).length - 1;
+      lrMove(zone, +si, to);
+    }
+  });
+})();
+
 function render(){
   const ae = document.activeElement;
   const keep = (ae && ae.dataset && ae.dataset.note !== undefined)
@@ -4196,6 +4563,7 @@ function render(){
           : '<p class="ph">無預覽</p>'}
         <div style="margin-top:6px">${modeTag}${thumbs.length>1?`<span class="hint" style="margin-left:6px">${thumbs.length} 張</span>`:""}</div>
         <div style="margin-top:6px">${arBtn(k, it, "item")}</div>
+        <div style="margin-top:6px">${lrSel(k, it, "item")}</div>
         ${(it.auds || []).length ? `<div class="hint" style="margin-top:6px;font-size:10.5px">🔊 ${it.auds.length} 個參考音訊 · ${it.auds.reduce((a,x)=>a+(x.dur||0),0).toFixed(1)}s<br>${it.auds.map((a,n)=>`&lt;Audio ${n+1}&gt; ${esc((a.desc||"").trim() || a.name)}`).join("<br>")}</div>` : ""}
       </div>
       <div>
@@ -5022,7 +5390,7 @@ window.comfyFromRec = (id, btnEl) => {
   fetch(API + "/" + id).then(async rec0 => {
     const rec = await rec0.json();
     const mode = hMode(rec);
-    const payload = {rec_id: id, dur: durStr(), wf: wfOverrides(),
+    const payload = {rec_id: id, dur: durStr(), wf: wfFor(rec),
                      mode, content: rec.content, ...comfyFields(rec.content, mode)};
     if (!rvEnabled(mode)){
       qSend(payload, {mode, title: rec.image || rec.content?.slice(0, 40) || "", rec_id: id}, stat);
@@ -5043,7 +5411,7 @@ window.comfyFromItem = (k, btnEl) => {
   const stat = document.querySelector(`[data-cstat="${k}"]`);
   const mode = it.mode || curMode();
   const isT2 = mode === "t2va";
-  const payload = {dur: durStr(), wf: {...wfOverrides(), ...arPayload(it)},
+  const payload = {dur: durStr(), wf: wfFor(it),
                    mode, content: it.content, ...comfyFields(it.content, mode)};
   if (mode === "ref2va" && (it.auds || []).length)
     payload.audios = it.auds.map(a => a.b64).filter(Boolean);
@@ -5176,7 +5544,7 @@ function saveDraft(){
         const rec = {mode: it.mode, name: it.name, note: it.note || "",
                      rawStory: it.rawStory || "", polished: it.polished || "",
                      skills: it.skills || [], state: it.state, files: [],
-                     ar: it.ar || "auto",
+                     ar: it.ar || "auto", recipe: it.recipe || "",
                      /* 生成好的 prompt 也要留著。沒存的話重整一次就要重跑 LLM，
                         那是好幾分鐘與一次 GPU 佔用。 */
                      content: it.content || "", zh: it.zh || "",
@@ -5258,7 +5626,7 @@ async function loadDraft(){
                                   : "pending",
                   note: rec.note || "",
                   rawStory: rec.rawStory || "", polished: rec.polished || "",
-                  skills: rec.skills || [], t2vaTab: 0, ar: rec.ar || "auto",
+                  skills: rec.skills || [], t2vaTab: 0, ar: rec.ar || "auto", recipe: rec.recipe || "",
                   auds: (rec.auds || []).map(a => ({...a})),
                   preview: previews[0] || null, previews});
     }
@@ -6064,7 +6432,7 @@ async function comfyRunReviewed(payload, ctx, statusEl, btn){
 
 /* ================= FL2VA Movie：三階段（片段劇情 → 逐段影片 → 合併） ================= */
 const MV = {
-  id: null, slots: [], pick: 0, MAX: 24, ar: "auto",
+  id: null, slots: [], pick: 0, MAX: 24, ar: "auto", recipe: "",
   segs: [],           // {hint, content, zh, v, state, locked, video, vstate, attempts}
   cur: 0, phase: "edit", busy: false,
   waiting: -1, final: "",
@@ -6167,6 +6535,8 @@ function mvDraw(){
     }
     arBox.innerHTML = MV.slots.length ? arBtn(0, MV, "movie") : "";
   }
+  const lrBox = $("#mvLrBox");
+  if (lrBox) lrBox.innerHTML = MV.slots.length ? lrSel(0, MV, "movie") : "";
   /* 輸出片段卡片 */
   $("#mvCards").innerHTML = MV.segs.map((s, i) => {
     const a = MV.slots[i], b = MV.slots[i + 1];
@@ -6266,7 +6636,7 @@ async function mvSave(withImages){
   if (!onServer || !MV.segs.length) return;
   const body = {id: MV.id, title: ($("#mvHint").value.trim() || "FL2VA Movie").slice(0, 60),
     global_hint: $("#mvHint").value.trim(), global_plan: $("#mvPlan").value.trim(),
-    status: MV.phase, final: MV.final, aspect: MV.ar || "auto",
+    status: MV.phase, final: MV.final, aspect: MV.ar || "auto", recipe: MV.recipe || "",
     segments: MV.segs.map(s => ({hint: s.hint, beat: s.beat || "", content: s.content, zh: s.zh,
                                  state: s.state, locked: s.locked, video: s.video,
                                  dur_gen: s.durGen != null ? s.durGen : null,
@@ -6327,6 +6697,7 @@ window.mvLoad = async id => {
     $("#mvHint").value = rec.global_hint || "";
     $("#mvPlan").value = rec.global_plan || "";
     MV.ar = rec.aspect || "auto";
+    MV.recipe = rec.recipe || "";
     MV.segs = (rec.segments || []).map(s => ({...mvNewSeg(), ...s,
       durGen: s.dur_gen != null ? s.dur_gen : null,
       vstate: (s.locked && s.video) ? "done" : "", v: null}));
@@ -6468,7 +6839,7 @@ async function mvSubmitVideo(i){
     mvStat(`段 ${i + 1}：送出影片生成…`);
     const payload = {image: encIn.orig || encIn.b64, more: [encB.b64], mode: "fl2va",
                      content: s.content, dur: durStr(),
-                     wf: {...wfOverrides(), ...arPayload(MV)},
+                     wf: wfFor(MV),
                      ...comfyFields(s.content, "fl2va")};
     const r = await (await fetch(CAPI + "/run", {method: "POST",
       headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)})).json();
@@ -6835,7 +7206,9 @@ const EN = {
 "劇情提示（選填，重跑時會一起送給模型）":"Story hint (optional; sent along on rerun)",
 "重跑 Prompt":"Re-run prompt","🎬 送 ComfyUI 生成":"🎬 Send to ComfyUI","評價（看完影片後）":"Rating (after watching)",
 "👍 效果好":"👍 Good","👎 不好":"👎 Bad","儲存評價":"Save rating","🤖 AI 影片審查":"🤖 AI video review",
-"還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","縮圖無法產生":"No thumbnail","遠端":"Remote","刪本機副本":"Delete local copy","時間未知":"Unknown time","🎯 點選去除":"🎯 Click to remove","🎯 點選補回":"🎯 Click to restore",
+"還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","縮圖無法產生":"No thumbnail","LoRA（必須）":"LoRA (required)","LoRA（配方）":"LoRA (recipes)",
+"＋ 新增配方":"+ New recipe","取消變更":"Discard changes","篩選 LoRA":"Filter LoRAs","配方名稱":"Recipe name",
+"配方：不加":"Recipe: none","LoRA：照工作流":"LoRA: as in workflow","遠端":"Remote","刪本機副本":"Delete local copy","時間未知":"Unknown time","🎯 點選去除":"🎯 Click to remove","🎯 點選補回":"🎯 Click to restore",
 "點一下物件，SAM2 會選整個物件":"Click an object - SAM2 selects all of it","SAM2 選取物件中…":"SAM2 is selecting the object…","▶ 看影片":"▶ Watch","▶ 成片":"▶ Film","讀取失敗":"Failed to load",
 "▶ 可繼續":"▶ Continue","🔧 需調整":"🔧 Adjust","🎲 再賭一次（同劇情換 seed）":"🎲 Roll again (same story, new seed)",
 "🎬 用新劇情重跑影片":"🎬 Re-render with new story","▶ 就用目前影片，繼續":"▶ Keep this video, continue","依據▾":"why ▾",
