@@ -1727,6 +1727,10 @@ SHARED_DEFAULTS = {
     "h3.styleskill.v1": None,   # 舊版單選風格（相容）
     "h3.prompt.all.v1": None,   # 選用的 prompt 組
     "h3.refrule.v1": None,      # REF2VA：參考圖只當外觀依據的疊加規則
+    # 前端從 v2.1 起就把這兩個當共用設定送上來，但這裡沒列，伺服器一直默默丟掉——
+    # 換台電腦側欄與停留的頁面還是回到預設，等於那次「改成共用」從來沒生效。
+    "h3.side.collapsed.v1": None,
+    "h3.view.v1": None,
 }
 
 
