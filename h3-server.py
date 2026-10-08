@@ -58,6 +58,15 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, parse_qs, quote, urlencode
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+# ---- 關於：版本與開源資訊 ----
+# 發佈新版時要跟著改，而且要跟 h3-webui.html 的 H3_VERSION 一致——「關於」頁會比對兩邊，
+# 不一致就提示瀏覽器還拿著舊網頁（伺服器沒有關掉快取，換版後常常要 Ctrl+F5）。
+APP_VERSION = "2.6"
+APP_NAME = "H3 Storyboard"
+APP_AUTHOR = "acer1204"
+APP_REPO = "acer1204/h3-storyboard-ALLInOne"
+APP_REPO_URL = "https://github.com/" + APP_REPO
+APP_LICENSE = "MIT"
 HIST = os.path.join(ROOT, "history")
 UPLOADS = os.path.join(ROOT, "uploads")
 UINDEX = os.path.join(UPLOADS, "index.json")
@@ -1320,6 +1329,42 @@ def lora_prompt_apply(text, mode, act):
         body = body[:pos] + piece + body[pos:]
         n += 1
     return text[:start] + body + text[end:], n
+
+
+# ── 檢查更新 ─────────────────────────────────────────────────────────
+# 問 GitHub 的 releases/latest（不含草稿與預覽版）。沒登入的 API 一小時只給 60 次，
+# 所以結果留十分鐘；按「檢查更新」時才帶 fresh 重問。
+UPDATE_CACHE = {"t": 0.0, "data": None}
+UPDATE_LOCK = threading.Lock()
+
+
+def _ver_tuple(v):
+    """'v2.5.2' -> (2, 5, 2, 0)；'2.6' -> (2, 6, 0, 0)。只比數字，忽略前綴與後綴。"""
+    nums = [int(x) for x in re.findall(r"\d+", str(v or ""))[:4]]
+    return tuple(nums + [0] * (4 - len(nums)))
+
+
+def check_update(fresh=False):
+    with UPDATE_LOCK:
+        age = time.time() - UPDATE_CACHE["t"]
+        # 按鈕每次都帶 fresh；連按的話一分鐘內還是用快取，免得把每小時 60 次用光
+        if UPDATE_CACHE["data"] and (age < 60 or (not fresh and age < 600)):
+            return UPDATE_CACHE["data"]
+    req = urllib.request.Request("https://api.github.com/repos/%s/releases/latest" % APP_REPO,
+                                 headers={"User-Agent": "%s/%s" % (APP_NAME.replace(" ", "-"), APP_VERSION),
+                                          "Accept": "application/vnd.github+json"})
+    # 前端的預算是 30 秒；這裡要比它早放手（伺服器端的天花板一律低於前端）
+    with urllib.request.urlopen(req, timeout=10) as r:
+        j = json.loads(r.read().decode("utf-8"))
+    tag = str(j.get("tag_name") or "")
+    data = {"current": APP_VERSION, "latest": tag.lstrip("vV"), "tag": tag,
+            "newer": _ver_tuple(tag) > _ver_tuple(APP_VERSION),
+            "name": str(j.get("name") or tag)[:200],
+            "url": str(j.get("html_url") or (APP_REPO_URL + "/releases/latest")),
+            "published_at": str(j.get("published_at") or "")}
+    with UPDATE_LOCK:
+        UPDATE_CACHE.update(t=time.time(), data=data)
+    return data
 
 
 def media_list(limit=5000, remote=True, fresh=False):
@@ -3731,6 +3776,24 @@ class H(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self.send_json({"skipped": str(e)[:120]})
 
+        if p == "/api/about":
+            return self.send_json({"name": APP_NAME, "version": APP_VERSION,
+                                   "author": APP_AUTHOR, "author_url": "https://github.com/" + APP_AUTHOR,
+                                   "repo": APP_REPO, "repo_url": APP_REPO_URL,
+                                   "license": APP_LICENSE, "license_url": APP_REPO_URL + "/blob/main/LICENSE",
+                                   "releases_url": APP_REPO_URL + "/releases"})
+
+        if p == "/api/about/update":
+            try:
+                return self.send_json(check_update(fresh="fresh=1" in (urlparse(self.path).query or "")))
+            except urllib.error.HTTPError as e:
+                if e.code in (403, 429):
+                    return self.send_json({"error": "GitHub 暫時限制查詢次數（未登入每小時 60 次），請稍後再試",
+                                           "current": APP_VERSION}, 429)
+                return self.send_json({"error": "GitHub 回應 HTTP %d" % e.code, "current": APP_VERSION}, 502)
+            except Exception as e:
+                return self.send_json({"error": "連不上 GitHub：%s" % str(e)[:160], "current": APP_VERSION}, 502)
+
         if p == "/api/comfy/loras":
             try:
                 rows = comfy_loras(fresh="fresh=1" in (urlparse(self.path).query or ""))
@@ -4782,6 +4845,8 @@ class H(SimpleHTTPRequestHandler):
 def main():
     global MEDIA_ROOT, COMFY_URL
     ap = argparse.ArgumentParser(description="H3 Storyboard - MiniMax H3 prompt director")
+    ap.add_argument("--version", action="version", version="%s v%s (%s, %s License)"
+                    % (APP_NAME, APP_VERSION, APP_REPO_URL, APP_LICENSE))
     ap.add_argument("--bind", default=CONFIG["bind"])
     ap.add_argument("--port", type=int, default=CONFIG["port"])
     ap.add_argument("--llama", default=CONFIG["llama_url"], help="llama-server URL (vision model)")
@@ -4813,6 +4878,7 @@ def main():
     except OSError:
         print("[ERROR] port %d 已被占用——已有另一個 h3-server 在跑，請先關掉它再啟動。" % a.port)
         sys.exit(1)
+    print("  %s v%s  ·  %s  ·  %s License" % (APP_NAME, APP_VERSION, APP_REPO_URL, APP_LICENSE))
     print("  服務位址 : http://%s:%d" % (a.bind, a.port))
     print("  llama    : %s" % CONFIG["llama_url"])
     print("  ComfyUI  : %s" % CONFIG["comfy_url"])

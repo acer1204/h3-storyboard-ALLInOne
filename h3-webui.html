@@ -299,6 +299,12 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .lrsugg{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
 .lrsugg .fchip{font-size:11.5px;padding:2px 9px}
 .lrwarn{color:var(--warn);font-size:11.5px;margin-top:4px}
+/* ---- 關於 ---- */
+.abgrid{display:grid;grid-template-columns:110px minmax(0,1fr);gap:9px 16px;font-size:14px;align-items:baseline}
+.abgrid .abk{color:var(--faint);font-size:12.5px}
+.abgrid a{color:var(--acc);word-break:break-all}
+.abnew{margin-top:12px;padding:12px 14px;border:1px solid var(--acc);border-radius:10px}
+.abwarn{color:var(--warn);font-size:12.5px;margin-top:8px}
 /* 全域 button 帶著 padding:9px 17px，這兩顆只有 26px 寬，不歸零的話
    左右 34px 的內距會把符號擠到右下角。 */
 .xdel,.xedit{padding:0;display:inline-grid;place-items:center;font-weight:400}
@@ -603,6 +609,10 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <button class="nav sub" data-view="set" data-sect="lesson"><span>· 經驗庫</span></button>
     <button class="nav sub" data-view="set" data-sect="sp"><span>· System Prompt</span></button>
   </div>
+
+  <button class="nav" data-view="about" data-tip="關於">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+    <span>關於</span><span class="cnt" id="navAbout"></span></button>
 
   </div>
 
@@ -1199,6 +1209,32 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 
 </section>
 
+<!-- ============ 關於 ============ -->
+<section class="view" id="v-about">
+  <h1 class="vh">關於</h1>
+  <p class="vs">H3 Storyboard — 用本地 LLM 與官方 MiniMax H3 skills 寫影音 prompt，再交給 ComfyUI 生成。</p>
+  <div class="panel">
+    <div class="abgrid">
+      <div class="abk">目前版本</div><div id="abVer">—</div>
+      <div class="abk">作者 GitHub</div><div><a id="abAuthor" target="_blank" rel="noopener">—</a></div>
+      <div class="abk">開源專案</div><div><a id="abRepo" target="_blank" rel="noopener">—</a></div>
+      <div class="abk">開源授權</div><div><a id="abLic" target="_blank" rel="noopener">—</a>
+        <div class="hint" style="margin:4px 0 0">可自由複製、修改、散布與商用，只要保留著作權與授權聲明。</div></div>
+    </div>
+    <div class="abwarn" id="abMismatch" style="display:none"></div>
+    <div class="row" style="margin-top:16px">
+      <button class="mini" id="abCheck">檢查更新</button>
+      <span class="status" id="abStat" style="margin:0"></span>
+    </div>
+    <div class="abnew" id="abNew" style="display:none">
+      <div id="abNewTxt"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="mini" id="abYes">是，開啟發佈頁面</button>
+        <button class="ghost mini" id="abNo">否</button>
+      </div>
+    </div>
+  </div>
+</section>
 </main>
 </div>
 
@@ -2081,7 +2117,77 @@ function setView(v){
   if (v === "mvhist" && typeof loadMvHist === "function") loadMvHist();
   if (v === "queue" && typeof loadQueue === "function") loadQueue();
   if (v === "set" && typeof cutStatLoad === "function") cutStatLoad();
+  if (v === "about" && typeof aboutLoad === "function") aboutLoad();
 }
+
+/* ================= 關於 =================
+   版本以伺服器為準（/api/about）。網頁這邊也記一份：兩邊不一樣就代表瀏覽器
+   還拿著換版前的網頁——伺服器沒有關掉快取，這種情況實際發生過。 */
+const H3_VERSION = "2.6";
+/* 以 file:// 開啟時沒有伺服器可問，這幾項由網頁自己帶 */
+const H3_ABOUT = {author: "acer1204", repo_url: "https://github.com/acer1204/h3-storyboard-ALLInOne", license: "MIT"};
+let AB_INFO = null, AB_UPD = null;
+const abNum = v => (String(v || "").match(/\d+/g) || []).slice(0, 4).map(Number).concat([0, 0, 0, 0]).slice(0, 4);
+const abCmp = (x, y) => { const a = abNum(x), b = abNum(y); for (let i = 0; i < 4; i++) if (a[i] !== b[i]) return a[i] - b[i]; return 0; };
+function abFill(info){
+  const a = $("#abAuthor"); a.textContent = info.author; a.href = "https://github.com/" + info.author;
+  const r = $("#abRepo"); r.textContent = info.repo_url.replace(/^https:\/\//, ""); r.href = info.repo_url;
+  const l = $("#abLic"); l.textContent = info.license + " License"; l.href = info.repo_url + "/blob/main/LICENSE";
+}
+async function aboutLoad(){
+  abFill(H3_ABOUT);
+  const mm = $("#abMismatch"); mm.style.display = "none";
+  if (!onServer){
+    $("#abVer").textContent = "v" + H3_VERSION + "（以檔案開啟，無法檢查更新）";
+    $("#abCheck").disabled = true;
+    return;
+  }
+  try{
+    const resp = await fetch("/api/about");
+    const info = await resp.json().catch(() => ({}));
+    if (!resp.ok || !info.version){
+      /* 舊版伺服器沒有這個端點：網頁比伺服器新，該重啟的是伺服器，不是瀏覽器 */
+      $("#abVer").textContent = "v" + H3_VERSION + "（網頁）";
+      mm.style.display = "";
+      mm.textContent = "⚠ 伺服器還在跑舊版（沒有版本資訊）：請重啟 h3-server（Docker：docker compose restart h3-server）。";
+      return;
+    }
+    AB_INFO = info; abFill(info);
+    $("#abVer").textContent = "v" + info.version;
+    const d = abCmp(H3_VERSION, info.version);
+    if (d){
+      mm.style.display = "";
+      mm.textContent = d > 0
+        ? `⚠ 網頁是 v${H3_VERSION}、伺服器還是 v${info.version}：伺服器沒有重啟，請重啟 h3-server（Docker：docker compose restart h3-server）。`
+        : `⚠ 網頁是 v${H3_VERSION}、伺服器是 v${info.version}：瀏覽器還拿著舊網頁，請按 Ctrl+F5 重新整理。`;
+    }
+  }catch(e){ $("#abVer").textContent = "讀不到伺服器的版本資訊：" + (e.message || e); }
+}
+async function aboutCheck(){
+  const st = $("#abStat"), box = $("#abNew"), btn = $("#abCheck");
+  box.style.display = "none"; btn.disabled = true; st.textContent = "檢查中…";
+  try{
+    const j = await (await fetch("/api/about/update?fresh=1")).json();
+    if (j.error) throw new Error(j.error);
+    AB_UPD = j;
+    if (j.newer){
+      st.textContent = "";
+      $("#abNewTxt").textContent = `發現新版本 v${j.latest}（目前 v${j.current}${j.published_at ? "，" + j.published_at.slice(0, 10) + " 發佈" : ""}）。要開啟 GitHub 的發佈頁面嗎？`;
+      box.style.display = "";
+      $("#navAbout").textContent = "新";
+    } else {
+      st.textContent = `已是最新版本（目前 v${j.current}，GitHub 上最新是 v${j.latest}）`;
+      $("#navAbout").textContent = "";
+    }
+  }catch(e){ st.textContent = "檢查失敗：" + (e.message || e); }
+  btn.disabled = false;
+}
+$("#abCheck").onclick = aboutCheck;
+$("#abYes").onclick = () => {
+  if (AB_UPD && AB_UPD.url) window.open(AB_UPD.url, "_blank", "noopener");
+  $("#abNew").style.display = "none";
+};
+$("#abNo").onclick = () => { $("#abNew").style.display = "none"; };
 
 /* 設定頁的一行小字：把「現在到底會不會被擋」講清楚。
    同一台機器跟分開部署的答案完全不同，不讓使用者自己猜。 */
@@ -7299,7 +7405,10 @@ const EN = {
 "還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","縮圖無法產生":"No thumbnail","LoRA（必須）":"LoRA (required)","LoRA（配方）":"LoRA (recipes)",
 "＋ 新增配方":"+ New recipe","取消變更":"Discard changes","篩選 LoRA":"Filter LoRAs","配方名稱":"Recipe name",
 "配方：不加":"Recipe: none","LoRA：照工作流":"LoRA: as in workflow",
-"觸發詞（active prompt）":"Trigger words (active prompt)","這組配方的觸發詞（active prompt）":"Trigger words for this recipe (active prompt)","遠端":"Remote","刪本機副本":"Delete local copy","時間未知":"Unknown time","🎯 點選去除":"🎯 Click to remove","🎯 點選補回":"🎯 Click to restore",
+"觸發詞（active prompt）":"Trigger words (active prompt)","關於":"About","目前版本":"Version",
+"作者 GitHub":"Author on GitHub","開源專案":"Open source","開源授權":"License","檢查更新":"Check for updates",
+"是，開啟發佈頁面":"Yes, open the release page","否":"No","檢查中…":"Checking…",
+"可自由複製、修改、散布與商用，只要保留著作權與授權聲明。":"Free to copy, modify, distribute and use commercially, as long as the copyright and license notice are kept.","這組配方的觸發詞（active prompt）":"Trigger words for this recipe (active prompt)","遠端":"Remote","刪本機副本":"Delete local copy","時間未知":"Unknown time","🎯 點選去除":"🎯 Click to remove","🎯 點選補回":"🎯 Click to restore",
 "點一下物件，SAM2 會選整個物件":"Click an object - SAM2 selects all of it","SAM2 選取物件中…":"SAM2 is selecting the object…","▶ 看影片":"▶ Watch","▶ 成片":"▶ Film","讀取失敗":"Failed to load",
 "▶ 可繼續":"▶ Continue","🔧 需調整":"🔧 Adjust","🎲 再賭一次（同劇情換 seed）":"🎲 Roll again (same story, new seed)",
 "🎬 用新劇情重跑影片":"🎬 Re-render with new story","▶ 就用目前影片，繼續":"▶ Keep this video, continue","依據▾":"why ▾",
@@ -7359,6 +7468,11 @@ const EN = {
 /* ---- en：樣板規則（動態字串） ---- */
 const T = s => trEN(s);
 const EN_T = [
+[/^發現新版本 v(\S+?)（目前 v(\S+?)(?:，(\d{4}-\d{2}-\d{2}) 發佈)?）。要開啟 GitHub 的發佈頁面嗎？$/,
+  m => `New version v${m[1]} is available (you have v${m[2]}${m[3] ? ", released " + m[3] : ""}). Open the GitHub release page?`],
+[/^已是最新版本（目前 v(\S+?)，GitHub 上最新是 v(\S+?)）$/, m => `Up to date (v${m[1]}; the latest on GitHub is v${m[2]})`],
+[/^檢查失敗：(.*)$/, m => `Check failed: ${m[1]}`],
+[/^v(\S+?)（以檔案開啟，無法檢查更新）$/, m => `v${m[1]} (opened as a file, cannot check for updates)`],
 [/^已放 (\d+) 張（此模式至少需要 (\d+) 張）$/, m => `${m[1]} placed (this mode needs at least ${m[2]})`],
 [/^已放 (\d+) 張 → (\d+) 個片段$/, m => `${m[1]} images → ${m[2]} segments`],
 [/^已放 (\d+) 張$/, m => `${m[1]} placed`],
