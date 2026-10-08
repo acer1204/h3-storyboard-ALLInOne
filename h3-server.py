@@ -1265,6 +1265,63 @@ def apply_lora_stack(g, wf):
     return swaps
 
 
+_LORA_SECS = ("integrated_multimodal_description", "overall_soundscape", "non_diegetic_music",
+              "subject_definitions", "summary", "retention_analysis", "detailed_description")
+# 分鏡標記，後續鏡頭的官方寫法是 "[Shot 2] At 00:03.000, "——插在時間戳之後，不拆開它
+_SHOT_HEAD = re.compile(r"\[Shot\s*\d+\]\s*(At\s+\d{1,2}:\d{2}(?:\.\d+)?\s*,\s*)?", re.I)
+
+
+def lora_prompt_apply(text, mode, act):
+    """把 LoRA 的觸發詞（前端把必須＋配方合成一行）插進主段落「每一段的開頭」。
+
+    不交給寫 prompt 的 LLM：它會把觸發詞當劇情改寫、翻譯、搬位置，前端的清理
+    還會把排在第一行之前的字整段刪掉。DaSiWa 0.4.35 的 Director 則是把
+    external_prompt_overwrite 原樣交給 Qwen tokenizer——不截斷、不改大小寫、
+    不解析權重——所以 LLM 之後、送出之前插進去，就保證一字不差到模型。
+
+    位置：主段落（base 是 integrated_multimodal_description，REF2VA 是
+    detailed_description）裡每個 [Shot N] 之後。不放在結尾：Qwen 那段是 causal，
+    排在後面的字影響不到前面描述的理解。主段落沒有分鏡標記就放在本文開頭；
+    連主段落標頭都沒有（T2VA「直接使用」送的是中文劇本）就放在整段最前面。
+    那一段已經以觸發詞開頭的（例如手動寫過）不重複插。回傳 (新文字, 插了幾處)。"""
+    act = " ".join(str(act or "").split())[:1200]      # 必須、配方各 500 字，合起來不能在這裡被截掉
+    text = str(text or "")
+    if not act or not text.strip():
+        return text, 0
+    piece = act + ("" if act[-1] in ",.;:!?，。；：！？" else ",") + " "
+    main = "detailed_description" if str(mode or "").lower() == "ref2va" else "integrated_multimodal_description"
+    m = (re.search(r"(?mi)^[ \t]*" + main + r"[ \t]*:[ \t]*", text)
+         or re.search(main + r"[ \t]*:?[ \t]*", text, re.I))
+    if not m:
+        if text.lstrip().startswith(act):
+            return text, 0
+        return act + "\n\n" + text, 1
+    start = m.end()
+    others = "|".join(n for n in _LORA_SECS if n != main)
+    e = re.compile(r"(?mi)^[ \t]*(?:" + others + r")[ \t]*:").search(text, start)
+    end = e.start() if e else len(text)
+    body = text[start:end]
+    spots = []
+    for sm in _SHOT_HEAD.finditer(body):
+        before = body[:sm.start()].rstrip(" \t")
+        # 帶「At MM:SS.mmm,」切點時間的一定是段落開頭。官方格式常把整段寫成一行，
+        # 前一個鏡頭以對白收尾：「…</d> [Shot 2] At 00:05.000, …」——只看前一個字的話，
+        # 「>」不是句號，第 2 個鏡頭起就全被當成句中引用而漏插（歷史紀錄裡實際有這種）。
+        # 沒有時間戳的才可能是句中提到（「延續 [Shot 1] 的構圖」），那種才看前一個字。
+        if not sm.group(1) and before and before[-1] not in ".!?。！？:\n)]>\"'”’」』":
+            continue
+        spots.append(sm.end())
+    if not spots:
+        spots = [len(body) - len(body.lstrip())]
+    n = 0
+    for pos in reversed(spots):
+        if body[pos:].startswith(act):
+            continue
+        body = body[:pos] + piece + body[pos:]
+        n += 1
+    return text[:start] + body + text[end:], n
+
+
 def media_list(limit=5000, remote=True, fresh=False):
     """本機 media_root（ComfyUI 在別台時就是鏡像）＋ ComfyUI 那台的清單，以路徑合併。
     local/remote 兩個旗標讓前端知道哪些能刪（只有這台有的副本能刪）。"""
@@ -1836,7 +1893,8 @@ SHARED_DEFAULTS = {
     "h3.side.collapsed.v1": None,
     "h3.view.v1": None,
     "h3.lora.req.v1": None,     # LoRA（必須）：每次送 ComfyUI 都會套用，最多 5 個
-    "h3.lora.recipes.v1": None, # LoRA（配方）：最多 20 組，每組最多 10 個
+    "h3.lora.recipes.v1": None, # LoRA（配方）：最多 20 組，每組最多 10 個，各帶自己的觸發詞
+    "h3.lora.reqprompt.v1": None,  # LoRA（必須）的觸發詞
 }
 
 
@@ -2282,6 +2340,10 @@ def comfy_submit(body):
     # 觸發詞），影片照樣算出來，內容卻跟這張卡毫無關係，而且沒有任何地方會說。
     if not full_prompt.strip():
         raise SubmitError("這筆沒有 prompt 可以送（內容是空的）", 400)
+    _wf = body.get("wf") if isinstance(body.get("wf"), dict) else {}
+    full_prompt, lora_hits = lora_prompt_apply(full_prompt, run_mode, _wf.get("lora_prompt"))
+    if lora_hits:
+        slog("  [lora] 觸發詞插入 %d 處：%s" % (lora_hits, str(_wf.get("lora_prompt"))[:80]))
     if blob is None:
         blob, ext2 = parse_data_image(body.get("image"))
         if blob is not None:
@@ -2341,9 +2403,12 @@ def comfy_submit(body):
         if len(audio_names) + len(extra_names) + (1 if up_name else 0) > MAX_REF_FILES:
             raise SubmitError("參考素材最多 %d 個（圖＋音訊合計）" % MAX_REF_FILES, 400)
         flds = split_fields(full_prompt, run_mode)
-        graph, extra = comfy_build(str(body.get("imd") or flds["imd"]),
-                                   str(body.get("soundscape") or flds["soundscape"]),
-                                   str(body.get("music") or flds["music"]),
+        # 插過觸發詞之後，前端帶來的三欄還是插入前的版本；改用最終文字重拆，
+        # 拖回 ComfyUI 時 builder 介面看到的才跟實際送出的一致
+        _fld = (lambda k: flds[k]) if lora_hits else (lambda k: str(body.get(k) or flds[k]))
+        graph, extra = comfy_build(_fld("imd"),
+                                   _fld("soundscape"),
+                                   _fld("music"),
                                    up_name, dur,
                                    body.get("wf"), blob,
                                    mode=run_mode, extra_names=extra_names, full_prompt=full_prompt,
@@ -2387,6 +2452,28 @@ def comfy_submit(body):
 QWAKE = threading.Event()
 
 
+def hist_note_recipe(rid, recipe):
+    """把這次送單實際用的配方記回歷史紀錄。紀錄是生成 prompt 的那一刻存的，
+    配方常常是之後才在卡片上選；不補的話，從歷史重送會用到別組 LoRA 與觸發詞。"""
+    if not (rid and ID_RE.match(str(rid))) or recipe is None:
+        return
+    fp = os.path.join(HIST, str(rid) + ".json")
+    r = str(recipe)[:40]
+    with LOCK:
+        try:
+            with open(fp, encoding="utf-8") as f:
+                rec = json.load(f)
+            if rec.get("recipe", "") == r:
+                return
+            rec["recipe"] = r
+            tmp = fp + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(rec, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, fp)
+        except Exception:
+            pass
+
+
 def qenqueue(payload, mode="", title="", rec_id="", idem=""):
     """建立一筆 queued 任務並喚醒派工。回傳新列。"""
     with QLOCK:
@@ -2404,6 +2491,8 @@ def qenqueue(payload, mode="", title="", rec_id="", idem=""):
                "t_submit": 0, "t_end": 0}
         qsave(row)
     QWAKE.set()
+    if isinstance(payload, dict) and "recipe" in payload:      # QLOCK 已放開才碰 LOCK
+        hist_note_recipe(rec_id, payload.get("recipe"))
     return dict(row)
 
 
@@ -4553,6 +4642,7 @@ class H(SimpleHTTPRequestHandler):
             "mode": (str(body.get("mode", "i2va")) if str(body.get("mode", "i2va")) in MODES else "i2va"),
             "prompt_id": str(body.get("prompt_id", "") or "")[:64],
             "prompt_name": str(body.get("prompt_name", "") or "")[:80],
+            "recipe": str(body.get("recipe", "") or "")[:40],
             # lora = {preset_id, preset_name, main, subs:[{key,gloss}], forced:[...], report:{...}}  (full snapshot)
             "lora": (body.get("lora") if isinstance(body.get("lora"), dict) else None),
             "upload_id": upload_id,

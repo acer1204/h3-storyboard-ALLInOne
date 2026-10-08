@@ -293,6 +293,12 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 .lrsel{width:100%;max-width:200px;font-size:12px;padding:3px 6px;min-height:0}
 .lrsum{font-size:10.5px;color:var(--faint);margin-top:3px;line-height:1.4}
 .lrsum.warn{color:var(--warn)}
+.lrsum.act{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.lrpt{margin-top:8px}
+.lrpt input{min-height:0;padding:5px 9px;font-size:13px}
+.lrsugg{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+.lrsugg .fchip{font-size:11.5px;padding:2px 9px}
+.lrwarn{color:var(--warn);font-size:11.5px;margin-top:4px}
 /* 全域 button 帶著 padding:9px 17px，這兩顆只有 26px 寬，不歸零的話
    左右 34px 的內距會把符號擠到右下角。 */
 .xdel,.xedit{padding:0;display:inline-grid;place-items:center;font-weight:400}
@@ -925,7 +931,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <div class="panel" id="lrPanel">
     <h3>🧩 LoRA</h3>
     <p class="ph">送 ComfyUI 生成時，工作流裡 LoRA 載入節點的內容會換成「必須」＋該卡片選的「配方」。兩邊都沒設定時照工作流原本的 LoRA。
-      把左邊的 LoRA 拖進右邊的框；觸控螢幕可以先點框、再點 LoRA。同一個 LoRA 兩邊都有時用配方的權重。</p>
+      把左邊的 LoRA 拖進右邊的框；觸控螢幕可以先點框、再點 LoRA。同一個 LoRA 兩邊都有時用配方的權重。
+      觸發詞（active prompt）會原樣插在 prompt 主段落每一段（[Shot N]）的開頭，不經過寫 prompt 的 LLM，劇情提示只要寫劇情。</p>
     <div class="lrwrap">
       <div class="lravail">
         <div class="row">
@@ -939,6 +946,12 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
         <div class="lrsec" data-target="req">
           <div class="lrhd"><b>LoRA（必須）</b><span class="hint" style="margin:0">每次送單都會套用 · 最多 5 個</span></div>
           <div class="lrdrop" id="lrReq" data-zone="req"></div>
+          <div class="lrpt">
+            <label for="lrReqPrompt">觸發詞（active prompt）</label>
+            <input type="text" id="lrReqPrompt" maxlength="500" placeholder="例如：zxqmei, 2dan1m — 留空＝不加">
+            <div class="lrsugg" id="lrReqSugg"></div>
+            <div class="lrwarn" id="lrReqWarn"></div>
+          </div>
         </div>
         <div class="lrsec" data-target="rec">
           <div class="lrhd"><b>LoRA（配方）</b><span class="hint" style="margin:0">最多 20 組，每組最多 10 個 · 在生成清單的卡片上選用</span>
@@ -953,6 +966,12 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
               <span class="status" id="lrEdStat" style="margin:0"></span>
             </div>
             <div class="lrdrop" id="lrRec" data-zone="rec"></div>
+            <div class="lrpt">
+              <label for="lrRecPrompt">這組配方的觸發詞（active prompt）</label>
+              <input type="text" id="lrRecPrompt" maxlength="500" placeholder="例如：zxqmei — 留空＝不加；按儲存才會存">
+              <div class="lrsugg" id="lrRecSugg"></div>
+              <div class="lrwarn" id="lrRecWarn"></div>
+            </div>
           </div>
         </div>
         <span class="status" id="lrMsg" style="margin:0"></span>
@@ -1300,7 +1319,7 @@ const FIELDS={tr:"#tr",
 const SHARED_KEYS = new Set(["h3.settings.v1","h3.review.v1","h3.reviewsys.v1","h3.sp.v1",
                              "h3.t2vasp.v1","h3.skills.v1","h3.styleskill.v1","h3.prompt.all.v1",
                              "h3.refrule.v1","h3.side.collapsed.v1","h3.view.v1",
-                             "h3.lora.req.v1","h3.lora.recipes.v1"]);
+                             "h3.lora.req.v1","h3.lora.recipes.v1","h3.lora.reqprompt.v1"]);
 let SHARED = {}, sharedTimer = null;
 function pushShared(){
   clearTimeout(sharedTimer);
@@ -3972,7 +3991,7 @@ window.t2DirectSend = async k => {
     try{ await record(w); it.rec_id = w.rec_id; }catch(e){}
   }
   const stat = document.querySelector(`[data-cstat="${k}"]`);
-  const payload = {dur: durStr(), wf: wfFor(it),
+  const payload = {dur: durStr(), wf: wfFor(it), recipe: it.recipe || "",
                    mode: "t2va", content: it.polished, ...comfyFields(it.polished, "t2va")};
   if (!rvEnabled("t2va")){
     // 不需審查：交給伺服器佇列，網頁可以直接關掉
@@ -4235,15 +4254,18 @@ window.arSet = (k, v, scope) => {
    模板原封不動——還沒設定過的人、以前的用法都不受影響。
    名字一律用 ComfyUI /models/loras 的寫法（Windows 那台是反斜線）：那是節點下拉
    選單的值，寫進去必須一字不差，所以這裡從不自己改寫路徑。 */
-const LR_REQ_KEY = "h3.lora.req.v1", LR_REC_KEY = "h3.lora.recipes.v1";
+const LR_REQ_KEY = "h3.lora.req.v1", LR_REC_KEY = "h3.lora.recipes.v1", LR_REQP_KEY = "h3.lora.reqprompt.v1";
 const LR_REQ_MAX = 5, LR_REC_MAX = 20, LR_REC_LORAS = 10;
 let LR_AVAIL = null, LR_TARGET = "req", LR_ED = null, LR_ED_DIRTY = false, LR_MSG_T = null;
 const lrParse = k => { try{ const v = JSON.parse(store.get(k) || "null"); return Array.isArray(v) ? v : []; }catch(e){ return []; } };
 const lrW = v => { const n = parseFloat(v); return isFinite(n) ? Math.max(-10, Math.min(10, n)) : 1; };
 const lrReq = () => lrParse(LR_REQ_KEY).filter(x => x && x.lora).slice(0, LR_REQ_MAX)
   .map(x => ({lora: String(x.lora), str: lrW(x.str)}));
+/* 觸發詞一律收成一行：伺服器原樣插進 prompt，換行會把段落拆開 */
+const lrOneLine = v => String(v || "").replace(/\s+/g, " ").trim().slice(0, 500);
+const lrReqPrompt = () => lrOneLine(store.get(LR_REQP_KEY));
 const lrRecipes = () => lrParse(LR_REC_KEY).filter(r => r && r.id).slice(0, LR_REC_MAX)
-  .map(r => ({id: String(r.id), name: String(r.name || "未命名配方"),
+  .map(r => ({id: String(r.id), name: String(r.name || "未命名配方"), prompt: lrOneLine(r.prompt),
               loras: (Array.isArray(r.loras) ? r.loras : []).filter(x => x && x.lora).slice(0, LR_REC_LORAS)
                 .map(x => ({lora: String(x.lora), str: lrW(x.str)}))}));
 const lrRecipe = id => id ? (lrRecipes().find(r => r.id === id) || null) : null;
@@ -4265,7 +4287,30 @@ function lrStack(t){
   }
   return out;
 }
-const lrPayload = t => { const st = lrStack(t); return st ? {loras: st} : {}; };
+/* 這張卡送出時要插的觸發詞：必須的（有必須的 LoRA 才算）＋配方的，
+   以逗號切開去重——兩邊都寫了同一個詞時只出現一次。 */
+function lrActText(t){
+  const req = lrReq(), rc = lrRecipe(t && t.recipe);
+  const parts = [];
+  if (req.length && lrReqPrompt()) parts.push(lrReqPrompt());
+  if (rc && rc.prompt) parts.push(rc.prompt);
+  const seen = new Set(), out = [];
+  for (const p of parts) for (const w of p.split(/\s*,\s*/)){
+    const k = w.trim();
+    if (k && !seen.has(k)){ seen.add(k); out.push(k); }
+  }
+  return out.join(", ");
+}
+const lrPayload = t => {
+  const st = lrStack(t); if (!st) return {};
+  const a = lrActText(t), o = {};
+  /* 合起來一個 LoRA 都沒有＝配方只寫了觸發詞、必須又是空的。這時送 loras: [] 會把
+     工作流原本的 LoRA（例如 turbo）整串清掉——只寫觸發詞的配方是要「沿用工作流的
+     LoRA、加上這些字」，不是要把 LoRA 拿光。 */
+  if (st.length) o.loras = st;
+  if (a) o.lora_prompt = a;
+  return o;
+};
 /* 送單用的 wf：全域覆寫＋這張卡的比例＋LoRA。五個送單的地方都走這裡，
    以前各自拼，T2VA 直接送那條就漏了比例。 */
 function wfFor(t){ return {...(wfOverrides() || {}), ...arPayload(t), ...lrPayload(t)}; }
@@ -4281,8 +4326,11 @@ function lrSel(k, t, scope){
     .concat(rs.map(r => `<option value="${escA(r.id)}"${r.id === id ? " selected" : ""}>🧩 ${esc(r.name)}（${r.loras.length}）</option>`));
   if (gone) opts.push(`<option value="${escA(id)}" selected>⚠ 配方已刪除</option>`);
   const sum = gone ? `<div class="lrsum warn">這個配方已被刪除，只會套用必須的 ${req.length} 個</div>`
-    : st ? `<div class="lrsum" title="${escA(tip)}">LoRA ${st.length} 個${req.length ? `（必須 ${req.length}）` : ""}</div>` : "";
-  return `<select class="lrsel" title="${escA(tip)}" onchange="lrPick(${k}, this.value, '${scope}')">${opts.join("")}</select>${sum}`;
+    : st && st.length ? `<div class="lrsum" title="${escA(tip)}">LoRA ${st.length} 個${req.length ? `（必須 ${req.length}）` : ""}</div>`
+    : st ? `<div class="lrsum" title="這組配方沒有 LoRA：沿用工作流原本的 LoRA，只加觸發詞">LoRA：照工作流</div>` : "";
+  const act = st ? lrActText(t) : "";
+  const actLine = act ? `<div class="lrsum act" title="${escA("送出時原樣插在每段（[Shot N]）開頭，不經過 LLM：\n" + act)}">🔑 ${esc(act)}</div>` : "";
+  return `<select class="lrsel" title="${escA(tip)}" onchange="lrPick(${k}, this.value, '${scope}')">${opts.join("")}</select>${sum}${actLine}`;
 }
 window.lrPick = (k, v, scope) => {
   const t = scope === "movie" ? MV : items[k];
@@ -4343,8 +4391,24 @@ function lrRowsHtml(list, zone){
       <button class="xdel" data-rm="${zone}" data-i="${i}" title="移除">✕</button></div>`;
   }).join("");
 }
+/* 觸發詞欄位下方：清單裡 LoRA 檔案內嵌、但欄位還沒有的詞，點一下加入；
+   寫了 (詞:1.2) 就警告——H3 的編碼器不解析權重，括號和數字會原樣進 prompt */
+function lrRenderAux(zone){
+  const inp = $(zone === "req" ? "#lrReqPrompt" : "#lrRecPrompt"); if (!inp) return;
+  const cur = (inp.value || "").split(/\s*,\s*/).map(x => x.trim());
+  const words = [];
+  for (const x of (lrZoneList(zone) || [])){
+    const r = (LR_AVAIL || []).find(a => a.name === x.lora);
+    for (const w of (r && r.trained_words) || []) if (w && !words.includes(w)) words.push(w);
+  }
+  $(zone === "req" ? "#lrReqSugg" : "#lrRecSugg").innerHTML = words.filter(w => !cur.includes(w))
+    .map(w => `<button class="fchip" data-tw="${escA(w)}" data-pz="${zone}" title="LoRA 檔案內嵌的觸發詞，點一下加入">🔑 ${esc(w)}</button>`).join("");
+  $(zone === "req" ? "#lrReqWarn" : "#lrRecWarn").textContent = /\([^()]*:\s*[\d.]+\)/.test(inp.value || "")
+    ? "⚠ 不要寫 (詞:1.2) 這種權重：H3 的文字編碼器不解析它，括號和數字會被當成文字送進去" : "";
+}
 function lrRenderPanel(){
   if (!$("#lrPanel")) return;
+  if (document.activeElement !== $("#lrReqPrompt")) $("#lrReqPrompt").value = store.get(LR_REQP_KEY) || "";
   document.querySelectorAll("#lrPanel .lrsec").forEach(el =>
     el.classList.toggle("target", el.dataset.target === LR_TARGET));
   $("#lrReq").innerHTML = lrRowsHtml(lrReq(), "req");
@@ -4358,10 +4422,13 @@ function lrRenderPanel(){
   ed.style.display = LR_ED ? "" : "none";
   if (LR_ED){
     if (document.activeElement !== $("#lrName")) $("#lrName").value = LR_ED.name;
+    if (document.activeElement !== $("#lrRecPrompt")) $("#lrRecPrompt").value = LR_ED.prompt || "";
     $("#lrRec").innerHTML = lrRowsHtml(LR_ED.loras, "rec");
     $("#lrEdStat").textContent = LR_ED_DIRTY ? "● 尚未儲存" : "";
     $("#lrDelBtn").textContent = LR_ED._new ? "捨棄" : "🗑 刪除";
+    lrRenderAux("rec");
   }
+  lrRenderAux("req");
   lrRenderAvail();
 }
 function lrSaveReq(list){
@@ -4405,7 +4472,7 @@ function lrNewRecipe(){
   if (rs.length >= LR_REC_MAX){ lrMsg(`配方最多 ${LR_REC_MAX} 組`); return; }
   if (!lrDiscardOk()) return;
   LR_ED = {id: "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-           name: "配方 " + (rs.length + 1), loras: [], _new: true};
+           name: "配方 " + (rs.length + 1), loras: [], prompt: "", _new: true};
   LR_ED_DIRTY = true; LR_TARGET = "rec";
   lrRenderPanel();
   const n = $("#lrName"); if (n){ n.focus(); n.select(); }
@@ -4414,7 +4481,8 @@ function lrSaveRecipe(){
   if (!LR_ED) return;
   const rs = lrRecipes();
   const name = ($("#lrName").value || "").trim() || LR_ED.name || "未命名配方";
-  const rec = {id: LR_ED.id, name: name.slice(0, 40), loras: LR_ED.loras.slice(0, LR_REC_LORAS)};
+  const rec = {id: LR_ED.id, name: name.slice(0, 40), loras: LR_ED.loras.slice(0, LR_REC_LORAS),
+               prompt: lrOneLine($("#lrRecPrompt").value)};
   const i = rs.findIndex(r => r.id === rec.id);
   if (i >= 0) rs[i] = rec;
   else if (rs.length >= LR_REC_MAX){ lrMsg(`配方最多 ${LR_REC_MAX} 組`); return; }
@@ -4456,6 +4524,19 @@ function lrDeleteRecipe(){
   $("#lrSaveBtn").onclick = lrSaveRecipe;
   $("#lrRevertBtn").onclick = lrRevertRecipe;
   $("#lrDelBtn").onclick = lrDeleteRecipe;
+  let LR_REQP_T = null;
+  $("#lrReqPrompt").addEventListener("input", e => {
+    store.set(LR_REQP_KEY, e.target.value);
+    lrRenderAux("req");
+    clearTimeout(LR_REQP_T);
+    LR_REQP_T = setTimeout(() => { render(); if (typeof mvDraw === "function") mvDraw(); }, 400);   // 卡片與長片的 🔑 跟著變
+  });
+  $("#lrRecPrompt").addEventListener("input", e => {
+    if (!LR_ED) return;
+    LR_ED.prompt = e.target.value; LR_ED_DIRTY = true;
+    $("#lrEdStat").textContent = "● 尚未儲存";
+    lrRenderAux("rec");
+  });
   $("#lrName").addEventListener("input", e => {
     if (!LR_ED) return;
     LR_ED.name = e.target.value; LR_ED_DIRTY = true;
@@ -4463,6 +4544,14 @@ function lrDeleteRecipe(){
   });
   /* 點：選目標框／加 LoRA／移除／切換配方 */
   pnl.addEventListener("click", e => {
+    const tw = e.target.closest("[data-tw]");
+    if (tw){
+      const inp = $(tw.dataset.pz === "req" ? "#lrReqPrompt" : "#lrRecPrompt");
+      const v = (inp.value || "").replace(/[\s,]+$/, "");
+      inp.value = (v ? v + ", " : "") + tw.dataset.tw;
+      inp.dispatchEvent(new Event("input", {bubbles: true}));
+      return;
+    }
     const rm = e.target.closest("[data-rm]");
     if (rm){ lrRemove(rm.dataset.rm, +rm.dataset.i); return; }
     const ed = e.target.closest("[data-edit]");
@@ -4830,6 +4919,7 @@ async function record(it){
         orig:it.orig||"", more:it.more||[],
         auds:(it.auds||[]).map(a=>({name:a.name, dur:a.dur, desc:a.desc, b64:a.b64})),
         story_raw:it.rawStory||"", story_polished:it.polished||"",
+        recipe:it.recipe||"",
         attempts:it.attempts||1,shots:it.shots||1,
         ...(() => { const c = it.ctx || genContext(); return {mode:c.mode, prompt_id:c.prompt_id, prompt_name:c.prompt_name,
                      lora: c.lora ? {...c.lora, report:(it.lora||{}).report||null, issues:(it.lora||{}).issues||[]} : null}; })()})});
@@ -5411,7 +5501,7 @@ window.comfyFromItem = (k, btnEl) => {
   const stat = document.querySelector(`[data-cstat="${k}"]`);
   const mode = it.mode || curMode();
   const isT2 = mode === "t2va";
-  const payload = {dur: durStr(), wf: wfFor(it),
+  const payload = {dur: durStr(), wf: wfFor(it), recipe: it.recipe || "",
                    mode, content: it.content, ...comfyFields(it.content, mode)};
   if (mode === "ref2va" && (it.auds || []).length)
     payload.audios = it.auds.map(a => a.b64).filter(Boolean);
@@ -7208,7 +7298,8 @@ const EN = {
 "👍 效果好":"👍 Good","👎 不好":"👎 Bad","儲存評價":"Save rating","🤖 AI 影片審查":"🤖 AI video review",
 "還沒有上傳過的圖片":"No uploads yet","沒有符合的檔案":"No matching files","縮圖無法產生":"No thumbnail","LoRA（必須）":"LoRA (required)","LoRA（配方）":"LoRA (recipes)",
 "＋ 新增配方":"+ New recipe","取消變更":"Discard changes","篩選 LoRA":"Filter LoRAs","配方名稱":"Recipe name",
-"配方：不加":"Recipe: none","LoRA：照工作流":"LoRA: as in workflow","遠端":"Remote","刪本機副本":"Delete local copy","時間未知":"Unknown time","🎯 點選去除":"🎯 Click to remove","🎯 點選補回":"🎯 Click to restore",
+"配方：不加":"Recipe: none","LoRA：照工作流":"LoRA: as in workflow",
+"觸發詞（active prompt）":"Trigger words (active prompt)","這組配方的觸發詞（active prompt）":"Trigger words for this recipe (active prompt)","遠端":"Remote","刪本機副本":"Delete local copy","時間未知":"Unknown time","🎯 點選去除":"🎯 Click to remove","🎯 點選補回":"🎯 Click to restore",
 "點一下物件，SAM2 會選整個物件":"Click an object - SAM2 selects all of it","SAM2 選取物件中…":"SAM2 is selecting the object…","▶ 看影片":"▶ Watch","▶ 成片":"▶ Film","讀取失敗":"Failed to load",
 "▶ 可繼續":"▶ Continue","🔧 需調整":"🔧 Adjust","🎲 再賭一次（同劇情換 seed）":"🎲 Roll again (same story, new seed)",
 "🎬 用新劇情重跑影片":"🎬 Re-render with new story","▶ 就用目前影片，繼續":"▶ Keep this video, continue","依據▾":"why ▾",
