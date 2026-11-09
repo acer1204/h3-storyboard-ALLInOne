@@ -84,6 +84,27 @@ body{background:var(--bg);color:var(--fg);
 .slot .sx svg{display:block}
 .slot .sx:hover{background:var(--acc)}
 .slot .plus{font-size:26px;line-height:1;margin-bottom:4px}
+.app.collapsed .nav.sub{display:none}
+.icadd{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start}
+.icadd .slot{width:168px;flex:none}
+.icaddr{flex:1;min-width:260px}
+.icrow{display:flex;gap:10px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer}
+.icrow.on{border-color:var(--acc)}
+.icrow img{width:44px;height:58px;object-fit:cover;border-radius:6px;flex:none;background:var(--code)}
+.icrow .ict{flex:1;min-width:0}
+.icrow .icn{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.iccards{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin:12px 0}
+.iccard{border:1px solid var(--line);border-radius:11px;padding:10px;cursor:pointer}
+.iccard.on{border-color:var(--acc)}
+.icfr{display:flex;gap:4px;align-items:center}
+.icfr img,.icfr .icph{flex:1;min-width:0;width:0;object-fit:cover;border-radius:7px;background:var(--code)}
+.icfr .icph{display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--faint);text-align:center;padding:4px}
+.iclab{display:flex;gap:4px;font-size:10.5px;color:var(--faint);margin-top:3px}
+.iclab span{flex:1;text-align:center}
+.icerr{color:var(--acc);font-size:12px;margin-top:4px}
+.iclive{margin-top:6px;border-radius:7px;overflow:hidden;background:var(--code)}
+.iclive:empty{display:none}
+.iclive img,.iclive video{display:block;width:100%}
 .slot .slab{position:absolute;bottom:6px;left:0;right:0;text-align:center;font-size:11px;color:var(--faint);z-index:2}
 .slot.has .slab{color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.8)}
 .slot.locked{cursor:not-allowed;opacity:.55;border-style:solid;background:var(--code)}
@@ -561,6 +582,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-8 8"/></svg>
     <span>I2VA</span><span class="cnt" id="navRun"></span></button><!-- navRun kept for compat; per-mode counts use .cnt below -->
 
+  <button class="nav sub" data-view="icont" data-tip="一張圖接龍成長片"><span>· I2VA Continue</span><span class="cnt" id="navIc"></span></button>
+
   <button class="nav" data-view="run" data-mode="fl2va" data-tip="FL2VA 首尾幀生影音">
     <svg viewBox="0 0 24 24"><rect x="2" y="6" width="8" height="12" rx="1"/><rect x="14" y="6" width="8" height="12" rx="1"/><path d="m10 12 4 0m-1.5-2 2 2-2 2"/></svg>
     <span>FL2VA</span><span class="cnt"></span></button>
@@ -581,6 +604,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   <div id="histsub">
     <button class="nav sub" data-view="hist" data-hmode="t2va"><span>· T2VA</span></button>
     <button class="nav sub" data-view="hist" data-hmode="i2va"><span>· I2VA</span></button>
+    <button class="nav sub" data-view="ichist"><span>· I2VA Continue</span><span class="cnt" id="navIcHist"></span></button>
     <button class="nav sub" data-view="hist" data-hmode="fl2va"><span>· FL2VA</span></button>
     <button class="nav sub" data-view="hist" data-hmode="l2va"><span>· L2VA</span></button>
     <button class="nav sub" data-view="hist" data-hmode="ref2va"><span>· REF2VA</span></button>
@@ -806,6 +830,77 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
   </div>
 </section>
 <input type="file" id="mvFiles" multiple accept="image/*" hidden>
+
+<!-- ============ I2VA Continue：一張圖接龍成長片 ============ -->
+<section class="view" id="v-icont">
+  <h1 class="vh">I2VA Continue — 一張圖接龍成長片</h1>
+  <p class="vs">上傳一張圖，寫下大概的劇情與想要的總秒數。LLM 會想好行為與對白，依「工作流預設參數」的影片秒數拆成章節；
+    第 1 章用這張圖，之後每一章都接上一章實際生成的最後一幀。按下開始後由伺服器在背景跑，可以關掉網頁。</p>
+
+  <div class="panel">
+    <h3>新增一筆</h3>
+    <div class="icadd">
+      <div class="slot" id="icSlot" title="點擊選圖，也可以把圖片拖到這裡"><span class="plus">＋</span><span class="slab">起始圖</span></div>
+      <div class="icaddr">
+        <div class="note-wrap"><label>大概的劇情（行為與對白的細節由 LLM 補完）</label>
+          <textarea class="note" id="icStory" rows="5" placeholder="例如：她在書房等人回來，心神不寧，起身走到窗邊張望，聽到腳步聲以為他回來了，轉身卻只是風吹動門簾"></textarea></div>
+        <div class="row" style="margin-top:10px">
+          <label class="small" style="display:inline-flex;align-items:center;gap:6px">目標總秒數
+            <input type="number" id="icTarget" min="1" max="720" step="1" value="40" style="width:84px"></label>
+          <span class="status" id="icSplit" style="margin:0"></span>
+          <button id="icAdd" disabled>✚ 加入生成清單</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="icListPanel" style="display:none">
+    <h3>生成清單</h3>
+    <div id="icList"></div>
+    <div class="row" style="margin-top:4px">
+      <button id="icRunAll">▶ 全部開始</button>
+      <button class="ghost" id="icStop" disabled>⏹ 這一章完成後停止</button>
+      <span class="status" id="icStat" style="margin:0"></span>
+    </div>
+  </div>
+
+  <div class="panel" id="icBoard" style="display:none">
+    <h3 id="icBoardT"></h3>
+    <div class="row">
+      <span id="icArBox"></span>
+      <div id="icLrBox"></div>
+      <button class="ghost mini" id="icApplyLr" title="把左邊選的配方套到每一章">LoRA 套用到全部章節</button>
+      <label class="small" style="display:inline-flex;align-items:center;gap:5px" title="下一章只看得到上一章的最後一幀，沒拍到臉，臉就會變成隨機的。看不到臉時會往前找畫面或重算這一章"><input type="checkbox" id="icFace" checked> 確保結尾看得到臉</label>
+      <button class="ghost mini" id="icReplan">🧠 重新規劃章節</button>
+      <button id="icGo">▶ 開始生成</button>
+      <button id="icMerge" disabled>🧵 合併成長片</button>
+    </div>
+    <div class="note-wrap" style="margin-top:10px"><label>整體劇情（LLM 規劃的結果，可編輯）</label>
+      <textarea class="note" id="icPlanStory" rows="2"></textarea></div>
+    <div class="iccards" id="icCards"></div>
+    <div id="icTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
+    <div id="icDetail"></div>
+  </div>
+
+  <div class="panel" id="icPlayerPanel" style="display:none">
+    <h3 id="icPlayerT"></h3>
+    <video id="icPlayer" controls style="width:100%;max-height:70vh;border-radius:10px;background:#000"></video>
+  </div>
+
+  <div class="panel" id="icFinalPanel" style="display:none">
+    <h3>🎉 合併後的長片</h3>
+    <video id="icFinal" controls preload="metadata" style="width:100%;max-height:70vh;border-radius:10px;background:#000"></video>
+    <p class="status" id="icFinalPath"></p>
+  </div>
+</section>
+<input type="file" id="icFile" accept="image/*" hidden>
+
+<!-- ============ I2VA Continue 歷史 ============ -->
+<section class="view" id="v-ichist">
+  <h1 class="vh">I2VA Continue 紀錄</h1>
+  <p class="vs">保存的接龍專案：起始圖、各章劇情與 prompt、當時用的 LoRA、影片。點「還原」載回 I2VA Continue 查看或繼續。</p>
+  <div id="ichGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:13px"></div>
+</section>
 
 <!-- ============ FL2VA Movie 歷史 ============ -->
 <section class="view" id="v-mvhist">
@@ -1303,6 +1398,8 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     [/^\/api\/uploads\/register/,     60000], // 原圖可能很大
     [/^\/api\/history/,               45000], // POST 帶滿解析度 base64
     [/^\/api\/drafts/,                45000],
+    [/^\/api\/continues/,             45000], // 建立時帶整張原圖
+    [/^\/api\/comfy\/cancel/,         35000], // 兩次 comfy_api，各 15s
     [/^\/api\/workflows\/upload/,     45000],
   ];
   const DEFAULT_MS = 30000;   // 其餘都是本機磁碟或記憶體回應，30 秒已經很寬
@@ -1473,6 +1570,7 @@ function skillFits(id, mode){
 /* 多 skill 啟用集合：設定頁勾選；T2VA 可用 /skill1 /skill2 內容 一次指定（取代整組）。
    佇列執行時 SKILL_OVERRIDE 讓每筆 T2VA 項目帶自己加入清單當下的組合。 */
 const SKILLS_KEY = "h3.skills.v1";
+const IC_SKILL = "i2va-continue";     // I2VA Continue 專用，不列在可疊加的 skill 裡
 let SKILL_OVERRIDE = null;
 function activeSkillIds(){
   try{
@@ -1557,7 +1655,7 @@ function skillExample(core, mode){
   return (m[0].replace(/^#+\s*/, "") + (end >= 0 ? rest.slice(0, end) : rest))
     .replace(/\n-{3,}\s*$/, "").trim();
 }
-function officialSys(mode, variant){
+function officialSys(mode, variant, skills){
   const core = SKILLSET.cache["h3-prompt-writing"];
   if (!core) return appRules(mode, variant);
   const guide = mode === "ref2va" ? (core.references["ref-en.txt"] || "")
@@ -1584,7 +1682,7 @@ function officialSys(mode, variant){
             : "")
          + "\n\n" + ex;
   // 疊加所有啟用的附加 skill（風格/知識皆可、可多個）；不適用目前模式的自動忽略
-  for (const st of currentSkillIds()){
+  for (const st of (skills || currentSkillIds())){
     if (st === "h3-prompt-writing" || !skillFits(st, mode)) continue;
     const sk = SKILLSET.cache[st];
     if (sk && sk.skill)
@@ -1605,7 +1703,7 @@ function renderSkillChecks(){
     <input type="checkbox" checked disabled style="width:14px;height:14px;accent-color:var(--acc);margin:0;flex:none">
     <span style="font-family:ui-monospace,Consolas,monospace">h3-prompt-writing</span>
     <span style="color:var(--faint);font-size:11px">核心・永遠套用</span></label>`;
-  const rest = SKILLSET.list.filter(s => s.id !== "h3-prompt-writing").map(s => {
+  const rest = SKILLSET.list.filter(s => s.id !== "h3-prompt-writing" && s.id !== IC_SKILL).map(s => {
     const fits = (SKILL_MODES[s.id] || []).map(m => MODES[m] || m).join("/") || "全部模式";
     /* 附加 skill 是按勾選先後串進 prompt 的，而這裡是按名稱排。
        不標出來的話，看到的順序跟送出的順序不一樣。 */
@@ -1629,7 +1727,7 @@ window.toggleSkill = async (id, on) => {
   setActiveSkillIds(ids);
 };
 async function loadSkills(){
-  try{ SKILLSET.list = await (await fetch("/api/skills")).json(); }catch(e){ SKILLSET.list = []; }
+  try{ SKILLSET.list = (await (await fetch("/api/skills")).json()).filter(x => x.id !== IC_SKILL); }catch(e){ SKILLSET.list = []; }
   await ensureSkill("h3-prompt-writing");
   for (const id of activeSkillIds()) await ensureSkill(id);
   /* 這個框只放 app 自己的規則。官方 skill 與指南是另一件事，
@@ -1642,12 +1740,14 @@ async function loadSkills(){
 
 function builtinFor(){ return BUILTIN; }
 function visiblePrompts(){ return prompts; }
-function activeText(){
-  const p = prompts.find(x => x.id === active) || BUILTIN;
-  if (p.builtin) return officialSys(curMode(), p.variant);   // 官方組合依目前模式選 base/ref 指南
+function activeText(md, pick){
+  const mode = md || curMode();
+  const p = prompts.find(x => x.id === ((pick && pick.prompt) || active)) || BUILTIN;
+  const skills = pick && pick.skills;
+  if (p.builtin) return officialSys(mode, p.variant, skills);   // 官方組合依目前模式選 base/ref 指南
   const t = p.text != null ? p.text : "";
   if (p.overlay)   // 疊加組：官方 skill＋指南照常，這組文字附加為額外規則（格式仍由指南管）
-    return officialSys(curMode())
+    return officialSys(mode, undefined, skills)
       + "\n\n# USER RULES — custom rules layered on top of the official skill\n"
       + "These rules OVERRIDE any conflicting wording or content guidance elsewhere in this brief,\n"
       + "but the reference guide's OUTPUT FORMAT (field names, section order, timing notation) still governs:\n"
@@ -1925,8 +2025,8 @@ async function refreshLessons(){
     renderLessons();
   }catch(e){}
 }
-function lessonSuffix(){
-  const m = curMode();
+function lessonSuffix(md){
+  const m = md || curMode();
   const act = LESSONS.filter(l => l.enabled && (l.mode === m || l.mode === "all" || l.mode === "both")).slice(0, 15);
   if (!act.length) return "";
   return "\n\n# LESSONS — rules distilled from this user's feedback on previous results\n"
@@ -2147,6 +2247,8 @@ function setView(v){
                        if (typeof lrLoadAvail === "function") lrLoadAvail(false); }
   if (v === "media") loadMedia();
   if (v === "mvhist" && typeof loadMvHist === "function") loadMvHist();
+  if (v === "icont" && typeof icShow === "function") icShow();
+  if (v === "ichist" && typeof loadIcHist === "function") loadIcHist();
   if (v === "queue" && typeof loadQueue === "function") loadQueue();
   if (v === "set" && typeof cutStatLoad === "function") cutStatLoad();
   if (v === "about" && typeof aboutLoad === "function") aboutLoad();
@@ -3785,7 +3887,7 @@ function refRuleText(){
 let VAL_NAUD = 0;   // 這次生成掛了幾個參考音訊；validate 用它判斷 <Audio N> 該不該存在
 function userNote(it){
   const mode = (it.mode || curMode());
-  const D = effDur();
+  const D = it.dur || effDur();
   const nImg = (it.files || []).length || (it.imgs || []).length || 1;
   let t = `Task mode: ${mode.toUpperCase()}. Requested video duration: ${D} seconds (use S.SS = ${D}.00 where the guide asks for it).`;
   if (mode === "i2va")       t += ` One reference image is attached: it is the FIRST frame (<Picture 1>).`;
@@ -3795,7 +3897,7 @@ function userNote(it){
   /* 參考音訊：模型聽不到聲音，只能告訴它有幾個、各是什麼（使用者寫的），
      由它按官方指南的 2.4 節建立 <Audio N> 定義並貫穿各欄位。 */
   const auds = (mode === "ref2va") ? (it.auds || []) : [];
-  VAL_NAUD = auds.length;
+  if (!it.dur) VAL_NAUD = auds.length;     // it.dur＝接龍在組設定，別動到前景批次正在用的值
   if (auds.length){
     t += ` ${auds.length} reference audio asset(s) are also attached as <Audio 1>..<Audio ${auds.length}>.`
        + ` You CANNOT hear them — rely on the descriptions below. Define each one in subject_definitions`
@@ -4344,7 +4446,7 @@ function arBtn(k, it, scope){
     title="輸出比例 — ${auto ? "自動跟著圖片" : "手動指定 " + eff}；點一下可改">
     <span class="arg">${arGlyph(eff)}</span>${eff || "比例"}${auto ? '<span class="aramark">自動</span>' : ""}</button>`;
 }
-function arTargetOf(k, scope){ return scope === "movie" ? MV : items[k]; }
+function arTargetOf(k, scope){ return scope === "movie" ? MV : scope === "ic" ? icP() : items[k]; }
 /* 卡片剛放進清單時還沒編碼過，拿不到 w/h；auto 需要它才顯示得出實際會輸出的比例。
    用預覽圖非同步補一次，補完重畫。_arDim 當旗標，不會重複觸發。 */
 function arFillDims(){
@@ -4380,9 +4482,14 @@ window.arOpen = (ev, k, scope) => {
 function arClose(){ const p = document.querySelector(".arpop"); if (p) p.remove(); }
 window.arSet = (k, v, scope) => {
   const t = arTargetOf(k, scope);
+  /* 開始生成之後比例就定了：中途換會讓章節畫面大小不同，合併（-c copy）會壞 */
+  if (scope === "ic" && t && (icBusy(t) || t.chapters.some(s => s.video || s.pid || s.takes.length))){
+    t.msg = "比例要在開始生成前決定；要換請先重新規劃"; arClose(); icDraw(); return;
+  }
   if (t) t.ar = v;
   arClose();
   if (scope === "movie"){ mvSave(false); mvDraw(); }
+  else if (scope === "ic"){ icSaveSoon(icP()); icDraw(); }
   else { saveDraft(); render(); }
 };
 
@@ -4471,10 +4578,15 @@ function lrSel(k, t, scope){
   return `<select class="lrsel" title="${escA(tip)}" onchange="lrPick(${k}, this.value, '${scope}')">${opts.join("")}</select>${sum}${actLine}`;
 }
 window.lrPick = (k, v, scope) => {
-  const t = scope === "movie" ? MV : items[k];
+  const p = (scope === "ic" || scope === "icp") ? icP() : null;
+  if (p && icBusy(p)){ p.msg = "生成中不能改 LoRA，請先停止"; icDraw(); if (scope === "ic") icDrawDetail(p); return; }
+  const t = scope === "movie" ? MV : scope === "icp" ? p : scope === "ic" ? (p && p.chapters[k]) : items[k];
   if (!t) return;
+  if (scope === "icp") p.chapters.forEach(s => { if (!s.video && !s.use_snap && s.recipe === (t.recipe || "")) s.recipe = v || ""; });
   t.recipe = v || "";
+  if (scope === "ic") t.use_snap = false;      // 手動選了配方，就不再沿用歷史當時那一份
   if (scope === "movie"){ mvSave(false); mvDraw(); }
+  else if (p){ icSaveSoon(p); icDraw(); if (scope === "ic") icDrawDetail(p); }   // 下拉選單還有焦點，icDraw 會跳過這一塊
   else { saveDraft(); render(); }
 };
 
@@ -4935,7 +5047,7 @@ let WF_DUR = 20;
 function effDur(){
   const el = $("#wdur");
   const v = el ? parseInt(el.value) : NaN;
-  return (v >= 1 && v <= 120) ? v : (WF_DUR || 10);
+  return (v >= 1 && v <= 30) ? v : (WF_DUR || 10);   // 伺服器只接受 1~30，超過會默默照模板
 }
 const durStr = () => effDur() + " seconds";
 async function loadWfParams(){
@@ -7284,6 +7396,653 @@ async function mvPollDone(pid){
 }
 mvDraw();
 
+/* ================= I2VA Continue：一張圖接龍成長片 =================
+   跟 FL2VA Movie 的差別：Movie 的尾幀是使用者給的分鏡圖，每段的 prompt 可以事先寫好。
+   這裡下一章的第一幀要等上一章算完才知道，所以事先只規劃「拍點」，每章的 H3 prompt
+   要到它的第一幀拿到手才寫——寫手看得到人物實際的姿勢與位置，不是規劃時想像的。
+
+   整條鏈由伺服器推進（h3-server.py 的 icworker），一支十幾二十分鐘，四章就超過一小時，
+   不能要求分頁一直開著。這裡負責在按下開始時組好 prompt 與 LoRA 送過去，之後只顯示狀態。 */
+const IC_MAX = 24;                    // 伺服器 IC_MAX_CHAPTERS 同一個數字
+const IC = {items: [], cur: 0, ch: 0, active: new Set(), planning: new Set(), queueIds: [], gen: 0, stopAfter: false, file: null, url: "", loaded: false, ticking: false};
+const icP = () => IC.items[IC.cur] || null;
+const icNewCh = () => ({beats: "", dialogue: "", ends_on: "", hint: "", recipe: "", use_snap: false, snap: null,
+  content: "", zh: "", edited: false, stale: false, state: "", attempts: 0, dur_gen: 0, pid: "", video: "",
+  sent: "", parent: "", hard: false, v_e: [], v_w: [], last_frame: "", cut: 0, face_checked: false, face_skip: false, face_fail: false, face_tries: 0,
+  takes: [], error: "", vstate: ""});
+const icPath = rel => String(rel).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
+const icLast = v => String(v).replace(/\\/g, "/").replace(VIDEO_RE, "-last-frame.png");
+/* 這一章交給下一章的畫面：結尾看不到臉時伺服器會改接前面一點的那一幀 */
+const icEnd = s => s.last_frame || icLast(s.video);
+const icThumb = rel => "/api/media/thumb/" + icPath(rel);
+const icCover = p => (p._imgSaved || !p.enc) ? `/api/continues/${p.id}/thumb` : p.enc.thumb;
+const icPlanning = p => IC.planning.has(p.id);
+const icPlanWord = p => p.chapters.some(s => s.vstate === "writing") || /寫 prompt/.test(p.msg || "") ? "寫 prompt 中" : "規劃中";
+const icBusy = p => !!p && (IC.active.has(p.id) || IC.planning.has(p.id));
+function icStat(t){ const e = $("#icStat"); if (e) e.textContent = t || ""; }
+
+function icSplit(){
+  const seg = effDur(), t = Math.max(1, parseInt($("#icTarget").value) || 0);
+  const n = Math.ceil(t / seg);
+  return {seg, t, n, total: n * seg};
+}
+function icDrawAdd(){
+  const x = icSplit();
+  $("#icSplit").textContent = x.n > IC_MAX
+    ? `每章 ${x.seg} 秒要 ${x.n} 章，超過上限 ${IC_MAX} 章`
+    : `每章 ${x.seg} 秒 → ${x.n} 章，共 ${x.total} 秒（工作流預設參數）`;
+  $("#icAdd").disabled = !IC.file || !$("#icStory").value.trim() || x.n > IC_MAX;
+  const sl = $("#icSlot");
+  sl.classList.toggle("has", !!IC.file);
+  sl.innerHTML = IC.file
+    ? `<img src="${IC.url}"><button class="sx" id="icSlotX" title="移除"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button><span class="slab">起始圖</span>`
+    : `<span class="plus">＋</span><span class="slab">起始圖</span>`;
+  const x2 = $("#icSlotX");
+  if (x2) x2.onclick = e => { e.stopPropagation(); icSetFile(null); };
+}
+function icSetFile(f){
+  if (IC.url){ try{ URL.revokeObjectURL(IC.url); }catch(e){} }
+  IC.file = f; IC.url = f ? URL.createObjectURL(f) : "";
+  icDrawAdd();
+}
+$("#icSlot").onclick = () => $("#icFile").click();
+$("#icFile").onchange = e => { const f = e.target.files[0]; if (f && f.type.startsWith("image/")) icSetFile(f); e.target.value = ""; };
+$("#icSlot").ondragover = e => e.preventDefault();
+$("#icSlot").ondrop = e => { e.preventDefault(); const f = [...e.dataTransfer.files].find(x => x.type.startsWith("image/")); if (f) icSetFile(f); };
+$("#icStory").oninput = icDrawAdd;
+$("#icTarget").oninput = icDrawAdd;
+$("#icAdd").onclick = async () => {
+  const x = icSplit(), story = $("#icStory").value.trim();
+  if (!IC.file || !story || x.n > IC_MAX) return;
+  $("#icAdd").disabled = true;
+  let enc;
+  try{ enc = await encode(IC.file); }
+  catch(e){ icStat("✘ " + e.message); icDrawAdd(); return; }
+  /* id 由這邊產生：第一次存檔逾時但其實存成功的話，重送才不會變成兩筆 */
+  const p = {id: (Date.now().toString(16) + Math.random().toString(16).slice(2, 10)).slice(0, 20), file: IC.file, enc, title: story.replace(/\s+/g, " ").slice(0, 40), story, target: x.t, seg: x.seg, n: x.n,
+    w: enc.w, h: enc.h, ar: "auto", recipe: "", plan: {}, chapters: [], status: "new", final: "", open: true, msg: ""};
+  IC.items.push(p); IC.cur = IC.items.length - 1; IC.ch = 0;
+  IC.file = null; IC.url = ""; $("#icStory").value = "";
+  icDrawAdd(); icDraw();
+  await icSave(p, true);
+  icPlan(p);
+};
+
+/* ---- 專案存檔：防重入。每一步都存，疊起來會佔滿瀏覽器對這個 origin 的六條連線 ---- */
+const icChOut = s => ({beats: s.beats, dialogue: s.dialogue, ends_on: s.ends_on, hint: s.hint, recipe: s.recipe,
+  use_snap: s.use_snap, snap: s.snap, content: s.content, zh: s.zh, edited: s.edited, stale: s.stale, state: s.state,
+  attempts: s.attempts, dur_gen: s.dur_gen, pid: s.pid, video: s.video, sent: s.sent, parent: s.parent, hard: s.hard, v_e: s.v ? s.v.E : [], v_w: s.v ? s.v.W : [], last_frame: s.last_frame, cut: s.cut, face_checked: s.face_checked, face_skip: s.face_skip, face_fail: s.face_fail, face_tries: s.face_tries, takes: s.takes, error: s.error});
+async function icSave(p){
+  if (!onServer || !p || p._deleted || icBusy(p)) return;    // 跑的時候內容由伺服器負責
+  if (p._saving){ p._again = true; return; }
+  p._saving = true;
+  const body = {id: p.id, base_rev: p.rev == null ? undefined : p.rev, title: p.title, story: p.story, target: p.target, seg: p.seg, aspect: p.ar || "auto",
+    recipe: p.recipe || "", w: p.w, h: p.h, status: p.status, final: p.final || "", msg: p.msg || "", n: p.n || p.chapters.length, face_guard: p.face_guard !== false, plan: p.plan, open: p.open !== false,
+    chapters: p.chapters.map(icChOut)};
+  /* 圖還沒確定存上去之前每次都帶，第一次失敗也補得回來 */
+  const sendImg = !p._imgSaved && !!p.enc;
+  if (sendImg){ body.image = p.enc.orig || p.enc.b64; body.thumb = p.enc.thumb; }
+  try{
+    const resp = await fetch("/api/continues", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const r = await resp.json().catch(() => ({error: "HTTP " + resp.status}));
+    if (r.conflict){
+      /* 版本對不上有兩種：上次存檔其實成功、只是回應沒收到（影片都一樣，重送就好）；
+         或這筆在別的地方跑過（這邊的是舊版，存下去會把成果蓋掉，要改用伺服器那份） */
+      const same = r.rec.chapters.length === p.chapters.length && r.rec.chapters.every((c, i) => c.video === p.chapters[i].video && c.pid === p.chapters[i].pid);
+      if (same){ p.rev = r.rec.rev; p._again = true; }
+      else { icApply(p, r.rec); p._saveErr = "這筆在別的地方更新過"; p.msg = "這筆在別的地方更新過，已載入最新內容，剛才的修改沒有存"; icDraw(); }
+    }
+    else if (r.id){ p.id = r.id; if (r.rev != null) p.rev = r.rev; if (sendImg) p._imgSaved = true; p._saveErr = ""; }
+    else { p._saveErr = r.error === "unknown endpoint" ? "伺服器還是舊版，請重啟 h3-server" : (r.error || "HTTP " + resp.status); p.msg = "專案存檔失敗：" + p._saveErr; }
+  }catch(e){ p._saveErr = (e && e.message) || String(e); p.msg = "專案存檔失敗：" + p._saveErr; }
+  p._saving = false;
+  if (p._again){ p._again = false; icSave(p); }
+}
+function icSaveSoon(p){
+  if (!p) return;
+  clearTimeout(p._t);
+  p._t = setTimeout(() => icSave(p, false), 700);
+}
+
+/* skill 每次重抓：使用者可能剛改完檔案，開著的頁面不該還用舊內容 */
+async function icSkill(){
+  delete SKILLSET.cache[IC_SKILL];
+  const sk = await ensureSkill(IC_SKILL);
+  if (!sk || !sk.skill || !sk.references || !sk.references["planner.md"])
+    throw new Error("讀不到 skills/" + IC_SKILL + "（SKILL.md 或 references/planner.md）");
+  return sk;
+}
+const icFill = (t, m) => String(t).replace(/\{(\w+)\}/g, (a, k) => (k in m ? m[k] : a));
+const icBeatRange = sec => sec <= 6 ? "2–3" : sec <= 10 ? "4–5" : sec <= 15 ? "5–7" : `${Math.round(sec / 2.5)}–${Math.round(sec / 2)}`;
+/* 寫手規則分成幾節，依這一章的位置組合（第一章／後續章／最後一章） */
+function icWriterRules(sk, i, n, sec){
+  const sect = {};
+  String(sk.skill).replace(/^---[\s\S]*?\n---\s*/, "").split(/^## /m).slice(1).forEach(b => {
+    const k = b.indexOf("\n");
+    sect[b.slice(0, k).trim().toLowerCase()] = b.slice(k + 1).trim();
+  });
+  const parts = [sect["every chapter"], i === 0 ? sect["first chapter"] : sect["later chapters"],
+                 i === n - 1 ? sect["final chapter"] : sect["not the final chapter"]].filter(Boolean);
+  return "\n\n===== CONTINUATION MODE: chapter " + (i + 1) + " of " + n + " =====\n"
+       + icFill(parts.join("\n"), {CHAPTER: i + 1, TOTAL: n, SECONDS: sec});
+}
+
+/* ---- 規劃：先把整條故事拆成各章的拍點（便宜；看過才花算圖的時間） ---- */
+const icLang = () => {
+  const l = (typeof REQUIRED === "object" && REQUIRED && REQUIRED.lang_lock) || "any";
+  return l === "any" ? "使用者劇情文字所用的語言（使用者另有指定就照指定）" : ({japanese: "日文", english: "英文", chinese: "中文", korean: "韓文"}[l] || l);
+};
+async function icPost(url, body){
+  const resp = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body || {})});
+  const r = await resp.json().catch(() => ({error: "HTTP " + resp.status}));
+  if (r.error) throw new Error(r.error === "unknown endpoint" ? "伺服器還是舊版，請重啟 h3-server" : r.error);
+  return r;
+}
+/* 把還沒存的編輯先寫回去：伺服器是照專案檔跑的 */
+async function icFlush(p){
+  clearTimeout(p._t);
+  const idle = async () => { for (let k = 0; k < 600 && p._saving; k++) await new Promise(r => setTimeout(r, 100)); };
+  await idle();
+  p._saveErr = "";
+  await icSave(p);
+  await idle();
+  /* 沒存成功就不能開始：伺服器是照專案檔跑的，會算舊內容，甚至以為全部都做完了 */
+  if (p._saving) throw new Error("存檔還沒完成，請稍後再按一次");
+  if (p._saveErr) throw new Error("存檔失敗：" + p._saveErr);
+}
+async function icPlan(p){
+  if (icBusy(p)) return false;
+  try{
+    await icFlush(p);
+    const sk = await icSkill();
+    const n = p.n || p.chapters.length || Math.ceil(p.target / p.seg);
+    const sys = icFill(sk.references["planner.md"], {CHAPTERS: n, SECONDS: p.seg, BEATS: icBeatRange(p.seg), LANG: icLang()});
+    await icPost(`/api/continues/${p.id}/plan`, {sys, user: `共 ${n} 章，每章 ${p.seg} 秒。使用者的劇情：${p.story}`, n});
+    IC.gen++; IC.planning.add(p.id); p.msg = "規劃章節中…";
+  }catch(e){ p.msg = "✘ 規劃失敗：" + e.message; }
+  icDraw(); icTick();
+  return icBusy(p);
+}
+
+/* ---- 寫手：拿到這一章的第一幀才寫 ---- */
+function icNote(p, i){
+  const n = p.chapters.length, s = p.chapters[i], pv = p.chapters[i - 1], nx = p.chapters[i + 1], pl = p.plan || {};
+  const out = ["[only 1 shot]"];
+  if (pl.story) out.push(`整體劇情概要（全片共 ${n} 章，前後要連貫）：${pl.story}`);
+  out.push(`本章（第 ${i + 1}/${n} 章）的拍點，依序做完，平均分布在 ${p.seg} 秒內：\n${s.beats}`);
+  if (s.dialogue) out.push(`本章台詞（照用，寫進 <d>）：${s.dialogue}`);
+  if (s.ends_on) out.push(`本章結尾：${s.ends_on}`);
+  out.push(`固定設定（每章照用）——畫風：${pl.style || ""}；人物：${pl.identity || ""}；聲線：${pl.voice || ""}；場景：${pl.setting || ""}；環境音：${pl.soundscape || ""}；配樂：${pl.music || "N/A"}`);
+  if (pv) out.push(`上一章結尾：${pv.ends_on || pv.beats.split("\n").pop() || ""}`);
+  if (nx) out.push(`下一章開頭要接：${nx.beats.split("\n")[0] || ""}`);
+  if (s.hint) out.push(`補充：${s.hint}`);
+  return out.join("\n");
+}
+/* ---- LoRA：送出當下解析成實際內容存起來。配方之後可能被改掉或刪掉 ---- */
+function icSnapNow(s){
+  if (s.use_snap && s.snap) return s.snap;
+  const rc = lrRecipe(s.recipe);
+  return {recipe: s.recipe || "", name: rc ? rc.name : "", loras: lrStack(s) || [], prompt: lrActText(s)};
+}
+function icLoraPayload(s){
+  if (!(s.use_snap && s.snap)) return lrPayload(s);
+  const o = {};
+  if (s.snap.loras.length) o.loras = s.snap.loras;
+  if (s.snap.prompt) o.lora_prompt = s.snap.prompt;
+  return o;
+}
+const icSameLora = (a, b) => JSON.stringify([a.loras, a.prompt]) === JSON.stringify([b.loras, b.prompt]);
+
+/* ---- 按下開始：prompt 的組法只有網頁這一份，算好整包交給伺服器 ---- */
+async function icSpec(p, only){
+  const sk = await icSkill(), n = p.chapters.length;
+  const pick = {prompt: store.get(PSEL()) || active, skills: activeSkillIds()};
+  /* 自訂組的內容是用到才載入；拿不到就停，不能帶著空的 system prompt 寫下去 */
+  const pg = prompts.find(x => x.id === pick.prompt);
+  if (pg && pg.text == null && !pg.builtin) pg.text = (await (await fetch(PAPI + "/" + pg.id)).json()).text;
+  if (pg && pg.text == null && !pg.builtin) throw new Error("讀不到目前選的 Prompt 組，已中止，沒有用空的 system prompt 跑下去");
+  return {sys: activeText("i2va", pick) + loraSystemSuffix() + lessonSuffix("i2va") + requiredSuffix(),
+    tr: $("#tr").value === "1", tr_sys: TR_SYS, retry: retryCfg(), face_guard: p.face_guard !== false, write_only: only == null ? null : only,
+    chapters: p.chapters.map((s, i) => ({utext: userNote({mode: "i2va", note: icNote(p, i), dur: p.seg}),
+      extra: icWriterRules(sk, i, n, p.seg), snap: icSnapNow(s),
+      wf: {...(wfOverrides() || {}), ...arPayload(p), ...icLoraPayload(s)}}))};
+}
+async function icEnqueue(p, only){
+  if (!p || icBusy(p) || p._starting || p.merging) return;
+  if (!p.chapters.length){ icPlan(p); return; }
+  IC.gen++; p._starting = true; icDraw();
+  try{
+    await icFlush(p);
+    await icPost(`/api/continues/${p.id}/run`, await icSpec(p, only));
+    IC.gen++;
+    if (only != null){ IC.planning.add(p.id); p.msg = `第 ${only + 1} 章寫 prompt 中…`; }
+    else { IC.active.add(p.id); p.msg = "已交給伺服器，可以關掉網頁"; }
+  }catch(e){ p.msg = "✘ " + e.message; }
+  p._starting = false; icDraw(); icTick();
+}
+
+/* ---- 生成中的即時預覽：工作流的預覽節點每一步送一張，3 秒問一次有沒有新的 ---- */
+let IC_LIVE = {timer: 0, pid: "", i: -1, p: null, info: null, busy: false};
+function icLiveStop(){ clearInterval(IC_LIVE.timer); IC_LIVE = {timer: 0, pid: "", i: -1, p: null, info: null, busy: false}; }
+function icLiveStart(p, i, pid){
+  icLiveStop();
+  IC_LIVE = {timer: setInterval(icLiveTick, 3000), pid, i, p, info: null, busy: false};
+  icLiveTick();
+}
+async function icLiveTick(){
+  const L = IC_LIVE;
+  if (!L.pid || L.busy || !$("#v-icont").classList.contains("on")) return;
+  L.busy = true;
+  try{ L.info = await (await fetch(CAPI + "/live/" + L.pid)).json(); icLiveApply(); }catch(e){}
+  L.busy = false;
+}
+function icLiveApply(){
+  const L = IC_LIVE, inf = L.info;
+  if (!L.pid || !inf || icP() !== L.p) return;
+  const box = $("#icLive" + L.i), t = $("#icLiveT" + L.i);
+  if (box && inf.has_preview)
+    qSyncThumb(box, {kind: String(inf.mime).startsWith("video/") ? "video" : "img", ctl: false, src: `${CAPI}/preview/${L.pid}?v=${inf.tick}`});
+  if (t) t.textContent = inf.step ? `預覽：第 ${inf.step} 步`
+    : inf.has_preview ? (inf.progress != null ? `${Math.round(inf.progress * 100)}%` : "")
+    : inf.active ? "等第一張預覽…" : "";
+}
+function icLiveSync(){
+  const p = icP(), i = p ? p.chapters.findIndex(s => s.vstate === "rendering" && s.pid) : -1;
+  if (i < 0){ if (IC_LIVE.pid) icLiveStop(); return; }
+  if (IC_LIVE.pid !== p.chapters[i].pid || IC_LIVE.p !== p) icLiveStart(p, i, p.chapters[i].pid);
+}
+async function icStopOf(p, label){
+  if (!icBusy(p) || icPlanning(p)) return;
+  if (!IC.queueIds.includes(p.id) &&
+      !confirm(`停止${label}的生成？\n算到一半的進度會丟掉，停下來之後可以改 prompt 再按「繼續生成」。`)) return;
+  /* 寫在專案上，不寫 #icStat：進度文字 3 秒一次，錯誤訊息一下就被蓋掉了 */
+  p.msg = "停止中…"; icDraw();
+  try{ await icPost(`/api/continues/${p.id}/stop`); }
+  catch(e){ p.msg = "停止失敗：" + e.message; icDraw(); }
+  icTick();
+}
+window.icStopCh = i => { const p = icP(); if (p) icStopOf(p, `第 ${i + 1} 章`); };
+window.icStopProj = k => { const p = IC.items[k]; if (p) icStopOf(p, "這一筆"); };
+
+/* ---- 狀態同步：3 秒問一次。正在跑的專案內容以伺服器為準，rev 變了才抓整份 ---- */
+function icApply(p, rec){
+  const q = icFromRec(rec);
+  delete q.file; delete q.enc;
+  Object.assign(p, q);
+}
+async function icTick(){
+  if (IC.ticking || !onServer || document.hidden || !$("#v-icont").classList.contains("on")) return;
+  IC.ticking = true;
+  const gen = IC.gen;
+  try{
+    const L = await (await fetch("/api/continues/live")).json();
+    if (L && L.revs && gen === IC.gen){            // 問的時候還沒按開始的話，這份回應是過期的
+      const act = new Set([...L.queue, L.cur.id].filter(Boolean)), plan = new Set(L.planning);
+      /* 剛跑完的也要看一次，才收得到最後的狀態。沒在跑的不抓：使用者可能正在打字，會被蓋掉 */
+      const watch = new Set([...act, ...plan, ...IC.active, ...IC.planning,
+        ...IC.items.filter(x => ["queued", "running", "planning"].includes(x.status) || x.chapters.some(s => s.vstate)).map(x => x.id)]);
+      let changed = act.size !== IC.active.size || plan.size !== IC.planning.size || [...act].some(x => !IC.active.has(x)) || [...plan].some(x => !IC.planning.has(x));
+      IC.active = act; IC.planning = plan; IC.queueIds = L.queue;
+      if (IC.stopAfter !== !!L.stop_after){ IC.stopAfter = !!L.stop_after; changed = true; }
+      for (const id of watch){
+        const rev = L.revs[id];
+        if (rev == null) continue;
+        let p = IC.items.find(x => x.id === id);
+        if (p && p.rev === rev) continue;
+        const rec = await (await fetch("/api/continues/" + id)).json();
+        if (rec.error) continue;
+        p = IC.items.find(x => x.id === id);       // 等待期間 icInit 可能已經加進去了
+        if (p) icApply(p, rec); else IC.items.push(icFromRec(rec));
+        changed = true;
+      }
+      const seen = icP();
+      if (act.size || plan.size) icStat(IC.stopAfter ? "這一章完成後就會停止" : ((seen && L.stats && L.stats[seen.id]) || L.stat || ""));
+      else if (IC.active.size === 0 && changed) icStat("");
+      if (changed) icDraw();
+    }
+  }catch(e){}
+  IC.ticking = false;
+}
+
+/* ---- 改某一章＝它之後全部作廢：後面的第一幀都是從這裡接下去的 ---- */
+/* 作廢的章節如果還有工作在算，就讓它停——留著只是白佔 GPU，算完也沒人收 */
+function icCancelJobs(chs){
+  for (const s of chs) if (s.pid) fetch(CAPI + "/cancel/" + s.pid, {method: "POST"}).catch(() => {});
+}
+function icInvalidate(p, from, keepContent){
+  const ts = new Date().toLocaleString();
+  icCancelJobs(p.chapters.slice(from));
+  p.chapters.slice(from).forEach((s, k) => {
+    if (s.video) s.takes = [...s.takes, {video: s.video, ts, content: s.sent || s.content, snap: s.snap, parent: s.parent, last_frame: s.last_frame, cut: s.cut, face_rejected: s.face_fail}].slice(-30);
+    Object.assign(s, {video: "", pid: "", error: "", vstate: "", last_frame: "", cut: 0, face_checked: false, face_skip: false, face_fail: false, face_tries: 0});
+    if (k > 0 || !keepContent){ s.content = ""; s.zh = ""; s.state = ""; s.v = null; s.edited = false; s.stale = false; s.hard = false; }
+  });
+  p.final = ""; p.status = "planned";
+}
+function icCascadeOK(p, i, verb){
+  const n = p.chapters.length, rest = p.chapters.slice(i);
+  const edited = p.chapters.slice(i + 1).filter(s => s.edited).length;
+  if (!rest.some(s => s.video || s.pid) && !edited) return true;
+  const range = i === n - 1 ? `第 ${n} 章` : `第 ${i + 1}～${n} 章`;
+  return confirm(`${verb}會讓${range}全部重新生成（每一章都要接前一章的最後一幀）。\n舊影片會留在各章的「產出紀錄」`
+    + (edited ? `；後面章節手動改過的 prompt 有 ${edited} 章會被重寫，不會保留` : "") + "。確定嗎？");
+}
+window.icRedo = (i, kind) => {
+  const p = icP();
+  if (!p || icBusy(p) || p.merging || p._starting) return;
+  if (!icCascadeOK(p, i, kind === "same" ? "重新生成這一章" : "重寫這一章")) return;
+  icInvalidate(p, i, kind === "same");
+  if (kind === "same") p.chapters[i].stale = false;
+  icEnqueue(p);
+};
+window.icWriteOnly = i => { const p = icP(); if (p) { p.chapters[i].error = ""; icEnqueue(p, i); } };
+/* 舊片只有在「接的就是目前前一章」時才能改用，否則整條鏈的接點就對不上了 */
+const icTakeOK = (p, i, t) => i === 0 || (!!p.chapters[i - 1].video && t.parent === p.chapters[i - 1].video);
+window.icPickTake = (i, j) => {
+  const p = icP(), s = p && p.chapters[i], t = s && s.takes[j];
+  if (!t || icBusy(p) || p.merging || p._starting || t.video === s.video || !icTakeOK(p, i, t)) return;
+  const n = p.chapters.length, later = p.chapters.slice(i + 1), ed = later.filter(x => x.edited).length;
+  if ((later.some(x => x.video || x.pid) || ed) &&
+      !confirm(`改用這支會讓第 ${i + 2}～${n} 章重新生成（它們接的是目前這支的最後一幀）`
+        + (ed ? `，其中 ${ed} 章手動改過的 prompt 會被重寫，不會保留` : "") + "。確定嗎？")) return;
+  icCancelJobs([s]);
+  icInvalidate(p, i + 1, false);
+  const ts = new Date().toLocaleString(), cur = s.video;
+  s.takes = s.takes.filter((_, k) => k !== j);
+  if (cur) s.takes.push({video: cur, ts, content: s.sent || s.content, snap: s.snap, parent: s.parent, last_frame: s.last_frame, cut: s.cut, face_rejected: s.face_fail});
+  s.video = t.video; s.snap = t.snap || s.snap; s.parent = t.parent || ""; s.pid = ""; s.error = "";
+  /* 被臉部檢查退回的舊片選回來時要保留 face_fail：不然下次繼續又會把它丟回去重算 */
+  Object.assign(s, {last_frame: t.last_frame || "", cut: t.cut || 0, face_checked: false, face_skip: false, face_fail: !!t.face_rejected, face_tries: 0});
+  if (t.content){ s.content = t.content; s.sent = t.content; s.edited = false; s.stale = false; s.zh = ""; s.state = ""; s.v = null; }
+  p.final = ""; p.status = p.chapters.every(x => x.video) ? "done" : "planned";
+  icDraw(); icSave(p, false);
+};
+window.icPlay = (rel, title) => {
+  $("#icPlayerPanel").style.display = "";
+  $("#icPlayerT").textContent = title;
+  $("#icPlayer").src = "/api/media/file/" + icPath(rel);
+  $("#icPlayerPanel").scrollIntoView({behavior: "smooth", block: "center"});
+};
+window.icSelCh = i => { IC.ch = i; icDraw(); };
+window.icSel = k => { IC.cur = k; IC.ch = 0; icDraw(); };
+window.icRemove = k => {
+  const p = IC.items[k];
+  if (!p || icBusy(p) || IC.active.has(p.id)) return;
+  p.open = false; icSave(p, false);
+  IC.items.splice(k, 1);
+  if (IC.cur >= IC.items.length) IC.cur = Math.max(0, IC.items.length - 1);
+  IC.ch = 0; icDraw();
+};
+window.icStart = k => { const p = IC.items[k]; if (p) icEnqueue(p); };
+$("#icRunAll").onclick = async () => { for (const p of IC.items.filter(x => !icBusy(x) && !x.merging && x.chapters.length && x.chapters.some(s => !s.video))) await icEnqueue(p); };
+$("#icStop").onclick = async () => { try{ await icPost("/api/continues/stop-after"); IC.stopAfter = true; icStat("這一章完成後就會停止"); icDraw(); }catch(e){ icStat("✘ " + e.message); } };
+$("#icGo").onclick = () => { const p = icP(); if (p) icEnqueue(p); };
+$("#icReplan").onclick = () => {
+  const p = icP();
+  if (!p || IC.active.has(p.id) || icPlanning(p) || p.merging) return;
+  if (p.chapters.length && !confirm("重新規劃會換掉全部章節的內容，已生成的影片也不會留在產出紀錄（檔案還在媒體庫）。確定嗎？")) return;
+  icPlan(p);
+};
+$("#icApplyLr").onclick = () => {
+  const p = icP();
+  if (!p || icBusy(p)) return;
+  p.chapters.forEach(s => { s.recipe = p.recipe || ""; s.use_snap = false; });
+  const done = p.chapters.filter(s => s.video).length;
+  p.msg = done ? `已套用到全部章節；已完成的 ${done} 章要重新生成才會生效` : "已套用到全部章節";
+  icDraw(); icSave(p, false);
+};
+$("#icFace").onchange = () => { const p = icP(); if (p && !icBusy(p)){ p.face_guard = $("#icFace").checked; icSaveSoon(p); } };
+$("#icPlanStory").oninput = () => { const p = icP(); if (p){ p.plan.story = $("#icPlanStory").value; icSaveSoon(p); } };
+$("#icMerge").onclick = async () => {
+  const p = icP();
+  if (!p || p.merging || icBusy(p)) return;
+  const files = [], cuts = [];
+  for (const s of p.chapters){ if (!s.video) break; files.push(s.video); cuts.push(s.cut || 0); }
+  if (!files.length) return;
+  if (files.length < p.chapters.length && !confirm(`目前只有前 ${files.length} 章完成，要先合併這 ${files.length} 章嗎？`)) return;
+  p.merging = true; p.msg = "ffmpeg 串接中…"; icDraw();
+  try{
+    if (files.length === 1 && !cuts[0]) p.final = files[0].replace(/\\/g, "/");
+    else {
+      const c = await (await fetch("/api/movie/concat", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({files, cuts})})).json();
+      if (c.error) throw new Error(c.error);
+      p.final = c.out;
+    }
+    p.msg = `🎉 已合併 ${files.length} 章`;
+  }catch(e){ p.msg = "✘ 合併失敗：" + e.message; }
+  p.merging = false; icDraw(); icSave(p, false);
+};
+
+/* ---- 畫面 ---- */
+function icProg(p){
+  const d = p.chapters.filter(s => s.video).length;
+  return p.chapters.length ? `${d}/${p.chapters.length} 章` : (p.n ? `${p.n} 章` : "");
+}
+function icDrawList(){
+  $("#icListPanel").style.display = IC.items.length ? "" : "none";
+  $("#icList").innerHTML = IC.items.map((p, k) => `
+    <div class="icrow ${k === IC.cur ? "on" : ""}" onclick="icSel(${k})">
+      <img src="${icCover(p)}" alt="">
+      <div class="ict"><div class="icn">${esc(p.title || "未命名")}</div>
+        <div class="hint">${p.target} 秒 · 每章 ${p.seg} 秒 · ${icProg(p)}${p.msg ? " · " + esc(p.msg) : ""}</div></div>
+      <button class="mini" onclick="event.stopPropagation();icStart(${k})" ${p.chapters.length && p.chapters.every(s => s.video) || icBusy(p) || p.merging || p._starting ? "disabled" : ""}>${IC.queueIds.includes(p.id) ? "排隊中" : IC.active.has(p.id) ? "生成中" : icPlanning(p) ? icPlanWord(p) : p.chapters.some(s => s.video || s.pid) ? "▶ 繼續" : "▶ 開始"}</button>
+      ${IC.active.has(p.id) ? `<button class="ghost mini" onclick="event.stopPropagation();icStopProj(${k})">⏹ 停止</button>` : ""}
+      <button class="ghost mini" onclick="event.stopPropagation();icRemove(${k})" ${icBusy(p) ? "disabled" : ""} title="從清單移除（紀錄還在，可從歷史還原）">✕</button>
+    </div>`).join("");
+  $("#icRunAll").disabled = !IC.items.some(p => !icBusy(p) && p.chapters.length && p.chapters.some(s => !s.video));
+  $("#icStop").disabled = !IC.active.size || IC.stopAfter;
+  const nav = $("#navIc");
+  if (nav) nav.textContent = IC.items.length || "";
+}
+function icCardStatus(p, s, i){
+  if (s.face_fail && !s.face_skip) return "⚠ 結尾看不到臉";
+  if (s.error) return "⚠ 中斷";
+  if (s.vstate === "writing") return "✍️ 寫 prompt 中…";
+  if (s.vstate === "rendering") return "🎬 影片生成中…";
+  if (s.video) return "✅ 完成";
+  if (s.pid) return "⏳ 已送出，等結果";
+  if (i > 0 && !p.chapters[i - 1].video) return "等待上一章";
+  return s.content ? "prompt 就緒" : "待生成";
+}
+const icLrLine = sn => !sn ? "" : (sn.loras.length ? sn.loras.map(x => lrBase(x.lora) + " × " + x.str).join("、") : "照工作流") + (sn.prompt ? `　🔑 ${sn.prompt}` : "");
+function icDrawDetail(p){
+  const s = p.chapters[IC.ch], box = $("#icDetail");
+  if (!s){ box.innerHTML = ""; return; }
+  const i = IC.ch, ready = i === 0 || !!p.chapters[i - 1].video;
+  /* 有工作在等結果時不能改內容：改了也不會算進那支影片，收回來就對不上了 */
+  const busy = icBusy(p) || !!p._starting || !!p.merging || !!s.pid;
+  const redoOff = icBusy(p) || !!p._starting || !!p.merging;      // 等結果中可以按：會把那支取消掉重來
+  const now = icSnapNow(s), changed = !!(s.video && s.snap && !icSameLora(now, s.snap));
+  const dirty = !!s.video && (s.stale || (s.sent && s.content !== s.sent));
+  const takes = (s.takes || []).filter(t => t.video);
+  box.innerHTML = `
+    <div class="note-wrap"><label>🧭 本章行為（一行一個拍點，依序平均分布在 ${p.seg} 秒內）</label>
+      <textarea class="note" id="icBeats" rows="5" ${busy ? "disabled" : ""}>${esc(s.beats)}</textarea></div>
+    <div class="note-wrap" style="margin-top:8px"><label>🗣 本章台詞</label>
+      <textarea class="note" id="icDlg" rows="2" ${busy ? "disabled" : ""}>${esc(s.dialogue)}</textarea></div>
+    <div class="note-wrap" style="margin-top:8px"><label>🏁 本章結尾動作（下一章從這裡接）</label>
+      <textarea class="note" id="icEnd" rows="1" ${busy ? "disabled" : ""}>${esc(s.ends_on)}</textarea></div>
+    <div class="note-wrap" style="margin-top:8px"><label>補充提示（選填，寫 prompt 時會帶上）</label>
+      <textarea class="note" id="icHint" rows="2" ${busy ? "disabled" : ""}>${esc(s.hint)}</textarea></div>
+    <div class="row" style="margin-top:8px;align-items:flex-start">
+      <label class="small" style="margin-top:6px">本章 LoRA</label>
+      <div>${s.use_snap && s.snap ? `<div class="lrsum">📌 沿用當時的 LoRA：${esc(icLrLine(s.snap) || "照工作流")}</div>
+        <button class="ghost mini" onclick="icUnsnap(${i})" style="margin-top:4px">改用配方</button>` : lrSel(i, s, "ic")}
+        ${changed ? `<div class="lrsum warn">LoRA 改過了，重新生成這一章才會生效</div>
+          <button class="ghost mini" onclick="icResnap(${i})" style="margin-top:4px">改回當時的 LoRA</button>` : ""}</div>
+    </div>
+    <div class="row" style="margin:8px 0">
+      ${s.vstate ? "" : `<button class="ghost mini" onclick="icWriteOnly(${i})" ${busy || !ready || s.video ? "disabled" : ""} title="先看這一章的 prompt，不算影片">✍️ 只寫 prompt</button>`}
+      <button class="ghost mini" onclick="icRedo(${i},'same')" ${redoOff || !ready || !s.content ? "disabled" : ""} title="同一份 prompt，換 seed 重算">🎲 用這份 prompt 重新生成</button>
+      <button class="ghost mini" onclick="icRedo(${i},'rewrite')" ${redoOff || !ready ? "disabled" : ""} title="依上面的拍點重寫 prompt 再生成">♻️ 重寫 prompt 並重新生成</button>
+      ${s.attempts ? `<span class="hint">${s.attempts} 次嘗試</span>` : ""}
+      ${s.v && s.v.E && s.v.E.length ? `<span class="hint" style="color:var(--acc)" title="${escA(s.v.E.join("\n"))}">錯誤 ${s.v.E.length}</span>` : ""}
+      ${s.v && s.v.W && s.v.W.length ? `<span class="hint" style="color:var(--warn)" title="${escA(s.v.W.join("\n"))}">警告 ${s.v.W.length}</span>` : ""}
+    </div>
+    ${i < p.chapters.length - 1 && s.video ? `<p class="hint">重新生成這一章，後面第 ${i + 2}～${p.chapters.length} 章也會跟著重來。</p>` : ""}
+    ${s.cut ? `<p class="hint">這一章結尾看不到臉，下一章改接 ${Number(s.cut).toFixed(2)} 秒的畫面，合併時後面會剪掉。</p>` : ""}
+    ${s.face_fail && !s.face_skip ? `<p class="hint" style="color:var(--warn)">這一章重算了還是看不到臉。可以改 prompt 重新生成，或確定要接：
+      <button class="ghost mini" onclick="icFaceSkip(${i})" ${icBusy(p) ? "disabled" : ""}>仍用這一幀繼續</button></p>` : ""}
+    ${dirty ? `<p class="hint" style="color:var(--warn)">內容改過了，影片還是舊的——按上面的重新生成才會套用。</p>` : ""}
+    ${s.pid && !s.vstate && !icBusy(p) ? `<p class="hint">這一章有送出的工作還沒收回，按「繼續生成」收回；要重來就按上面的重新生成。</p>` : ""}
+    ${s.error ? `<div class="icerr">⚠ ${esc(s.error)}</div>` : ""}
+    <div class="note-wrap" style="margin-top:8px"><label>H3 Prompt（第一幀拿到後才會寫；可直接修改）</label>
+      <textarea class="note" id="icContent" rows="9" ${busy ? "disabled" : ""} placeholder="${ready ? "按「開始生成」或「只寫 prompt」" : "要等上一章完成，才知道這一章的第一幀"}">${esc(s.content)}</textarea></div>
+    ${s.zh ? `<div class="hint" style="white-space:pre-wrap;margin-top:6px">${esc(s.zh)}</div>` : ""}
+    ${takes.length ? `<div class="hint" style="margin-top:10px">🎞 產出紀錄</div>${takes.map((t, j) => `
+      <div class="row" style="margin-top:3px;gap:8px"><span class="small">${esc(t.ts || `第 ${j + 1} 支`)}</span>
+        <a href="/api/media/file/${icPath(t.video)}" target="_blank">▶ 看</a>
+        <button class="ghost mini" onclick="icPickTake(${i},${j})" ${busy || !icTakeOK(p, i, t) ? "disabled" : ""} title="${icTakeOK(p, i, t) ? "" : "這支是接舊的上一章，不能改用"}">改用這支</button></div>`).join("")}` : ""}`;
+  const on = (id, fn) => { const e = $(id); if (e) e.oninput = () => { fn(e.value); icSaveSoon(p); }; };
+  const mark = () => { if (s.content && !s.edited) s.stale = true; };
+  on("#icBeats", v => { s.beats = v; mark(); });
+  on("#icDlg", v => { s.dialogue = v; mark(); });
+  on("#icEnd", v => { s.ends_on = v; mark(); });
+  on("#icHint", v => { s.hint = v; mark(); });
+  on("#icContent", v => { s.content = v; s.edited = !!v.trim(); s.stale = false; s.hard = false; s.v = null; s.state = ""; });
+}
+window.icFaceSkip = i => { const p = icP(), s = p && p.chapters[i]; if (s && !icBusy(p)){ s.face_skip = true; s.face_fail = false; if (p.chapters[i + 1]) p.chapters[i + 1].error = ""; p.msg = "會用這一幀接下一章，按「繼續生成」"; icDraw(); icDrawDetail(p); icSave(p); } };
+window.icResnap = i => { const p = icP(); if (p && !icBusy(p) && p.chapters[i] && p.chapters[i].snap){ p.chapters[i].use_snap = true; icDraw(); icDrawDetail(p); icSave(p, false); } };
+window.icUnsnap = i => { const p = icP(); if (p && !icBusy(p) && p.chapters[i]){ p.chapters[i].use_snap = false; icDraw(); icSave(p, false); } };
+function icDraw(){
+  icDrawList();
+  const p = icP();
+  $("#icBoard").style.display = p ? "" : "none";
+  if (!p){ $("#icFinalPanel").style.display = "none"; return; }
+  if (IC.ch >= p.chapters.length) IC.ch = 0;
+  const busy = icBusy(p) || icPlanning(p), n = p.chapters.length, doneN = p.chapters.filter(s => s.video).length;
+  let prefix = 0; for (const s of p.chapters){ if (!s.video) break; prefix++; }
+  $("#icBoardT").textContent = `${p.title || "未命名"}（${p.target} 秒 · ${n || p.n || 0} 章）`;
+  $("#icArBox").innerHTML = arBtn(0, p, "ic");
+  $("#icLrBox").innerHTML = lrSel(0, p, "icp");
+  $("#icApplyLr").disabled = !n || icBusy(p);
+  $("#icFace").checked = p.face_guard !== false; $("#icFace").disabled = icBusy(p);
+  $("#icReplan").disabled = busy;
+  $("#icGo").disabled = busy || !!p.merging || !!p._starting || !n || doneN === n;
+  $("#icGo").textContent = IC.planning.has(p.id) ? icPlanWord(p) + "…" : IC.queueIds.includes(p.id) ? "排隊中…" : IC.active.has(p.id) ? "生成中…"
+    : doneN || p.status === "paused" || p.chapters.some(s => s.pid) ? "▶ 繼續生成" : "▶ 開始生成";
+  $("#icPlanStory").disabled = busy;
+  $("#icMerge").disabled = busy || !prefix || !!p.merging;
+  $("#icMerge").textContent = prefix && prefix < n ? `🧵 合併前 ${prefix} 章` : "🧵 合併成長片";
+  if (document.activeElement !== $("#icPlanStory")) $("#icPlanStory").value = (p.plan && p.plan.story) || "";
+  const ratio = p.w && p.h ? `${p.w}/${p.h}` : "3/4";
+  $("#icCards").innerHTML = p.chapters.map((s, i) => {
+    const pv = p.chapters[i - 1];
+    const fsrc = i === 0 ? icCover(p) : (pv.video ? icThumb(icEnd(pv)) : "");
+    const lsrc = s.video ? icThumb(icEnd(s)) : "";
+    const ph = t => `<div class="icph" style="aspect-ratio:${ratio}">${t}</div>`;
+    return `<div class="iccard ${i === IC.ch ? "on" : ""}" onclick="icSelCh(${i})">
+      <div class="icfr">${fsrc ? `<img src="${fsrc}" style="aspect-ratio:${ratio}" alt="">` : ph("上一章的最後一幀")}
+        ${lsrc ? `<img src="${lsrc}" style="aspect-ratio:${ratio}" alt="">` : ph("生成後的最後一幀")}</div>
+      <div class="iclab"><span>第一幀</span><span>最後一幀</span></div>
+      <div style="margin-top:6px;font-size:13px"><b>第 ${i + 1} 章</b>　${icCardStatus(p, s, i)}</div>
+      ${s.vstate === "rendering" ? `<div class="iclive" id="icLive${i}"></div>` : ""}
+      ${s.vstate && !icPlanning(p) ? `<div class="row" style="margin-top:6px"><button class="ghost mini" data-stopch="${i}">⏹ 停止這一章</button>
+        <span class="hint" id="icLiveT${i}"></span></div>` : ""}
+      ${s.video ? `<div class="row" style="margin-top:6px"><button class="ghost mini" data-play="${i}">▶ 看這章</button></div>` : ""}
+      ${(s.beats || "").split("\n")[0] ? `<div class="hint" style="margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escA(s.beats)}">${esc(s.beats.split("\n")[0])}</div>` : ""}
+    </div>`;
+  }).join("");
+  document.querySelectorAll("#icCards [data-play]").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const i = +b.dataset.play;
+    icPlay(p.chapters[i].video, `${p.title || ""} — 第 ${i + 1} 章`);
+  });
+  document.querySelectorAll("#icCards [data-stopch]").forEach(b => b.onclick = e => { e.stopPropagation(); icStopCh(+b.dataset.stopch); });
+  icLiveSync();
+  icLiveApply();                       // 卡片重畫後預覽框是空的，先補上最近一張
+  $("#icTabs").innerHTML = p.chapters.map((s, i) => `<button class="ghost mini" style="${i === IC.ch ? "border-color:var(--acc);color:var(--acc)" : ""}" onclick="icSelCh(${i})">${s.video ? "✅" : s.content ? "📝" : "⚪"} 第 ${i + 1} 章</button>`).join("");
+  /* 使用者正在打字時不重畫——算圖進度隨時會觸發重繪，游標和輸入法會被打斷 */
+  const ae = document.activeElement;
+  if (!(ae && $("#icDetail").contains(ae) && /TEXTAREA|INPUT|SELECT/.test(ae.tagName))) icDrawDetail(p);
+  $("#icFinalPanel").style.display = p.final ? "" : "none";
+  if (p.final){
+    const u = "/api/media/file/" + icPath(p.final);
+    if ($("#icFinal").getAttribute("src") !== u) $("#icFinal").src = u;
+    $("#icFinalPath").textContent = p.final;
+  }
+}
+
+/* ---- 載入／歷史 ---- */
+function icFromRec(rec){
+  return {...rec, ar: rec.aspect || "auto", n: rec.n || (rec.chapters || []).length || Math.ceil((rec.target || 1) / (rec.seg || 10)), file: null, enc: null, msg: rec.msg || "", _imgSaved: true,
+    chapters: (rec.chapters || []).map(c => ({...icNewCh(), ...c, v: ((c.v_e || []).length || (c.v_w || []).length) ? {E: c.v_e || [], W: c.v_w || []} : null}))};
+}
+async function icInit(){
+  if (IC.loaded || !onServer) return;
+  IC.loaded = true;
+  try{
+    const rows = await (await fetch("/api/continues")).json();
+    if (!Array.isArray(rows)) return;
+    $("#navIcHist").textContent = rows.length || "";
+    for (const r of rows.filter(x => x.open).reverse()){
+      if (IC.items.some(p => p.id === r.id)) continue;
+      const rec = await (await fetch("/api/continues/" + r.id)).json();
+      if (!rec.error && !IC.items.some(p => p.id === r.id)) IC.items.push(icFromRec(rec));
+    }
+  }catch(e){ IC.loaded = false; }
+  icDraw();
+}
+async function icShow(){ icDrawAdd(); icDraw(); await icInit(); icTick(); }
+async function loadIcHist(){
+  if (!onServer) return;
+  const grid = $("#ichGrid");
+  try{
+    const rows = await (await fetch("/api/continues")).json();
+    $("#navIcHist").textContent = rows.length || "";
+    grid.innerHTML = rows.map(r => `
+      <div style="border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--panel)">
+        <img src="/api/continues/${r.id}/thumb" style="width:100%;aspect-ratio:16/10;object-fit:cover;background:var(--code)" onerror="this.style.visibility='hidden'" alt="">
+        <div style="padding:10px 12px">
+          <div style="font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.title || "未命名")}</div>
+          <div class="hint">${esc(r.ts || "")} · ${r.target} 秒 · ${r.n_done}/${r.n_ch} 章${r.final ? " · 有長片" : ""}</div>
+          <div class="row" style="margin-top:8px">
+            <button class="mini" onclick="icRestore('${r.id}')">還原</button>
+            ${r.final ? `<a class="ghost mini" style="padding:6px 12px;border-radius:8px;border:1px solid var(--line);text-decoration:none;color:var(--fg)" href="/api/media/file/${icPath(r.final)}" target="_blank">▶ 長片</a>` : ""}
+            <button class="ghost mini" onclick="icDelete('${r.id}')">刪除</button>
+          </div>
+        </div>
+      </div>`).join("") || '<span class="hint">還沒有保存的接龍專案</span>';
+  }catch(e){ grid.innerHTML = '<span class="hint">讀取失敗（伺服器可能還是舊版，請重啟 h3-server）</span>'; }
+}
+window.icRestore = async id => {
+  try{
+    const k0 = IC.items.findIndex(p => p.id === id);
+    if (k0 >= 0){
+      /* 專案還開著也要照「還原」的意思做：已完成的章節釘回當時實際用的 LoRA。
+         只限配方沒換過的——使用者特地改選別的配方，不該被蓋掉。 */
+      IC.items[k0].chapters.forEach(s => { if (s.snap && s.video && s.snap.recipe === s.recipe) s.use_snap = true; });
+      IC.cur = k0; IC.ch = 0; setView("icont"); icDraw(); return;
+    }
+    const rec = await (await fetch("/api/continues/" + id)).json();
+    if (rec.error) throw new Error(rec.error);
+    const p = icFromRec(rec);
+    /* 從歷史還原的章節，預設用當時實際送出的 LoRA：配方可能早就不是那個內容了 */
+    p.chapters.forEach(s => { if (s.snap && s.video) s.use_snap = true; });
+    p.open = true;
+    IC.items.push(p); IC.cur = IC.items.length - 1; IC.ch = 0;
+    icSave(p, false);
+    setView("icont");
+    p.msg = "已從歷史還原";
+    icDraw();
+  }catch(e){ alert("還原失敗：" + e.message); }
+};
+window.icDelete = async id => {
+  const p = IC.items.find(x => x.id === id);
+  if (!confirm("刪除這個接龍專案？（不會刪除已生成的影片檔）")) return;
+  let r;
+  try{ r = await (await fetch("/api/continues/" + id, {method: "DELETE"})).json(); }
+  catch(e){ alert("刪除失敗：" + e.message); return; }
+  if (r.error){ alert(r.error); return; }
+  /* 規劃或合併還在跑的話，它結束時的存檔會把刪掉的專案寫回來 */
+  if (p){ p._deleted = true; clearTimeout(p._t); }
+  if (p){ IC.items.splice(IC.items.indexOf(p), 1); if (IC.cur >= IC.items.length) IC.cur = Math.max(0, IC.items.length - 1); icDraw(); }
+  loadIcHist();
+};
+icDrawAdd();
+setInterval(icTick, 3000);
+if (onServer) fetch("/api/continues").then(r => r.json()).then(r => { if (Array.isArray(r)) $("#navIcHist").textContent = r.length || ""; }).catch(() => {});
+
 /* ================= 匯出 ================= */
 function dl(name,text,mime){
   const a=document.createElement("a");
@@ -7356,6 +8115,15 @@ const EN = {
 "🧠 整體劇情規劃":"🧠 Plan story","✍️ 片段劇情生成":"✍️ Generate stories","🎬 劇情影片處理":"🎬 Render videos","🧵 合併片段並顯示":"🧵 Merge & show",
 "輸出片段":"Output segments","片段劇情":"Segment stories","🎉 完成的長片":"🎉 Finished film",
 "FL2VA Movie 紀錄":"FL2VA Movie Projects",
+"I2VA Continue — 一張圖接龍成長片":"I2VA Continue — Grow One Image into a Long Film","I2VA Continue 紀錄":"I2VA Continue Projects",
+"上傳一張圖，寫下大概的劇情與想要的總秒數。LLM 會想好行為與對白，依「工作流預設參數」的影片秒數拆成章節； 第 1 章用這張圖，之後每一章都接上一章實際生成的最後一幀。按下開始後由伺服器在背景跑，可以關掉網頁。":"Upload an image and write a rough story and total length. The LLM works out the action and dialogue and splits it into chapters using the workflow's default clip length; chapter 1 starts from this image, and every later chapter starts from the actual last frame of the one before. Once started it runs on the server, so you can close this page.",
+"已交給伺服器，可以關掉網頁":"Handed to the server, you can close this page",
+"保存的接龍專案：起始圖、各章劇情與 prompt、當時用的 LoRA、影片。點「還原」載回 I2VA Continue 查看或繼續。":"Saved projects: the start image, each chapter's story and prompt, the LoRAs used, and the videos. Click Restore to reopen one in I2VA Continue.",
+"新增一筆":"New item","起始圖":"Start image","大概的劇情（行為與對白的細節由 LLM 補完）":"Rough story (the LLM fills in action and dialogue)","目標總秒數":"Total seconds",
+"生成清單":"Generation list","▶ 全部開始":"▶ Start all","⏹ 這一章完成後停止":"⏹ Stop after this chapter","LoRA 套用到全部章節":"Apply LoRA to all chapters","🧠 重新規劃章節":"🧠 Re-plan chapters",
+"▶ 開始生成":"▶ Start","▶ 繼續生成":"▶ Continue","🧵 合併成長片":"🧵 Merge into one film","整體劇情（LLM 規劃的結果，可編輯）":"Overall story (planned by the LLM, editable)","🎉 合併後的長片":"🎉 Merged film",
+"⏹ 停止這一章":"⏹ Stop this chapter","確保結尾看得到臉":"Keep the face in the last frame","仍用這一幀繼續":"Continue with this frame anyway","⏹ 停止":"⏹ Stop","排隊中":"Queued","生成中":"Generating","規劃中":"Planning","第一幀":"First frame","最後一幀":"Last frame","上一章的最後一幀":"Last frame of previous chapter","生成後的最後一幀":"Last frame after generation","🗣 本章台詞":"🗣 Dialogue","補充提示（選填，寫 prompt 時會帶上）":"Extra note (optional, used when writing the prompt)","本章 LoRA":"Chapter LoRA",
+"✍️ 只寫 prompt":"✍️ Write prompt only","🎲 用這份 prompt 重新生成":"🎲 Regenerate with this prompt","♻️ 重寫 prompt 並重新生成":"♻️ Rewrite prompt and regenerate","H3 Prompt（第一幀拿到後才會寫；可直接修改）":"H3 Prompt (written once the first frame is ready; editable)","🎞 產出紀錄":"🎞 Takes","改用這支":"Use this one","▶ 看這章":"▶ Watch","還原":"Restore","改用配方":"Use a recipe","等待上一章":"Waiting for previous chapter","待生成":"Pending","✅ 完成":"✅ Done","還沒有保存的接龍專案":"No saved projects yet",
 "保存的長片專案：分鏡圖、各片段劇情與影片、完成的長片。點「開啟」載回 Movie 頁查看或繼續。":"Saved film projects: storyboard, per-segment stories and videos, and the finished film. \"Open\" loads one back into the Movie page.",
 "存在伺服器的 history 資料夾，區網上任何裝置看到的都是同一份。點縮圖看當時的完整結果。":"Stored in the server's history folder — every device on your LAN sees the same list. Click a thumbnail for the full result.",
 "重新整理":"Refresh","取消選取":"Deselect","匯入到上傳並處理":"Import & process","全部清除":"Clear all","重新生成顯示中的":"Re-generate shown",

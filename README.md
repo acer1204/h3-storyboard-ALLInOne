@@ -89,6 +89,28 @@ Movie 專案存在伺服器端，有專屬歷史分類——之後可隨時開�
 
 ---
 
+## I2VA Continue — one image, one long film 一張圖接龍成長片
+
+Upload one image, write a rough story and a total length. The LLM works out the action and dialogue and splits it into chapters using the workflow's default clip length, so 40 seconds at 10 seconds per clip becomes 4 chapters. Each chapter starts from the actual last frame of the one before it, and its prompt is written only once that frame exists.  
+上傳一張圖、寫下大概的劇情與總秒數，LLM 會想好行為與對白，依工作流預設的影片秒數拆成章節（40 秒、每段 10 秒＝4 章）。每一章都接上一章實際生成的最後一幀，該章的 prompt 也是拿到那一幀才寫。
+
+Every chapter can be watched on its own, has its own LoRA recipe (or one recipe for all), and can be redone; redoing a chapter also redoes every chapter after it, because they all continue from its last frame. Merging into one film is your call. Projects are saved server-side with the prompts and the LoRAs actually used, and can be restored from history.  
+每章可以單獨查看、單獨設定 LoRA 配方（也可以全部套同一個）、單獨重做；重做某一章時，它之後的章節也會一起重來，因為都是接它的最後一幀。要不要合併成長片由你決定。專案存在伺服器端，保留當時的 prompt 與實際用的 LoRA，可從歷史紀錄還原。
+
+While a chapter renders, the workflow's live preview appears on its card, and you can stop that chapter, edit its prompt and continue.  
+章節生成中，卡片上會顯示工作流的即時預覽；不滿意可以當場停止這一章，改 prompt 後繼續。
+
+The chain runs on the server, so you can close the page once it has started, and it picks up by itself after a server restart.
+接龍在伺服器上跑，按下開始後可以關掉網頁；伺服器重啟後也會自己接回去。
+
+Before a chapter continues, the page checks that the last frame still shows the character's face. If not, it picks the nearest earlier frame that does, or re-renders the chapter, and pauses rather than continue from a faceless frame. This can be turned off per project.
+接下一章之前會先確認最後一幀看得到角色的臉；看不到就改接前面最近有臉的畫面，或重算這一章，還是不行就暫停，不會拿沒有臉的畫面硬接。每個專案可以關掉這項檢查。
+
+The writing rules live in `skills/i2va-continue/` and can be edited there.  
+寫作規則放在 `skills/i2va-continue/`，可以直接修改。
+
+---
+
 ## Story quality guarantees 劇情品質保證
 
 - Output follows the official MiniMax H3 prompt structure exactly as the official guides define it — the base `integrated_multimodal_description` / `overall_soundscape` / `non_diegetic_music` format, or the six-section reference format for REF2VA.  

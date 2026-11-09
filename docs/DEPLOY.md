@@ -19,7 +19,7 @@
 | `settings.json` | 跨瀏覽器共用的設定 | 不建就是全部預設，可以不管 |
 | `drafts.json` | 生成清單與格子的草稿 | 想接續工作才複製 |
 | `history/`、`uploads/`、`thumbs/` | 歷史紀錄與圖片 | 想保留舊紀錄才複製 |
-| `lessons/`、`prompts/`、`movies/` | 經驗庫、自建 prompt 組、長片專案 | 同上 |
+| `lessons/`、`prompts/`、`movies/`、`continues/` | 經驗庫、自建 prompt 組、長片專案、I2VA Continue 專案 | 同上 |
 | `queue/` | 任務清單 | 同上；裡面還在跑的任務，搬過來後會自己跟 ComfyUI 對帳 |
 | `output/` | 遠端 ComfyUI 成品的本機鏡像 | 不用複製，需要時會自己拉回來 |
 | `venv/` | Python 環境 | **不要複製**，`start_app.bat` 會自己重建（Docker 用不到） |

@@ -20,6 +20,7 @@ lessons/
 prompts/
 loras/
 movies/
+continues/
 *.bak
 queue/
 settings.json

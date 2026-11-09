@@ -52,7 +52,7 @@ H3 Prompt 批次產生器 - 本機服務
   POST   /api/loras             -> 新增或更新 {id?, name, main, subs}
   DELETE /api/loras/<id>        -> 刪除
 """
-import argparse, base64, hashlib, io, json, os, queue, re, socket, struct, subprocess, sys, threading, time
+import argparse, base64, hashlib, io, json, os, queue, re, socket, struct, subprocess, sys, threading, time, uuid
 import urllib.request
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, unquote, parse_qs, quote, urlencode
@@ -81,6 +81,8 @@ QINDEX = os.path.join(QUEUE, "index.json")
 SETTINGS_PATH = os.path.join(ROOT, "settings.json")   # 共用設定（跨瀏覽器／跨電腦一致）
 DRAFTS_PATH = os.path.join(ROOT, "drafts.json")       # 未送出的工作（F5／換電腦都能接續）
 MINDEX = os.path.join(MOVIES, "index.json")
+CONTINUES = os.path.join(ROOT, "continues")   # I2VA Continue 接龍專案
+CINDEX = os.path.join(CONTINUES, "index.json")
 LESSONS_DIR = os.path.join(ROOT, "lessons")
 LESSONS_FILE = os.path.join(LESSONS_DIR, "lessons.json")
 REQUIRED_FILE = os.path.join(LESSONS_DIR, "required.json")
@@ -391,7 +393,231 @@ def save_mindex(rows):
         json.dump(rows, f, ensure_ascii=False, indent=1)
 
 
-def movie_concat(rel_files):
+def load_cindex():
+    try:
+        with open(CINDEX, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _atomic_json(fp, obj):
+    """專案檔每一步都會重寫。寫到一半斷掉的話整個接龍（可能是幾小時的算圖）就讀不回來了。"""
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+    tmp = fp + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=1)
+    # Windows：目標檔剛好被讀取中時 replace 會失敗，等一下就好
+    for _try in range(5):
+        try:
+            os.replace(tmp, fp)
+            return
+        except PermissionError:
+            time.sleep(0.05)
+    os.replace(tmp, fp)
+
+
+def _s(v, n):
+    return str(v if v is not None else "")[:n]
+
+
+def _i(v, lo, hi, d=0):
+    try:
+        return max(lo, min(hi, int(v)))
+    except (TypeError, ValueError):
+        return d
+
+
+def _f(v):
+    try:
+        return max(0.0, float(v or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def ic_snap(x):
+    """這一章實際送出的 LoRA。配方事後可能被改掉或刪掉，還原時要用得回當時那一份。"""
+    if not isinstance(x, dict):
+        return None
+    rows = []
+    for r in (x.get("loras") or [])[:15]:
+        if isinstance(r, dict) and r.get("lora"):
+            try:
+                st = float(r.get("str", 1))
+            except (TypeError, ValueError):
+                st = 1.0
+            rows.append({"lora": _s(r["lora"], 300), "str": st})
+    return {"recipe": _s(x.get("recipe"), 40), "name": _s(x.get("name"), 80),
+            "loras": rows, "prompt": _s(x.get("prompt"), 1200)}
+
+
+def ic_chapter(c):
+    if not isinstance(c, dict):
+        c = {}
+    takes = []
+    for t in (c.get("takes") or [])[:30]:
+        if isinstance(t, dict) and t.get("video"):
+            takes.append({"video": _s(t["video"], 300), "ts": _s(t.get("ts"), 40),
+                          "content": str(t.get("content") or ""), "snap": ic_snap(t.get("snap")),
+                          "parent": _s(t.get("parent"), 300),
+                          "last_frame": _s(t.get("last_frame"), 300), "cut": _f(t.get("cut")),
+                          "face_rejected": bool(t.get("face_rejected"))})
+    return {"beats": _s(c.get("beats"), 3000), "dialogue": _s(c.get("dialogue"), 1000),
+            "ends_on": _s(c.get("ends_on"), 500), "hint": _s(c.get("hint"), 2000),
+            "recipe": _s(c.get("recipe"), 40), "use_snap": bool(c.get("use_snap")),
+            "snap": ic_snap(c.get("snap")),
+            "content": str(c.get("content") or ""), "zh": str(c.get("zh") or ""),
+            "edited": bool(c.get("edited")), "stale": bool(c.get("stale")),
+            "state": _s(c.get("state"), 10), "attempts": _i(c.get("attempts"), 0, 99),
+            "dur_gen": _i(c.get("dur_gen"), 0, 120),
+            "pid": _s(c.get("pid"), 60), "video": _s(c.get("video"), 300), "takes": takes,
+            # 真正送出去的文字與它接的前一章影片。content 之後可能被編輯，不能當成這支影片的 prompt
+            "sent": str(c.get("sent") or ""), "parent": _s(c.get("parent"), 300), "hard": bool(c.get("hard")),
+            "vstate": _s(c.get("vstate"), 12),
+            # 結尾沒有臉時改接的畫面與它的秒數；合併時要剪到這裡
+            "last_frame": _s(c.get("last_frame"), 300), "cut": _f(c.get("cut")),
+            "face_checked": bool(c.get("face_checked")), "face_skip": bool(c.get("face_skip")),
+            "face_fail": bool(c.get("face_fail")), "face_tries": _i(c.get("face_tries"), 0, 20),
+            "v_e": [_s(x, 300) for x in (c.get("v_e") or [])][:20],
+            "v_w": [_s(x, 300) for x in (c.get("v_w") or [])][:20],
+            "error": _s(c.get("error"), 400)}
+
+
+def ic_load(rid):
+    with open(os.path.join(CONTINUES, rid + ".json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def ic_commit(rec):
+    """寫回專案檔與索引。呼叫端要握著 LOCK。rev 讓網頁知道內容變了，才不用每次都抓整份。"""
+    rec["rev"] = int(rec.get("rev") or 0) + 1
+    rec["up_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _atomic_json(os.path.join(CONTINUES, rec["id"] + ".json"), rec)
+    row = {"id": rec["id"], "ts": rec.get("ts"), "up_ts": rec["up_ts"], "title": rec.get("title"),
+           "target": rec.get("target"), "seg": rec.get("seg"), "n_ch": len(rec["chapters"]),
+           "n_done": sum(1 for c in rec["chapters"] if c["video"]),
+           "status": rec.get("status"), "final": rec.get("final"), "open": rec.get("open"), "rev": rec["rev"]}
+    rows = load_cindex()
+    for k, r in enumerate(rows):
+        if r.get("id") == rec["id"]:
+            rows[k] = row
+            break
+    else:
+        rows.insert(0, row)
+    _atomic_json(CINDEX, rows)
+
+
+def ic_update(rid, **fields):
+    with LOCK:
+        rec = ic_load(rid)
+        rec.update(fields)
+        ic_commit(rec)
+    return rec
+
+
+def ic_ch(rid, i, **fields):
+    with LOCK:
+        rec = ic_load(rid)
+        rec["chapters"][i].update(fields)
+        ic_commit(rec)
+    return rec
+
+
+class IcConflict(Exception):
+    def __init__(self, rec):
+        super().__init__("conflict")
+        self.rec = rec
+
+
+def ic_save(body):
+    """建立／更新一個接龍專案，回傳 (id, rev)。圖片只在建立時帶。"""
+    rid = str(body.get("id") or "")
+    if rid and not ID_RE.match(rid):
+        raise ValueError("bad id")
+    rid = rid or new_id()
+    # 跑的時候章節由背景那條線負責。這時收網頁的存檔，會把它剛寫進去的 pid 與影片蓋回舊的。
+    if ic_active(rid):
+        return rid, None
+    img, ext = parse_data_image(body.pop("image", None))
+    thumb, _t = parse_data_image(body.pop("thumb", None))
+    fp = os.path.join(CONTINUES, rid + ".json")
+    plan = body.get("plan") if isinstance(body.get("plan"), dict) else {}
+    chs = body.get("chapters") if isinstance(body.get("chapters"), list) else []
+    rec = {"id": rid, "title": _s(body.get("title"), 80), "story": _s(body.get("story"), 6000),
+           "target": _i(body.get("target"), 1, 3600), "seg": _i(body.get("seg"), 1, 120, 10),
+           "n": _i(body.get("n"), 0, IC_MAX_CHAPTERS),
+           "aspect": _s(body.get("aspect") or "auto", 12), "recipe": _s(body.get("recipe"), 40),
+           "w": _i(body.get("w"), 0, 20000), "h": _i(body.get("h"), 0, 20000),
+           "status": _s(body.get("status") or "new", 20), "final": _s(body.get("final"), 300),
+           "msg": _s(body.get("msg"), 300), "face_guard": bool(body.get("face_guard", True)),
+           "plan": {k: _s(plan.get(k), 2000) for k in
+                    ("story", "style", "identity", "voice", "setting", "soundscape", "music")},
+           "chapters": [ic_chapter(c) for c in chs[:IC_MAX_CHAPTERS]]}
+    with LOCK:
+        os.makedirs(CONTINUES, exist_ok=True)
+        old = {}
+        try:
+            with open(fp, encoding="utf-8") as f:
+                old = json.load(f)
+        except Exception:
+            pass
+        # 整條鏈是在網頁關著的時候跑完的，留著的舊分頁手上還是沒有影片的版本。
+        # 它一存檔就會把成果整份蓋掉，所以要比對版本。
+        if old and body.get("base_rev") is not None and _i(body.get("base_rev"), 0, 2 ** 31) != int(old.get("rev") or 0):
+            raise IcConflict(old)
+        # 這幾個狀態只有背景那條線能設。存進來的話，下次重啟會把它當成跑到一半的接回去。
+        if rec["status"] in ("queued", "running", "planning"):
+            rec["status"] = "paused"
+        if img:
+            with open(os.path.join(CONTINUES, "%s.img.%s" % (rid, ext or "jpg")), "wb") as f:
+                f.write(img)
+        if thumb:
+            with open(os.path.join(CONTINUES, rid + ".thumb.jpg"), "wb") as f:
+                f.write(thumb)
+        rec["ts"] = old.get("ts") or time.strftime("%Y-%m-%d %H:%M:%S")
+        rec["rev"] = int(old.get("rev") or 0)
+        rec["open"] = bool(body["open"]) if "open" in body else bool(old.get("open", True))
+        ic_commit(rec)
+    return rid, rec["rev"]
+
+
+def _concat_trim(ff, abses, cuts, deadline, outdir):
+    """有章節要剪結尾時只能重新編碼：-c copy 只能切在關鍵幀上，對不到接下一章的那一幀。"""
+    infos = [ic_video_info(ff, ap) for ap in abses]
+    audio = all(x[1] for x in infos)
+    sizes = {x[2] for x in infos if x[2]}
+    if len(sizes) > 1:
+        raise ValueError("各章畫面大小不同（%s），沒辦法合併。通常是中途換了解析度或模板" % "、".join(sorted(sizes)))
+    args, parts, labels = [ff, "-y", "-hide_banner", "-loglevel", "error"], [], ""
+    for k, ap in enumerate(abses):
+        args += ["-i", ap]
+        t = _f(cuts[k]) if k < len(cuts) else 0.0
+        parts.append("[%d:v]%ssetpts=PTS-STARTPTS,setsar=1[v%d]" % (k, ("trim=end=%.3f," % t) if t else "", k))
+        labels += "[v%d]" % k
+        if audio:
+            parts.append("[%d:a]%sasetpts=PTS-STARTPTS[a%d]" % (k, ("atrim=end=%.3f," % t) if t else "", k))
+            labels += "[a%d]" % k
+    parts.append("%sconcat=n=%d:v=1:a=%d[v]%s" % (labels, len(abses), 1 if audio else 0, "[a]" if audio else ""))
+    out = os.path.join(outdir, "movie_%s_%dseg.mp4" % (time.strftime("%Y%m%d_%H%M%S"), len(abses)))
+    args += ["-filter_complex", ";".join(parts), "-map", "[v]"] + (["-map", "[a]", "-c:a", "aac", "-b:a", "192k"] if audio else [])
+    part = out + ".part"              # 失敗不留壞檔：副檔名不是影片，媒體庫也不會列出來
+    args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-f", "mp4", part]
+    try:
+        r = subprocess.run(args, capture_output=True, timeout=max(30, deadline - time.time()))
+        if r.returncode != 0:
+            raise ValueError("ffmpeg 失敗: " + r.stderr.decode("utf-8", "replace")[:400])
+        os.replace(part, out)
+    except subprocess.TimeoutExpired:
+        raise ValueError("影片太長，時限內編不完。有章節要剪結尾時整部片都要重新編碼")
+    finally:
+        try:
+            os.unlink(part)
+        except OSError:
+            pass
+    return os.path.relpath(out, MEDIA_ROOT).replace("\\", "/")
+
+
+def movie_concat(rel_files, cuts=None):
     """把多段 mp4（media_root 相對路徑）用 ffmpeg concat demuxer 無損串接成一部長片。
     回傳輸出檔的 media_root 相對路徑。"""
     import subprocess as sp
@@ -400,16 +626,26 @@ def movie_concat(rel_files):
     if not ff:
         raise ValueError("找不到 ffmpeg（PATH 或 ComfyUI 環境內都沒有）")
     abses = []
-    for rf in rel_files:
-        media_fetch(rf)
+    # 下載與 ffmpeg 共用一個期限，要比前端的 330 秒短（瀏覽器中止時這裡不會知道）。
+    # 來不及就先在背景拉，讓使用者晚點再按，不要每支各等滿 180 秒。
+    deadline = time.time() + 300
+    for k, rf in enumerate(rel_files):
+        left = deadline - time.time() - 30
+        if left < 5:
+            media_prefetch(*rel_files[k:])
+            raise ValueError("還有 %d 支片段在下載，稍等一下再按一次合併" % (len(rel_files) - k))
+        media_fetch(rf, budget=min(180, int(left)))
         ap = os.path.abspath(os.path.join(MEDIA_ROOT, rf.replace("\\", "/")))
         if not ap.startswith(os.path.abspath(MEDIA_ROOT)) or not os.path.exists(ap):
             raise ValueError("片段不存在或路徑不合法: %s" % rf)
         abses.append(ap)
-    if len(abses) < 2:
+    cuts = cuts if isinstance(cuts, list) else []
+    if len(abses) < 2 and not any(cuts):
         raise ValueError("至少要兩段影片")
     outdir = os.path.join(MEDIA_ROOT, "video", "movies")
     os.makedirs(outdir, exist_ok=True)
+    if any(cuts):
+        return _concat_trim(ff, abses, cuts, deadline, outdir)
     # 容器要跟片段一致：把 WebM(VP9/Opus) 用 -c copy 塞進 .mp4 會失敗
     _ext = os.path.splitext(abses[0])[1].lower() or ".mp4"
     if _ext not in VIDEO_EXT: _ext = ".mp4"
@@ -419,15 +655,19 @@ def movie_concat(rel_files):
         for ap in abses:
             lst.write("file '%s'\n" % ap.replace("'", "'\\''"))
         lst.close()
-        r = sp.run([ff, "-y", "-f", "concat", "-safe", "0", "-i", lst.name, "-c", "copy", out],
-                   capture_output=True, timeout=300)
+        # 寫到 .part，成功才改名：失敗或逾時留下的半成品不該出現在媒體庫
+        fmt = {".mp4": "mp4", ".webm": "webm", ".mkv": "matroska", ".mov": "mov"}[_ext]
+        r = sp.run([ff, "-y", "-f", "concat", "-safe", "0", "-i", lst.name, "-c", "copy", "-f", fmt, out + ".part"],
+                   capture_output=True, timeout=max(30, deadline - time.time()))
         if r.returncode != 0:
             raise ValueError("ffmpeg 失敗: " + r.stderr.decode("utf-8", "replace")[-400:])
+        os.replace(out + ".part", out)
     finally:
-        try:
-            os.unlink(lst.name)
-        except OSError:
-            pass
+        for f0 in (lst.name, out + ".part"):
+            try:
+                os.unlink(f0)
+            except OSError:
+                pass
     return os.path.relpath(out, MEDIA_ROOT).replace("\\", "/")
 COMFY_TEMPLATE = os.path.join(ROOT, "comfy-template.json")
 # v18 的 DaSiWa_EnhancedVideoCombine 用 container="Auto"，實際輸出是 .webm，不是 .mp4。
@@ -479,6 +719,10 @@ QLOCK = threading.RLock()
 QROWS = {}   # jid -> row（磁碟的記憶體鏡像）
 QLIVE = {}   # jid -> {progress, stage, prev_step}（僅記憶體，重啟即失）
 QPREV = {}   # jid -> 預覽影像 bytes（僅記憶體）
+# 正在算的那一支的進度與預覽（用 QLOCK 保護）。QLIVE/QPREV 是用任務清單的列 id 當 key，
+# 不在清單裡的工作（I2VA Continue 的章節）對不上，所以另外依 prompt_id 記一份。
+# ComfyUI 一次只算一支，留一格就夠。
+LIVE_ONE = {"pid": "", "mime": "", "raw": b"", "tick": 0, "step": "", "progress": None}
 COMFY_LAST_STATE = {}   # prompt_id -> last state string, so the console logs transitions, not every poll
 
 
@@ -487,11 +731,12 @@ def comfy_note(pid, state, extra=""):
     key = state + ("|" + extra if extra else "")
     if COMFY_LAST_STATE.get(pid) != key:
         COMFY_LAST_STATE[pid] = key
-        sys.stderr.write("  comfy %s : %s%s\n" % (pid[:8], state, (" " + extra) if extra else ""))
+        slog("  comfy %s : %s%s" % (pid[:8], state, (" " + extra) if extra else ""))
         if state in ("done", "error"):
             COMFY_LAST_STATE.pop(pid, None)
 MAX_BODY = 24 * 1024 * 1024
 MV_MAX_IMAGES = 24            # FL2VA Movie 分鏡張數上限；N 張圖 = N-1 個片段
+IC_MAX_CHAPTERS = 24          # I2VA Continue 章數上限（前端同一個數字）
 ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
 
 
@@ -2458,7 +2703,9 @@ def comfy_submit(body):
                                    body.get("wf"), blob,
                                    mode=run_mode, extra_names=extra_names, full_prompt=full_prompt,
                                    audio_names=audio_names)
-        payload = {"prompt": graph, "client_id": "h3-webui"}
+        payload = {"prompt": graph, "client_id": WS_CLIENT_ID}
+        if body.get("prompt_id"):
+            payload["prompt_id"] = str(body["prompt_id"])
         if extra:
             payload["extra_data"] = extra
         r = comfy_api("/prompt", payload, timeout=60)
@@ -2634,10 +2881,940 @@ def qworker():
 
 
 
+def gpu_prepare_step(target):
+    """llama 與 ComfyUI 在同一張卡時的交接判斷。ready=False 表示要等一下再問。"""
+    thr = int(CONFIG.get("gpu_free_mb", 4000))
+    mem = gpu_mem()
+    used = mem.get("used_mb")
+    if used is None:
+        return ({"ready": True, "state": "no_gpu_info", "gpu": mem})
+    in_flight = LLAMA_INFLIGHT[0] > 0
+    since_llama = (time.time() - LLAMA_LAST[0]) if LLAMA_LAST[0] else 1e9
+    # 在別台機器上的那一方不碰這張卡。本機 VRAM 降不降下來跟它無關，
+    # 等下去只是無端不能用。cut_gpu_block 早就這樣判了，這裡漏掉。
+    comfy_here, llama_here = cut_rivals_local()
+    if target == "llama":
+        if not llama_here:
+            return ({"ready": True, "state": "llama_remote", "gpu": mem})
+        if in_flight:
+            # 另一個 llama 呼叫正在跑：同對象直接放行
+            return ({"ready": True, "state": "llama_resident", "gpu": mem})
+        if since_llama < 8 and not comfy_busy():
+            # 權重還在卡上（idle 卸載前）且 ComfyUI 沒在算圖：連續呼叫不用等
+            return ({"ready": True, "state": "llama_resident", "gpu": mem})
+        if used <= thr:
+            return ({"ready": True, "state": "gpu_free", "gpu": mem})
+        busy = comfy_busy()
+        if busy:
+            return ({"ready": False, "state": "comfy_busy", "gpu": mem})
+        # 去背服務也押著 VRAM（BiRefNet 約 4.4GB），而 comfy_free 卸不到它。
+        # 不叫它的話用量永遠降不到門檻以下，這裡會空轉到逾時。
+        freed = []
+        if cut_unload() is not None:
+            freed.append("cutout")
+        try:
+            comfy_free()
+            freed.append("comfy")
+        except Exception as e:
+            freed.append("comfy失敗(%s)" % str(e)[:40])
+        state = "freeing_" + "+".join(freed) if freed else "nothing_to_free"
+        time.sleep(1.5)
+        mem = gpu_mem()
+        return ({"ready": (mem.get("used_mb") or 0) <= thr, "state": state, "gpu": mem})
+    if target == "comfy":
+        if not comfy_here:
+            return ({"ready": True, "state": "comfy_remote", "gpu": mem})
+        if in_flight and llama_here:
+            return ({"ready": False, "state": "llama_in_use", "gpu": mem})
+        if used <= thr:
+            return ({"ready": True, "state": "gpu_free", "gpu": mem})
+        if comfy_busy():
+            # 高 VRAM 是 ComfyUI 自己在用：直接排進它的佇列即可
+            return ({"ready": True, "state": "comfy_owns_gpu", "gpu": mem})
+        if since_llama < 90 and llama_here:
+            return ({"ready": False, "state": "waiting_llama_unload", "gpu": mem})
+        # 沒人聲稱佔用：多半是 ComfyUI 閒置駐留的模型，送單無妨
+        return ({"ready": True, "state": "assume_comfy_resident", "gpu": mem})
+    return {"error": "target 必須是 llama 或 comfy"}
+
+
+def comfy_state(pid):
+    """問 ComfyUI 這個工作現在怎樣。連不上會丟例外（那不等於工作失敗）。"""
+    hist = comfy_api("/history/" + pid, timeout=15)
+    if pid in hist:
+        rec = hist[pid]
+        st = rec.get("status", {})
+        outs = []
+        for nid, o in (rec.get("outputs") or {}).items():
+            for k, v in o.items():
+                if isinstance(v, list):
+                    for it in v:
+                        if isinstance(it, dict) and "filename" in it:
+                            outs.append((it.get("subfolder", "") + "/" + it["filename"]).lstrip("/"))
+        err = ""
+        for msg in st.get("messages", []):
+            if msg[0] == "execution_error":
+                err = str(msg[1].get("exception_message", ""))[:400]
+            elif msg[0] == "execution_interrupted" and not err:
+                err = "工作被中斷（有人在 ComfyUI 或任務清單按了取消）"
+        state = "done" if st.get("completed") else ("error" if st.get("status_str") == "error" else "running")
+        comfy_note(pid, state, (outs[-1] if (state == "done" and outs) else (err[:80] if err else "")))
+        if state == "done" and outs:
+            # 不走任務清單的工作（Movie、I2VA Continue）也要先鏡像，合併時才不用一支一支等
+            media_prefetch(*outs)
+        return {"state": state, "outputs": outs, "error": err}
+    q = comfy_api("/queue", timeout=15)
+    for item in q.get("queue_running", []):
+        if len(item) > 1 and item[1] == pid:
+            comfy_note(pid, "running")
+            return {"state": "running"}
+    for i, item in enumerate(q.get("queue_pending", [])):
+        if len(item) > 1 and item[1] == pid:
+            comfy_note(pid, "queued", "(pos %d)" % (i + 1))
+            return {"state": "queued", "pos": i + 1}
+    comfy_note(pid, "unknown")
+    return {"state": "unknown"}
+
+
+# ---------------------------------------------------------------- I2VA Continue：背景接龍
+# 一條鏈要算一兩個小時，不能靠瀏覽器開著推進：分頁一關，下一章就沒有人送了。
+# 這裡只負責「照順序跑」。prompt 怎麼組（官方 skill、指南、經驗庫、配方）還是網頁按下開始時
+# 算好送來的，存成 <id>.run.json：那套邏輯只留一份，h3-server 重啟也接得回去。
+IC_LOCK = threading.RLock()
+IC_Q = []                        # 等著跑的專案 id
+IC_CUR = {"id": "", "ch": -1}    # 正在跑的專案與章節
+IC_STAT = {}                     # rid -> 進度文字（只在記憶體，變化太頻繁不寫檔）
+IC_PLANNING = set()
+IC_CANCEL = {}                   # rid -> "stopping"（取消送出中）/ "stopped"
+IC_STOP_AFTER = [False]          # 這一章做完就全部停
+IC_WAKE = threading.Event()
+
+
+class IcStopped(Exception):
+    pass
+
+
+class IcPaused(Exception):
+    pass
+
+
+def ic_active(rid):
+    with IC_LOCK:
+        return rid in IC_Q or rid in IC_PLANNING or IC_CUR["id"] == rid
+
+
+def ic_stat(rid, text):
+    with IC_LOCK:
+        IC_STAT[rid] = text
+
+
+def ic_check_stop(rid):
+    with IC_LOCK:
+        if IC_CANCEL.get(rid) == "stopped":
+            raise IcStopped()
+
+
+def ic_nap(rid, secs):
+    """睡的時候也要能馬上被停止叫醒。"""
+    t1 = time.time() + secs
+    while time.time() < t1:
+        ic_check_stop(rid)
+        time.sleep(min(0.4, max(0.01, t1 - time.time())))
+
+
+def ic_gpu_wait(rid, target, i):
+    label = {"comfy_busy": "等待 ComfyUI 生成完成", "waiting_llama_unload": "等待 llama 閒置卸載",
+             "llama_in_use": "llama 正在生成中，等它完成"}
+    for _n in range(400):             # 最多等 ~20 分鐘；超時放行，跟網頁的 gpuPrepare 一樣
+        try:
+            d = gpu_prepare_step(target)
+        except Exception:
+            return
+        if d.get("ready") or d.get("error") or d.get("state") == "no_gpu_info":
+            return
+        ic_stat(rid, "第 %d 章：GPU 協調：%s…" % (i + 1, label.get(d.get("state"), "釋放 VRAM 中")))
+        ic_nap(rid, 3)
+
+
+def ic_llm(messages, temp, max_tokens, top_p=0.95, rid=None):
+    """呼叫 llama-server。接龍沒有人看著，暫時性的錯誤自己重試幾次，不要整條鏈停在這裡。"""
+    body = {"model": "qwen3.8-27b", "messages": messages, "stream": False, "temperature": temp,
+            "top_p": top_p, "top_k": 20, "seed": int.from_bytes(os.urandom(4), "big") & 0x7fffffff,
+            "max_tokens": max_tokens, "chat_template_kwargs": {"enable_thinking": False}}
+    maybe_reload_config()
+    with QLOCK:
+        LLAMA_INFLIGHT[0] += 1
+    try:
+        err = None
+        for a in range(3):
+            try:
+                j = llama_api("/v1/chat/completions", body, timeout=280)
+                if j.get("choices"):
+                    return j
+                err = str(j.get("error") or j)[:200]
+            except Exception as e:
+                err = str(e)[:200]
+            if rid:
+                ic_nap(rid, 8)
+            else:
+                time.sleep(8)
+        raise IOError("llama-server: %s" % err)
+    finally:
+        with QLOCK:
+            LLAMA_INFLIGHT[0] = max(0, LLAMA_INFLIGHT[0] - 1)
+        LLAMA_LAST[0] = time.time()
+
+
+def ic_llm_image(raw):
+    """給 LLM 看的圖：長邊 1024 的 JPEG，跟網頁 encode() 一樣。最後一幀是放大過的 PNG，整張送太大。"""
+    ff = find_ffmpeg()
+    if ff:
+        try:
+            r = subprocess.run([ff, "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-frames:v", "1",
+                                "-vf", "scale='if(gt(iw,ih),min(1024,iw),-2)':'if(gt(iw,ih),-2,min(1024,ih))'",
+                                "-q:v", "3", "-f", "mjpeg", "pipe:1"],
+                               input=raw, capture_output=True, timeout=45)
+            if r.returncode == 0 and r.stdout:
+                return "data:image/jpeg;base64," + base64.b64encode(r.stdout).decode()
+        except Exception as e:
+            slog("  [continue] 縮圖失敗，送原圖：%s" % str(e)[:120])
+    mime = "image/png" if raw[:4] == b"\x89PNG" else "image/jpeg"
+    return "data:%s;base64,%s" % (mime, base64.b64encode(raw).decode())
+
+
+def ic_first_frame(rid, rec, i):
+    """這一章的第一幀。絕不退回原圖：接不上就是接不上，悄悄換一張會得到一支斷掉的長片。"""
+    if i == 0:
+        import glob as _g
+        hits = _g.glob(os.path.join(CONTINUES, rid + ".img.*"))
+        if not hits:
+            raise IOError("找不到這個專案的起始圖")
+        with open(hits[0], "rb") as f:
+            return f.read()
+    prev = rec["chapters"][i - 1]["video"]
+    if not prev:
+        raise IOError("第 %d 章還沒有影片" % i)
+    # 改接的畫面只有這台有；鏡像資料夾可以刪、移機不用帶，不見了就從影片再抽一次（同一幀）
+    lf, cut = rec["chapters"][i - 1].get("last_frame"), rec["chapters"][i - 1].get("cut")
+    if lf and cut and not os.path.isfile(media_path(lf) or ""):
+        ff, vp = find_ffmpeg(), media_fetch(prev.replace("\\", "/"))
+        got = ic_frame_at(ff, vp, cut) if ff and vp else b""
+        if got:
+            with open(media_path(lf), "wb") as f:
+                f.write(got)
+            return got
+    rel = rec["chapters"][i - 1].get("last_frame") \
+        or re.sub(r"\.(mp4|webm|mkv|mov)$", "-last-frame.png", prev.replace("\\", "/"), flags=re.I)
+    for a in range(6):
+        p0 = media_fetch(rel)
+        if p0:
+            with open(p0, "rb") as f:
+                return f.read()
+        _media_fetch_fail.pop(media_path(rel), None)   # 失敗會記 60 秒，不清掉重試就沒有意義
+        ic_stat(rid, "第 %d 章：等待上一章的最後一幀…" % (i + 1))
+        ic_nap(rid, 15)
+    raise IOError("讀不到第 %d 章的最後一幀" % i)
+
+
+def ic_trim(c):
+    # 模型偶爾不吐 EOS 會把欄位再寫一遍，這裡切掉
+    m0 = re.search(r"non_diegetic_music:?", c)
+    if not m0:
+        return c.strip()
+    head, tail = c[:m0.end()], c[m0.end():]
+    m = re.search(r"\n\s*\n(?=\s*(?:integrated_multimodal_description|subject_definitions))", tail)
+    if m:
+        tail = tail[:m.start()]
+    return (head + tail).strip()
+
+
+def ic_repair(c):
+    # 跟網頁 repair() 同一套：剝掉 Markdown 與第一個合法起點之前的雜訊
+    c = re.sub(r"^#{1,6}\s.*$", "", c, flags=re.M)
+    c = re.sub(r"\*\*([A-Za-z_ ]+)\*\*\s*(:)?", lambda m: m.group(1) + (m.group(2) or ""), c)
+    c = re.sub(r"^\s*[-*]\s+(?=[a-z_]+\s*:)", "", c, flags=re.M)
+    c = re.sub(r"^\s*[\r\n]+", "", c)
+    hits = [c.find(x) for x in ("For the target video", "How the reference pictures align",
+                                "subject_definitions", "integrated_multimodal_description") if c.find(x) >= 0]
+    if hits and min(hits) > 0:
+        c = c[min(hits):]
+    c = re.sub(r"^(integrated_multimodal_description|overall_soundscape|non_diegetic_music)\s*$", r"\1:", c, flags=re.M)
+    return c.strip()
+
+
+def ic_field(c, a, b):
+    i = c.find(a)
+    if i < 0:
+        return ""
+    j = c.find(b) if b else -1
+    return c[i + len(a):j if j > 0 else None].strip()
+
+
+def ic_speaker_issues(c):
+    out, order = [], []
+    for seg in re.split(r"(?=\[Shot\s*\d+\])", c):
+        if "<d>" not in seg:
+            continue
+        ms = re.search(r"\[Shot\s*(\d+)\]", seg)
+        for m in re.finditer(r"<d>", seg):
+            ids = list(re.finditer(r"\(S(\d)(?:\s*,\s*S?\d)*\)", seg[:m.start()]))
+            if ids:
+                order.append(int(ids[-1].group(1)))
+            else:
+                out.append("[Shot %s] 有台詞卻沒有標說話者 (S#)" % (ms.group(1) if ms else "?"))
+    first = []
+    for x in order:
+        if x not in first:
+            first.append(x)
+    for k, x in enumerate(first):
+        if x != k + 1:
+            out.append("說話者編號沒有照發聲順序：第 %d 個開口的被標成 (S%d)，應該是 (S%d)" % (k + 1, x, k + 1))
+            break
+    return list(dict.fromkeys(out))
+
+
+def ic_validate(c, seg, i, n, dialogue):
+    """跟網頁 validate() + 接龍的檢查同一套規則。E 會帶著問題清單重寫，W 只提醒。"""
+    E, W = [], []
+    if "<think>" in c:
+        E.append("<think> 洩漏進 content")
+    if re.search(r"^\s*```", c, re.M):
+        E.append("輸出含程式碼框")
+    for l in ("integrated_multimodal_description", "overall_soundscape", "non_diegetic_music"):
+        if l not in c:
+            E.append("缺欄位 " + l)
+    W.extend(ic_speaker_issues(c))
+    m = re.search(r"integrated_multimodal_description:?\s*([\s\S]*?)\s*overall_soundscape", c)
+    body = m.group(1) if m else c
+    dall = re.findall(r"<d>[\s\S]*?</d>", c)
+    try:
+        for l in load_lessons():
+            if not l.get("enabled") or not l.get("ban") or l.get("mode") not in ("all", "both", "i2va"):
+                continue
+            for b in re.split(r"[,，;；]", l["ban"]):
+                b = b.strip()
+                if b and b.lower() in c.lower():
+                    E.append("經驗庫禁用詞出現：「%s」" % b)
+    except Exception:
+        pass
+    words = len(body.split())
+    req = load_required() or {}
+    if req.get("min_words", 0) > 0 and words < req["min_words"]:
+        E.append("主段落 %d 詞 < 門檻 %d" % (words, req["min_words"]))
+    for d in dall:
+        if req.get("lang_lock") == "japanese" and not re.search(r"[\u3040-\u30ff]", d):
+            E.append("對白缺假名（要求日文）：「%s」" % re.sub(r"<[^>]+>", "", d)[:20])
+        t = re.sub(r"</?d>|\[[A-Za-z]+\]", "", d).strip()
+        cnt = len(re.sub(r"\s", "", t)) if re.search(r"[\u3040-\u30ff\u4e00-\u9fff]", t) else len(t.split())
+        if req.get("line_min", 0) > 0 and cnt < req["line_min"]:
+            E.append("台詞太短（%d < %d）：「%s」" % (cnt, req["line_min"], t[:20]))
+        if req.get("line_max", 0) > 0 and cnt > req["line_max"]:
+            W.append("台詞太長（%d > %d）" % (cnt, req["line_max"]))
+    shots = len(re.findall(r"\[Shot\s*\d+\]", body, re.I))
+    if shots > 1:
+        E.append("只能有一個鏡頭，這裡寫了 %d 個 [Shot]" % shots)
+    need = int(round(seg * 17))
+    if words < need:
+        E.append("主段落只有 %d 字，%d 秒至少要 %d 字，動作要填滿整段" % (words, seg, need))
+    if dialogue and "<d>" not in c:
+        E.append("本章有台詞計畫，但沒有寫進 <d>")
+    # 實測 16 章裡有 2 章寫成 "the shot ends as she is holding the staff out"：
+    # 結尾是靜止的，下一章就得從不動的姿勢重新起步，接點會頓一下。
+    tail = re.sub(r"<d>[\s\S]*?</d>", "<d>", body)[-420:]
+    if i < n - 1:
+        end = re.search(r"the shot ends as ([^.!?]*)", tail, re.I)
+        if not end:
+            E.append("結尾要寫成「The shot ends as ＜主體＞ is ＜正在進行的動作＞」")
+        elif re.search(r"\b(?:is|are)\s+(?:still\s+)?(?:holding|standing(?! up)|looking|gazing|staring|smiling|waiting|sitting(?! (?:up|down))|keeping|remaining)\b", end.group(1), re.I):
+            E.append("結尾是靜止的姿勢，要改成動作進行到一半的瞬間（正在轉身、邁步、伸手…）")
+    elif re.search(r"\b(?:freez\w*|motionless|hold(?:s|ing)? (?:this|that|the) (?:final |same )?(?:state|pose|position|stance)|until the end of the clip)\b", tail, re.I):
+        E.append("最後一章也要動到最後一秒，不要寫定格或維持姿勢")
+    said = re.sub(r"</?d>|\[[A-Za-z]+\]", " ", " ".join(dall))
+    need2 = len(re.findall(r"[\u3040-\u30ff]", said)) / 7.0 + len(re.findall(r"[\u4e00-\u9fff]", said)) / 4.5 \
+        + len(re.findall(r"[A-Za-z']+", said)) / 2.5
+    if need2 > seg:
+        W.append("台詞大約要講 %.1f 秒，超過這一章的 %d 秒" % (need2, seg))
+    return E, W
+
+
+def ic_hard(E):
+    # 字數／漏台詞是品質問題：修正重試用完還是不夠就照送。少了欄位或多個鏡頭才是壞掉，要停。
+    return any(re.search(r"缺欄位|程式碼框|<think>|一個鏡頭", e) for e in E)
+
+
+def ic_gen_prompt(rid, i, img_url, spec, rec):
+    cs = spec["chapters"][i]
+    n, seg = len(rec["chapters"]), rec["seg"]
+    dialogue = rec["chapters"][i]["dialogue"]
+    cfg = spec.get("retry") or {}
+    mx, lvl = _i(cfg.get("max"), 0, 20, 3), str(cfg.get("lvl") or "noerr")
+    best, prev = None, None
+    for a in range(mx + 1):
+        ic_check_stop(rid)
+        ic_stat(rid, "第 %d/%d 章：寫 prompt 中…%s" % (i + 1, n, ("（重試 %d/%d）" % (a, mx)) if a else ""))
+        msgs = [{"role": "system", "content": str(spec.get("sys") or "") + str(cs.get("extra") or "")},
+                {"role": "user", "content": [{"type": "text", "text": str(cs.get("utext") or "")},
+                                             {"type": "image_url", "image_url": {"url": img_url}}]}]
+        if prev and prev["issues"]:
+            msgs.append({"role": "assistant", "content": prev["content"]})
+            msgs.append({"role": "user", "content": "你的上一版輸出沒有通過檢查：\n" + "\n".join(prev["issues"])
+                         + "\n\n重新輸出**完整**的 prompt（所有欄位都要），只修正上面列的問題，其他內容保持不變。只輸出修正後的 prompt，不要任何說明。"})
+        j = ic_llm(msgs, 0.7, 4000, rid=rid)
+        content = ic_repair(ic_trim(j["choices"][0]["message"].get("content") or ""))
+        E, W = ic_validate(content, seg, i, n, dialogue)
+        cur = {"content": content, "E": E, "W": W, "score": len(E) * 100 + len(W), "attempts": a + 1}
+        prev = {"content": content, "issues": ["[錯誤] " + e for e in E] + (["[警告] " + w for w in W] if lvl == "ok" else [])}
+        if best is None or cur["score"] < best["score"]:
+            best = cur
+        if not E and (lvl == "noerr" or not W):
+            best = cur
+            break
+    best["attempts"] = a + 1
+    return best
+
+
+def ic_write(rid, i, raw, spec):
+    ic_ch(rid, i, vstate="writing", error="")
+    ic_gpu_wait(rid, "llama", i)
+    rec = ic_load(rid)
+    best = ic_gen_prompt(rid, i, ic_llm_image(raw), spec, rec)
+    zh = ""
+    ic_check_stop(rid)
+    if spec.get("tr") and spec.get("tr_sys"):
+        try:
+            t = ic_llm([{"role": "system", "content": spec["tr_sys"]}, {"role": "user", "content": best["content"]}],
+                       0.3, 1800, top_p=0.9, rid=rid)
+            zh = (t["choices"][0]["message"].get("content") or "").strip()
+        except IcStopped:
+            raise
+        except Exception as e:
+            zh = "（翻譯失敗：%s）" % str(e)[:100]
+    hard = ic_hard(best["E"])
+    # hard 另外存：下次按繼續要重寫，不能把壞的 prompt 送出去
+    ic_ch(rid, i, content=best["content"], zh=zh, v_e=best["E"], v_w=best["W"], attempts=best["attempts"],
+          dur_gen=rec["seg"], edited=False, hard=hard, stale=hard, vstate="",
+          state="fail" if best["E"] else ("warn" if best["W"] else "ok"))
+
+
+def ic_wait_job(rid, i, pid, resuming):
+    """等 ComfyUI 算完，回傳影片路徑；工作不見了回 None。"""
+    n = len(ic_load(rid)["chapters"])
+    t0, lost, down = time.time(), 0, 0
+    while time.time() - t0 < 8 * 3600:      # ComfyUI 可能還在排別的工作，上限放很寬
+        ic_check_stop(rid)
+        try:
+            st = comfy_state(pid)
+        except Exception:
+            # 連不上不等於工作失敗，它很可能還在算。pid 留著，恢復後收得回來
+            down += 1
+            ic_stat(rid, "第 %d/%d 章：ComfyUI 連不上，等它恢復…（%d）" % (i + 1, n, down))
+            if down >= 6 and IC_STOP_AFTER[0]:
+                raise IcPaused()
+            ic_nap(rid, 5)
+            continue
+        down = 0
+        if st["state"] == "error":
+            with IC_LOCK:
+                mine = rid in IC_CANCEL      # 我們自己中斷的，不是失敗
+            if mine:
+                raise IcStopped()
+            if resuming:
+                return None
+            ic_ch(rid, i, pid="")
+            raise IOError("ComfyUI 生成失敗：" + (st.get("error") or "原因不明"))
+        if st["state"] == "done":
+            v = next((o for o in st.get("outputs", []) if o.lower().endswith(VIDEO_EXT)), None)
+            if not v:
+                if resuming:
+                    return None
+                ic_ch(rid, i, pid="")
+                raise IOError("完成了但找不到輸出的影片")
+            return v
+        # unknown＝佇列與歷史都沒有，ComfyUI 重啟過才會這樣；連續幾次才算數
+        lost = lost + 1 if st["state"] == "unknown" else 0
+        if lost >= 12:
+            return None
+        what = "排隊中（第 %s 位）" % st.get("pos") if st["state"] == "queued" else "影片生成中"
+        ic_stat(rid, "第 %d/%d 章：%s（%d 分鐘）" % (i + 1, n, what, (time.time() - t0) / 60))
+        ic_nap(rid, 5)
+    raise IOError("等待影片逾時（8 小時）")
+
+
+def ic_render(rid, i, raw, spec):
+    ic_ch(rid, i, vstate="rendering", error="")
+    rec = ic_load(rid)
+    s = rec["chapters"][i]
+    video = None
+    if s["pid"]:
+        video = ic_wait_job(rid, i, s["pid"], True)      # 重啟前送出的，先看還在不在
+        if not video:
+            ic_ch(rid, i, pid="")
+    if not video:
+        ic_check_stop(rid)
+        ic_gpu_wait(rid, "comfy", i)
+        ic_stat(rid, "第 %d/%d 章：送出影片生成…" % (i + 1, len(rec["chapters"])))
+        ic_check_stop(rid)
+        cs = spec["chapters"][i]
+        wf = dict(cs.get("wf") or {})
+        # 第 2 章起圖是上一章的輸出。放大過的尺寸重新貼齊畫布時，少數比例會差一格，
+        # 畫面大小不同，合併（-c copy）就壞了。把比例明確帶上，每章的畫布才一樣。
+        if i > 0 and not wf.get("aspect") and raw[:4] == b"\x89PNG" and len(raw) > 24:
+            wf["aspect"] = "%d:%d" % struct.unpack(">II", raw[16:24])
+        rec = ic_load(rid)
+        content = rec["chapters"][i]["content"]
+        mime = "image/png" if raw[:4] == b"\x89PNG" else ("image/webp" if raw[8:12] == b"WEBP" else "image/jpeg")
+        na = lambda t: "N/A" if re.match(r"^n/a\.?$", t.strip(), re.I) else t
+        # prompt_id 由這邊先決定並先存檔：對方收下了、回應卻斷在路上的話，
+        # 下次還認得出這一支，不會變成沒人管的工作再重送一支。
+        pid = str(uuid.uuid4())
+        ic_ch(rid, i, pid=pid, snap=ic_snap(cs.get("snap")), sent=content,
+              parent=rec["chapters"][i - 1]["video"] if i > 0 else "")
+        try:
+            comfy_submit({"prompt_id": pid, "image": "data:%s;base64,%s" % (mime, base64.b64encode(raw).decode()), "mode": "i2va",
+                            "content": content, "dur": "%d seconds" % rec["seg"], "wf": wf,
+                          "imd": ic_field(content, "integrated_multimodal_description:", "overall_soundscape:"),
+                          "soundscape": na(ic_field(content, "overall_soundscape:", "non_diegetic_music:")),
+                          "music": na(ic_field(content, "non_diegetic_music:", None))})
+        except SubmitError as e:
+            if e.code < 500:              # 對方明確拒收，這個 id 不會存在
+                ic_ch(rid, i, pid="")
+            raise
+        # 上傳途中按了停止：那時還沒有 pid 可以取消，要在這裡補，否則那支會沒人管地算完
+        with IC_LOCK:
+            stopping = rid in IC_CANCEL
+        if stopping:
+            try:
+                comfy_api("/queue", {"delete": [pid]}, timeout=10)
+                comfy_api("/interrupt", {"prompt_id": pid}, timeout=10)
+            except Exception:
+                pass
+            raise IcStopped()
+        video = ic_wait_job(rid, i, pid, False)
+        if not video:
+            raise IOError("ComfyUI 找不到這個工作（可能重啟過），按「繼續生成」會重新送出")
+    ic_ch(rid, i, video=video, pid="", vstate="", error="")
+
+
+IC_FACE_RETRIES = 2              # 往前找不到有臉的畫面時，這一章最多重算幾次
+IC_FACE_SYS = """You inspect one frame from a video. The next clip will be generated from this frame alone, so the main character's face must be recognizable in it.
+
+Answer "visible" only if the eyes, nose and mouth area of the main character can be seen: frontal, three-quarter or side profile all count, even if looking down.
+Answer "not_visible" if the head is outside the frame or cut off above the eyes, if the character is turned away so only the back of the head shows, or if a hand, hair or object covers most of the face.
+Answer "no_person" only if nobody is in the frame.
+
+Output only JSON: {"face":"visible|not_visible|no_person","view":"front|three_quarter|profile|back|out_of_frame|covered"}"""
+IC_FACE_FAIL = "第 %d 章重算了還是看不到臉，已暫停。可以改 prompt 後重新生成，或按「仍用這一幀繼續」"
+
+
+def ic_face_ok(rid, raw, identity):
+    """False＝確定看不到臉。判斷不出來時回 None：LLM 暫時出錯不該把整條鏈卡住。"""
+    try:
+        j = ic_llm([{"role": "system", "content": IC_FACE_SYS},
+                    {"role": "user", "content": [{"type": "text", "text": "Main character: %s\nCheck this frame." % (identity or "the main person")},
+                                                 {"type": "image_url", "image_url": {"url": ic_llm_image(raw)}}]}],
+                   0, 60, rid=rid)
+        txt = j["choices"][0]["message"].get("content") or ""
+        o = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
+    except IcStopped:
+        raise
+    except Exception as e:
+        slog("  [continue] 判斷臉部失敗，放行：%s" % str(e)[:120])
+        return None
+    # 角色整個走出畫面也是「下一章看不到臉」。只有規劃裡根本沒有人物時，空景才算通過
+    if o.get("face") == "no_person":
+        return not identity
+    return o.get("face") != "not_visible"
+
+
+def ic_video_info(ff, fp):
+    """(秒數, 有沒有音軌, 畫面大小)。"""
+    t = subprocess.run([ff, "-hide_banner", "-i", fp], capture_output=True, timeout=30).stderr.decode("utf-8", "replace")
+    m = re.search(r"Duration: (\d+):(\d+):([\d.]+)", t)
+    dur = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
+    v = re.search(r"Stream #[^\n]*Video:[^\n]*?, (\d{2,5})x(\d{2,5})", t)
+    return dur, bool(re.search(r"Stream #[^\n]*Audio:", t)), (v.group(1) + "x" + v.group(2)) if v else ""
+
+
+def ic_frame_at(ff, fp, t):
+    r = subprocess.run([ff, "-hide_banner", "-loglevel", "error", "-ss", "%.3f" % t, "-i", fp, "-frames:v", "1",
+                        "-f", "image2", "-vcodec", "png", "pipe:1"], capture_output=True, timeout=60)
+    return r.stdout if r.returncode == 0 else b""
+
+
+def ic_face_backoff(rid, i, rec, s):
+    """往前找最近一個看得到臉的畫面，回傳 (相對路徑, 秒數)；確定都沒有回 None。
+    不用重算：少幾秒結尾，比多等二十分鐘划算。上限 3 秒或三成，再多就是砍劇情了。
+    「沒辦法看」要丟例外，不能回 None：回 None 會把好好的影片丟掉重算，白花二十分鐘。"""
+    ff, vrel = find_ffmpeg(), s["video"].replace("\\", "/")
+    if not ff:
+        return None                     # 永遠不可能往前找，暫停只會一直卡住
+    fp = None
+    for a in range(4):
+        fp = media_fetch(vrel)
+        if fp:
+            break
+        _media_fetch_fail.pop(media_path(vrel), None)
+        ic_nap(rid, 15)
+    if not fp:
+        raise IOError("拿不到第 %d 章的影片，沒辦法檢查結尾；影片沒有動，按「繼續生成」再試一次" % (i + 1))
+    dur = ic_video_info(ff, fp)[0]
+    if dur <= 0:
+        raise IOError("讀不出第 %d 章影片的長度，沒辦法檢查結尾" % (i + 1))
+    limit, back, unsure = min(3.0, rec["seg"] * 0.3), 0.25, False
+    while back <= limit + 1e-6 and dur - back > 0:
+        ic_check_stop(rid)
+        ic_stat(rid, "第 %d 章結尾看不到臉，往前找畫面（-%.2f 秒）…" % (i + 1, back))
+        raw = ic_frame_at(ff, fp, dur - back)
+        ok = ic_face_ok(rid, raw, rec["plan"].get("identity")) if raw else None
+        if ok:
+            rel = re.sub(r"\.(mp4|webm|mkv|mov)$", "-cut-frame.png", vrel, flags=re.I)
+            with open(media_path(rel), "wb") as f:
+                f.write(raw)
+            return rel, round(dur - back, 3)
+        unsure = unsure or ok is None
+        back += 0.25
+    if unsure:
+        raise IOError("第 %d 章結尾有幾個畫面判斷不出來（LLM 可能忙或斷線）；影片沒有動，按「繼續生成」再試一次" % (i + 1))
+    return None
+
+
+def ic_mark_next_stale(rid, i):
+    # 下一章如果已經照舊畫面寫過 prompt，就不能用了（手改過的除外）
+    with LOCK:
+        rec = ic_load(rid)
+        nx = rec["chapters"][i + 1]
+        if nx["content"] and not nx["edited"]:
+            nx["stale"] = True
+            ic_commit(rec)
+
+
+def ic_face_guard(rid, i, spec):
+    """第 i 章的結尾能不能接下一章。下一章只看得到這一幀，沒有臉的話臉就會變成隨機的。
+    放在接下一章之前檢查（不是算完就檢查）：重啟、改用舊片都會經過這裡。
+    回傳 True＝可以接；False＝這一章退回重算了。"""
+    if not spec.get("face_guard", True):
+        return True
+    rec = ic_load(rid)
+    s = rec["chapters"][i]
+    if s.get("face_checked") or s.get("face_skip"):
+        return True
+    if s.get("face_fail"):
+        raise IOError(IC_FACE_FAIL % (i + 1))
+    # 下一章已經送出去了：它的第一幀早就定了，這時才改接點，收回來的影片會對不上
+    if rec["chapters"][i + 1].get("pid"):
+        return True
+    ic_stat(rid, "檢查第 %d 章的結尾畫面…" % (i + 1))
+    ic_gpu_wait(rid, "llama", i + 1)
+    ok = ic_face_ok(rid, ic_first_frame(rid, rec, i + 1), rec["plan"].get("identity"))
+    if ok is None:
+        return True                     # 這次判斷不出來：放行但不記成已檢查，下次還會再看
+    if ok:
+        ic_ch(rid, i, face_checked=True)
+        return True
+    hit = ic_face_backoff(rid, i, rec, s)
+    ic_check_stop(rid)
+    if hit:
+        with LOCK:
+            rec = ic_load(rid)
+            c = rec["chapters"][i]
+            c.update(last_frame=hit[0], cut=hit[1], face_checked=True)
+            # 下一章的舊片是接這支原本的結尾，現在接點往前移了，不能再選回來
+            for t in rec["chapters"][i + 1]["takes"]:
+                if t.get("parent") == c["video"]:
+                    t["parent"] = ""
+            ic_commit(rec)
+        ic_mark_next_stale(rid, i)
+        ic_update(rid, msg="第 %d 章結尾看不到臉，下一章改接 %.2f 秒的畫面" % (i + 1, hit[1]))
+        return True
+    tries = int(s.get("face_tries") or 0)
+    if tries >= IC_FACE_RETRIES:
+        ic_ch(rid, i, face_fail=True)
+        raise IOError(IC_FACE_FAIL % (i + 1))
+    with LOCK:
+        rec = ic_load(rid)
+        c = rec["chapters"][i]
+        c["takes"] = (c["takes"] + [{"video": c["video"], "ts": time.strftime("%Y/%m/%d %H:%M:%S"),
+                                     "content": c.get("sent") or c["content"], "snap": c.get("snap"),
+                                     "parent": c.get("parent") or "", "last_frame": c.get("last_frame") or "",
+                                     "cut": c.get("cut") or 0, "face_rejected": True}])[-30:]
+        c.update(video="", pid="", last_frame="", cut=0, face_tries=tries + 1)
+        rec["msg"] = "第 %d 章結尾看不到臉，換 seed 重算（第 %d 次）" % (i + 1, tries + 1)
+        ic_commit(rec)
+    ic_mark_next_stale(rid, i)
+    return False
+
+
+def ic_do_chapter(rid, i, spec):
+    with IC_LOCK:
+        IC_CUR["ch"] = i
+    if i > 0 and not ic_face_guard(rid, i - 1, spec):
+        return                                     # 上一章退回重算，主迴圈會回頭做它
+    rec = ic_ch(rid, i, error="", vstate="")
+    raw = ic_first_frame(rid, rec, i)
+    s = rec["chapters"][i]
+    if not s["pid"] and (not s["content"] or s["stale"]):
+        ic_write(rid, i, raw, spec)
+        ic_check_stop(rid)
+        s = ic_load(rid)["chapters"][i]
+    if not s["pid"] and s.get("hard") and not s["edited"]:
+        ic_ch(rid, i, stale=True, vstate="")       # 下次按繼續就重寫，不會卡在同一份壞掉的內容
+        raise IOError("prompt 沒通過檢查：" + "；".join(s.get("v_e") or ["請重寫或手動修改"])[:120])
+    ic_render(rid, i, raw, spec)
+
+
+def ic_clear_vstate(rid):
+    with LOCK:
+        rec = ic_load(rid)
+        for c in rec["chapters"]:
+            c["vstate"] = ""
+        ic_commit(rec)
+
+
+def ic_write_only(rid, only, spec):
+    """只寫這一章的 prompt，不送影片。"""
+    try:
+        ic_update(rid, msg="第 %d 章寫 prompt 中…" % (only + 1))
+        ic_write(rid, only, ic_first_frame(rid, ic_load(rid), only), spec)
+        fields = {"msg": "第 %d 章的 prompt 寫好了" % (only + 1)}
+        if spec.get("prev_status"):
+            fields["status"] = spec["prev_status"]
+        ic_update(rid, **fields)
+    except Exception as e:
+        msg = getattr(e, "msg", None) or str(e)
+        ic_ch(rid, only, vstate="", error=msg[:400])
+        fields = {"msg": "✘ " + msg[:280]}
+        if spec.get("prev_status"):
+            fields["status"] = spec["prev_status"]
+        ic_update(rid, **fields)
+
+
+def ic_write_only_job(rid, only, spec):
+    try:
+        ic_write_only(rid, only, spec)
+    except Exception as e:
+        slog("  continue write: " + str(e)[:200])
+    finally:
+        with IC_LOCK:
+            IC_PLANNING.discard(rid)
+            IC_STAT.pop(rid, None)
+
+
+def ic_run_project(rid):
+    try:
+        with open(os.path.join(CONTINUES, rid + ".run.json"), encoding="utf-8") as f:
+            spec = json.load(f)
+    except Exception:
+        ic_update(rid, status="paused", msg="✘ 讀不到這次的生成設定，請重新按開始")
+        return
+    only = spec.get("write_only")
+    if only is not None:          # 更新前排進佇列、重啟後才輪到的「只寫 prompt」
+        ic_write_only(rid, only, spec)
+        return
+    ic_update(rid, status="running", msg="")
+    try:
+        while True:
+            rec = ic_load(rid)
+            i = next((k for k, c in enumerate(rec["chapters"]) if not c["video"]), None)
+            if i is None:
+                ic_update(rid, status="done", msg="全部章節完成——可以逐章查看，或按「合併成長片」")
+                return
+            ic_check_stop(rid)
+            if IC_STOP_AFTER[0]:
+                raise IcPaused()
+            tries = rec["chapters"][i].get("face_tries") or 0
+            ic_update(rid, msg="第 %d/%d 章%s" % (i + 1, len(rec["chapters"]), ("（結尾看不到臉，第 %d 次重算）" % tries) if tries else ""))
+            ic_do_chapter(rid, i, spec)
+    except IcStopped:
+        with LOCK:
+            rec = ic_load(rid)
+            i = next((k for k, c in enumerate(rec["chapters"]) if not c["video"]), 0)
+            rec["chapters"][i].update(pid="", vstate="", error="")
+            rec.update(status="paused", msg="第 %d 章已停止——可以修改 prompt，再按「繼續生成」" % (i + 1))
+            ic_commit(rec)
+    except IcPaused:
+        ic_clear_vstate(rid)
+        ic_update(rid, status="paused", msg="已停止，按「繼續生成」接著做；送出的工作算完會收回來")
+    except Exception as e:
+        msg = getattr(e, "msg", None) or str(e)
+        with LOCK:
+            rec = ic_load(rid)
+            i = next((k for k, c in enumerate(rec["chapters"]) if not c["video"]), None)
+            if i is not None:
+                rec["chapters"][i].update(error=msg[:400], vstate="")
+            rec.update(status="paused", msg="✘ " + msg[:280])
+            ic_commit(rec)
+
+
+def icworker():
+    """一次只跑一個專案、一章接一章。GPU 也只有一張。"""
+    while True:
+        IC_WAKE.wait(5.0)
+        IC_WAKE.clear()
+        while True:
+            with IC_LOCK:
+                if not IC_Q:
+                    break
+                rid = IC_Q.pop(0)
+                IC_CUR.update(id=rid, ch=-1)
+                IC_CANCEL.pop(rid, None)
+            try:
+                ic_run_project(rid)
+            except Exception as e:
+                slog("  continue worker: " + str(e)[:200])
+            waiting = []
+            with IC_LOCK:
+                IC_CUR.update(id="", ch=-1)
+                IC_STAT.pop(rid, None)
+                IC_CANCEL.pop(rid, None)
+                if IC_STOP_AFTER[0]:
+                    IC_STOP_AFTER[0] = False
+                    waiting = list(IC_Q)
+                    del IC_Q[:]
+            for r in waiting:
+                # 這條執行緒只有一條，死了之後每一筆都會永遠排隊，而且沒有任何地方會說
+                try:
+                    ic_update(r, status="paused", msg="已停止，按「繼續生成」接著做")
+                except Exception as e:
+                    slog("  continue worker: " + str(e)[:200])
+
+
+def ic_parse_plan(text, n):
+    raw = (text or "").strip()
+    raw = re.sub(r"```\s*$", "", re.sub(r"^```\s*", "", re.sub(r"^```json\s*", "", raw, flags=re.I)))
+    try:
+        o = json.loads(raw)
+    except Exception:
+        m = re.search(r"\{[\s\S]*\}", raw)
+        o = json.loads(m.group(0) if m else "")
+    chs = o.get("chapters") if isinstance(o.get("chapters"), list) else []
+    if n < 1:
+        raise ValueError("章數是 0")
+    if len(chs) < n:
+        raise ValueError("只規劃了 %d/%d 章" % (len(chs), n))
+    c = o.get("continuity") or {}
+    plan = {"story": str(o.get("story") or ""), "music": str(c.get("music") or "N/A")}
+    for k in ("style", "identity", "voice", "setting", "soundscape"):
+        plan[k] = str(c.get(k) or "")
+    out = []
+    for x in chs[:n]:
+        b = x.get("beats")
+        b = b if isinstance(b, list) else [b or x.get("beat") or ""]
+        out.append({"beats": "\n".join(str(y).strip() for y in b if str(y).strip()),
+                    "dialogue": str(x.get("dialogue") or "").strip(), "ends_on": str(x.get("ends_on") or "").strip()})
+    return plan, out
+
+
+def ic_plan_job(rid, sys_text, user_text, n):
+    prior = "new"
+    try:
+        prior = ic_load(rid).get("status") or "new"
+        ic_update(rid, status="planning", msg="規劃章節中…", n=n)
+        rec = ic_load(rid)
+        ic_gpu_wait(rid, "llama", 0)
+        url = ic_llm_image(ic_first_frame(rid, rec, 0))
+        got, err = None, ""
+        for a in range(3):
+            if a:
+                ic_update(rid, msg="規劃結果不完整（%s），重試 %d/2…" % (err, a))
+            j = ic_llm([{"role": "system", "content": sys_text},
+                        {"role": "user", "content": [{"type": "text", "text": user_text},
+                                                     {"type": "image_url", "image_url": {"url": url}}]}],
+                       0.8, min(16000, 1500 + n * 500))
+            try:
+                got = ic_parse_plan(j["choices"][0]["message"].get("content"), n)
+                break
+            except Exception as e:
+                err = "回覆被截斷" if j["choices"][0].get("finish_reason") == "length" else str(e)[:120]
+        if not got:
+            raise IOError("LLM 沒有給出可用的章節規劃（%s）" % err)
+        plan, chs = got
+        with LOCK:
+            rec = ic_load(rid)
+            old = rec["chapters"]
+            pids = [c["pid"] for c in old if c.get("pid")]
+            new = []
+            for k, c in enumerate(chs):
+                o = old[k] if k < len(old) else None
+                new.append(ic_chapter(dict(c, recipe=o["recipe"] if o else rec.get("recipe") or "",
+                                                 hint=o["hint"] if o else "", use_snap=o["use_snap"] if o else False,
+                                                 snap=o["snap"] if o else None)))
+            # 新規劃到手才動舊章節：LLM 失敗時原本的影片與 prompt 都還在。
+            # 舊影片不留在產出紀錄——那是舊劇情的東西，改用會接回舊的故事。
+            rec.update(plan=plan, chapters=new, final="", status="planned", n=n,
+                       msg="規劃完成——看過各章內容後按「開始生成」")
+            ic_commit(rec)
+        for pid in pids:
+            try:
+                comfy_api("/queue", {"delete": [pid]}, timeout=10)
+                comfy_api("/interrupt", {"prompt_id": pid}, timeout=10)
+            except Exception:
+                pass
+    except Exception as e:
+        try:
+            ic_update(rid, status=prior, msg="✘ 規劃失敗：" + str(e)[:240])
+        except Exception:
+            pass
+    finally:
+        with IC_LOCK:
+            IC_PLANNING.discard(rid)
+
+
+IC_OWNER = [False]
+IC_LOCKFILE = [None]
+
+
+def ic_take_runner():
+    """同一個資料夾只能有一個 h3-server 跑接龍，否則兩邊會各送一次。
+    用作業系統的檔案鎖：程式掛掉鎖就放開，重啟照樣接得回去。"""
+    os.makedirs(CONTINUES, exist_ok=True)
+    f = open(os.path.join(CONTINUES, "runner.lock"), "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    except OSError:
+        # Windows 拿不到鎖走這裡；Linux 上則是掛載的檔案系統不支援 flock（Docker 的
+        # bind mount 可能如此），那種情況沒辦法判斷，當作只有自己，總比完全不能跑好
+        if os.name == "nt":
+            return False
+    IC_LOCKFILE[0] = f
+    return True
+
+
+def ic_boot():
+    """h3-server 重啟後把跑到一半的接回去。"""
+    IC_OWNER[0] = ic_take_runner()
+    if not IC_OWNER[0]:
+        slog("  [continue] 這個資料夾已經有別的 h3-server 在跑接龍，這一個不接手")
+        return
+    for r in reversed(load_cindex()):
+        rid = r.get("id")
+        try:
+            if r.get("status") in ("queued", "running") and os.path.exists(os.path.join(CONTINUES, str(rid) + ".run.json")):
+                ic_clear_vstate(rid)
+                with IC_LOCK:
+                    IC_Q.append(rid)
+            elif r.get("status") == "planning":
+                rec = ic_load(rid)
+                ic_update(rid, status="planned" if rec["chapters"] else "new", msg="規劃被中斷，請按「重新規劃章節」")
+            elif any(c.get("vstate") for c in ic_load(rid)["chapters"]):
+                ic_clear_vstate(rid)     # 「只寫 prompt」途中重啟，不清掉那一章會一直顯示寫 prompt 中
+        except Exception as e:
+            slog("  continue boot: " + str(e)[:200])
+    IC_WAKE.set()
+
+
 # ---------------------------------------------------------------- comfy websocket
 # ComfyUI 的進度與預覽事件是「單播給單一 clientId」的：同一個 id 開第二條連線，
 # 第一條會靜默收不到東西。所以整台機器只由伺服器開這一條，再分發給所有瀏覽器。
 # clientId 必須與送單時用的 client_id 一致，否則收不到自己送的任務的事件。
+# 同一台 ComfyUI 接第二個 h3-server（別的 port）時要用不同的 id，否則會把第一個的事件搶走。
 WS_CLIENT_ID = "h3-webui"
 
 
@@ -2748,6 +3925,12 @@ def wsworker():
                     except Exception:
                         continue
                     t = msg.get("type"); d = msg.get("data") or {}
+                    # progress 也要算：h3-server 重啟後重連，ComfyUI 補發的 executing 沒有 prompt_id，
+                    # 接手算到一半的工作只能靠它認人
+                    if t in ("execution_start", "executing", "progress") and d.get("prompt_id"):
+                        with QLOCK:
+                            if LIVE_ONE["pid"] != d["prompt_id"]:
+                                LIVE_ONE.update(pid=d["prompt_id"], mime="", raw=b"", tick=0, step="", progress=None)
                     if t == "executing":
                         cur = _ws_job_for(d.get("prompt_id")) or cur
                         if d.get("node") is None and cur:
@@ -2757,14 +3940,31 @@ def wsworker():
                     elif t == "progress":
                         jid = _ws_job_for(d.get("prompt_id")) or cur
                         mx = d.get("max") or 0
+                        if mx and d.get("prompt_id"):
+                            with QLOCK:
+                                if LIVE_ONE["pid"] == d["prompt_id"]:
+                                    LIVE_ONE["progress"] = min(1.0, (d.get("value") or 0) / mx)
                         if jid and mx:
                             with QLOCK:
                                 QLIVE[jid] = {"progress": min(1.0, (d.get("value") or 0) / mx),
                                               "stage": str(d.get("node") or "")}
                     elif t == "kj_preview_override":
                         # ModelPreviewOverrideKJ 的即時預覽：base64，mime 可能是 video/mp4 或 image/webp
-                        jid = cur or _ws_job_for(None)
+                        # 用正在算的 prompt_id 找列：只用「清單裡唯一在跑的那列」的話，
+                        # 排在 I2VA Continue 章節後面的清單任務會拿到別人的預覽
+                        with QLOCK:
+                            _now = LIVE_ONE["pid"]
+                        jid = cur or _ws_job_for(_now)
                         b64 = d.get("image")
+                        if b64:
+                            # 訊息裡沒有 prompt_id，靠上面 executing 記下的那一支對應
+                            try:
+                                _raw = base64.b64decode(b64)
+                                with QLOCK:
+                                    LIVE_ONE.update(mime=str(d.get("mime") or "image/webp"), raw=_raw, tick=LIVE_ONE["tick"] + 1,
+                                                    step=("%s/%s" % (d.get("step"), d.get("total"))) if d.get("total") else LIVE_ONE["step"])
+                            except Exception:
+                                pass
                         if jid and b64:
                             try:
                                 raw = base64.b64decode(b64)
@@ -2783,11 +3983,13 @@ def wsworker():
                         if jid:
                             with QLOCK:
                                 QLIVE.pop(jid, None); QPREV.pop(jid, None)
-                elif op == 2 and cur:
+                elif op == 2:
                     # ComfyUI 內建的二進位預覽：前 8 bytes 是事件型別與影像格式
                     if len(payload) > 8:
                         with QLOCK:
-                            QPREV[cur] = ("image/jpeg", payload[8:])
+                            if cur:
+                                QPREV[cur] = ("image/jpeg", payload[8:])
+                            LIVE_ONE.update(mime="image/jpeg", raw=payload[8:], tick=LIVE_ONE["tick"] + 1)
         except Exception as e:
             sys.stderr.write("  comfy ws: " + str(e)[:160] + chr(10))
         finally:
@@ -3202,7 +4404,7 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
                 wv[0] = _lora_stack
 
     extra = dict(extra)
-    extra["client_id"] = "h3-webui"
+    extra["client_id"] = WS_CLIENT_ID
     return g, extra
 
 
@@ -3251,7 +4453,7 @@ class H(SimpleHTTPRequestHandler):
             return
         # The ComfyUI status poll fires every 4 s per job for the whole render (minutes). Echoing each one
         # buries everything useful. The status handler logs state TRANSITIONS itself instead.
-        if pth.startswith("/api/comfy/status/"):
+        if pth.startswith(("/api/comfy/status/", "/api/comfy/live/", "/api/comfy/preview/", "/api/continues/live")):
             return
         slog("  %s %s" % (self.command, pth))
 
@@ -3544,42 +4746,10 @@ class H(SimpleHTTPRequestHandler):
 
         m = re.match(r"^/api/comfy/status/([0-9a-f-]+)$", p)
         if m:
-            pid = m.group(1)
             try:
-                hist = comfy_api("/history/" + pid, timeout=15)
+                return self.send_json(comfy_state(m.group(1)))
             except Exception as e:
                 return self.send_json({"error": "ComfyUI 連不上: %s" % e}, 502)
-            if pid in hist:
-                rec = hist[pid]
-                st = rec.get("status", {})
-                outs = []
-                for nid, o in (rec.get("outputs") or {}).items():
-                    for k, v in o.items():
-                        if isinstance(v, list):
-                            for it in v:
-                                if isinstance(it, dict) and "filename" in it:
-                                    outs.append((it.get("subfolder", "") + "/" + it["filename"]).lstrip("/"))
-                err = ""
-                for msg in st.get("messages", []):
-                    if msg[0] == "execution_error":
-                        err = str(msg[1].get("exception_message", ""))[:400]
-                state = "done" if st.get("completed") else ("error" if st.get("status_str") == "error" else "running")
-                comfy_note(pid, state, (outs[-1] if (state == "done" and outs) else (err[:80] if err else "")))
-                return self.send_json({"state": state, "outputs": outs, "error": err})
-            try:
-                q = comfy_api("/queue", timeout=15)
-            except Exception as e:
-                return self.send_json({"error": "ComfyUI 連不上: %s" % e}, 502)
-            for item in q.get("queue_running", []):
-                if len(item) > 1 and item[1] == pid:
-                    comfy_note(pid, "running")
-                    return self.send_json({"state": "running"})
-            for i, item in enumerate(q.get("queue_pending", [])):
-                if len(item) > 1 and item[1] == pid:
-                    comfy_note(pid, "queued", "(pos %d)" % (i + 1))
-                    return self.send_json({"state": "queued", "pos": i + 1})
-            comfy_note(pid, "unknown")
-            return self.send_json({"state": "unknown"})
 
         if p == "/api/media":
             # fresh=1 是「重新整理」按鈕：跳過 60 秒的清單快取，剛算完的馬上看得到
@@ -3842,6 +5012,63 @@ class H(SimpleHTTPRequestHandler):
             self.wfile.write(b)
             return
 
+        m = re.match(r"^/api/comfy/live/([0-9a-f-]+)$", p)
+        if m:
+            with QLOCK:
+                on = LIVE_ONE["pid"] == m.group(1)
+                return self.send_json({"active": on, "has_preview": bool(on and LIVE_ONE["raw"]),
+                                       "mime": LIVE_ONE["mime"] if on else "", "tick": LIVE_ONE["tick"] if on else 0,
+                                       "step": LIVE_ONE["step"] if on else "", "progress": LIVE_ONE["progress"] if on else None})
+
+        m = re.match(r"^/api/comfy/preview/([0-9a-f-]+)$", p)
+        if m:
+            with QLOCK:
+                item = (LIVE_ONE["mime"], LIVE_ONE["raw"]) if LIVE_ONE["pid"] == m.group(1) and LIVE_ONE["raw"] else None
+            if not item:
+                return self.send_json({"error": "no preview"}, 404)
+            self.send_response(200)
+            self.send_header("Content-Type", item[0])
+            self.send_header("Content-Length", str(len(item[1])))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try: self.wfile.write(item[1])
+            except Exception: pass
+            return
+
+        if p == "/api/continues/live":
+            with IC_LOCK:
+                out = {"queue": list(IC_Q), "cur": dict(IC_CUR), "planning": sorted(IC_PLANNING),
+                       "stat": IC_STAT.get(IC_CUR["id"], ""), "stats": dict(IC_STAT), "stop_after": IC_STOP_AFTER[0]}
+            out["revs"] = {r["id"]: r.get("rev", 0) for r in load_cindex() if r.get("open")}
+            return self.send_json(out)
+
+        if p == "/api/continues":
+            return self.send_json(load_cindex())
+
+        m = re.match(r"^/api/continues/([^/]+)$", p)
+        if m and ID_RE.match(m.group(1)):
+            fp = os.path.join(CONTINUES, m.group(1) + ".json")
+            if not os.path.exists(fp):
+                return self.send_json({"error": "not found"}, 404)
+            with open(fp, encoding="utf-8") as f:
+                return self.send_json(json.load(f))
+
+        m = re.match(r"^/api/continues/([^/]+)/(img|thumb)$", p)
+        if m and ID_RE.match(m.group(1)):
+            import glob as _g
+            hits = _g.glob(os.path.join(CONTINUES, "%s.%s.*" % (m.group(1), m.group(2))))
+            if not hits:
+                return self.send_json({"error": "not found"}, 404)
+            with open(hits[0], "rb") as f:
+                b = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", MEDIA_EXT.get(os.path.splitext(hits[0])[1].lower(), "image/jpeg"))
+            self.send_header("Content-Length", str(len(b)))
+            self.send_header("Cache-Control", "max-age=86400")
+            self.end_headers()
+            self.wfile.write(b)
+            return
+
         if p == "/api/workflows":
             wd = CONFIG["workflow_dir"]
             items = []
@@ -4048,6 +5275,106 @@ class H(SimpleHTTPRequestHandler):
                 save_mindex(rows)
             return self.send_json({"ok": True, "id": rid})
 
+        m = re.match(r"^/api/comfy/cancel/([0-9a-f-]+)$", p)
+        if m:
+            # 排隊中的從佇列拿掉，正在算的中斷。一定要帶 prompt_id，不然會停到別人的工作。
+            try:
+                comfy_api("/queue", {"delete": [m.group(1)]}, timeout=15)
+                comfy_api("/interrupt", {"prompt_id": m.group(1)}, timeout=15)
+            except Exception as e:
+                return self.send_json({"error": "ComfyUI 連不上: %s" % e}, 502)
+            return self.send_json({"ok": True})
+
+        if p == "/api/continues/stop-after":
+            # 一定要把 body 讀掉：連線是 keep-alive，沒讀的兩個位元組會變成下一個請求的開頭
+            try:
+                self.read_json()
+            except Exception:
+                pass
+            with IC_LOCK:
+                if IC_CUR["id"]:
+                    IC_STOP_AFTER[0] = True
+            return self.send_json({"ok": True})
+
+        m = re.match(r"^/api/continues/([0-9a-f]{8,32})/(run|plan|stop)$", p)
+        if m:
+            rid, act = m.group(1), m.group(2)
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            body = body if isinstance(body, dict) else {}
+            if not os.path.exists(os.path.join(CONTINUES, rid + ".json")):
+                return self.send_json({"error": "not found"}, 404)
+            if act == "stop":
+                with IC_LOCK:
+                    queued = rid in IC_Q
+                    if queued:
+                        IC_Q.remove(rid)
+                    elif IC_CUR["id"] != rid:
+                        return self.send_json({"ok": True, "idle": True})
+                    else:
+                        IC_CANCEL[rid] = "stopping"
+                if queued:
+                    ic_update(rid, status="paused", msg="已取消排隊")
+                    return self.send_json({"ok": True})
+                pid = next((c["pid"] for c in ic_load(rid)["chapters"] if not c["video"] and c["pid"]), "")
+                try:
+                    if pid:   # 一定要帶 prompt_id，不然會停到別人的工作
+                        comfy_api("/queue", {"delete": [pid]}, timeout=15)
+                        comfy_api("/interrupt", {"prompt_id": pid}, timeout=15)
+                except Exception as e:
+                    with IC_LOCK:
+                        IC_CANCEL.pop(rid, None)
+                    return self.send_json({"error": "ComfyUI 連不上，工作還在跑: %s" % e}, 502)
+                with IC_LOCK:
+                    if IC_CUR["id"] == rid:
+                        IC_CANCEL[rid] = "stopped"
+                return self.send_json({"ok": True})
+            if not IC_OWNER[0]:
+                return self.send_json({"error": "這個資料夾已經有別的 h3-server 在跑接龍"}, 409)
+            with IC_LOCK:
+                if rid in IC_Q or rid in IC_PLANNING or IC_CUR["id"] == rid:
+                    return self.send_json({"error": "這筆已經在排隊或生成中"}, 409)
+                if act == "plan":
+                    IC_PLANNING.add(rid)
+                else:
+                    if not isinstance(body.get("chapters"), list):
+                        return self.send_json({"error": "缺少生成設定"}, 400)
+                    if len(body["chapters"]) != len(ic_load(rid)["chapters"]):
+                        return self.send_json({"error": "章節數對不上，請重新整理網頁"}, 409)
+                    # 只寫 prompt 不用算圖，排在影片佇列後面要等一整條接龍。跟規劃一樣馬上做。
+                    if body.get("write_only") is not None:
+                        only = _i(body.get("write_only"), 0, IC_MAX_CHAPTERS - 1)
+                        IC_PLANNING.add(rid)
+                        threading.Thread(target=ic_write_only_job, args=(rid, only, body), daemon=True).start()
+                        return self.send_json({"ok": True})
+                    body["prev_status"] = ic_load(rid).get("status")
+                    _atomic_json(os.path.join(CONTINUES, rid + ".run.json"), body)
+                    ic_update(rid, status="queued", msg="排隊中")
+                    IC_Q.append(rid)
+            if act == "plan":
+                threading.Thread(target=ic_plan_job, daemon=True,
+                                 args=(rid, str(body.get("sys") or ""), str(body.get("user") or ""),
+                                       _i(body.get("n"), 1, IC_MAX_CHAPTERS, 1))).start()
+            IC_WAKE.set()
+            return self.send_json({"ok": True})
+
+        if p == "/api/continues":
+            try:
+                body = self.read_json()
+            except Exception as e:
+                return self.send_json({"error": "bad json: %s" % e}, 400)
+            if not isinstance(body, dict):
+                return self.send_json({"error": "內容太大或格式不對"}, 413)
+            try:
+                rid, rev = ic_save(body)
+                return self.send_json({"ok": True, "id": rid, "rev": rev})
+            except IcConflict as e:
+                return self.send_json({"conflict": True, "rec": e.rec}, 409)
+            except ValueError as e:
+                return self.send_json({"error": str(e)}, 400)
+
         if p == "/api/movie/concat":
             try:
                 body = self.read_json()
@@ -4055,7 +5382,7 @@ class H(SimpleHTTPRequestHandler):
                 return self.send_json({"error": "bad json: %s" % e}, 400)
             files = [str(x) for x in (body.get("files") or []) if str(x).strip()]
             try:
-                out = movie_concat(files)
+                out = movie_concat(files, body.get("cuts"))
             except ValueError as e:
                 return self.send_json({"error": str(e)}, 400)
             except Exception as e:
@@ -4091,60 +5418,8 @@ class H(SimpleHTTPRequestHandler):
                 body = self.read_json()
             except Exception:
                 body = {}
-            target = str(body.get("target") or "")
-            thr = int(CONFIG.get("gpu_free_mb", 4000))
-            mem = gpu_mem()
-            used = mem.get("used_mb")
-            if used is None:
-                return self.send_json({"ready": True, "state": "no_gpu_info", "gpu": mem})
-            in_flight = LLAMA_INFLIGHT[0] > 0
-            since_llama = (time.time() - LLAMA_LAST[0]) if LLAMA_LAST[0] else 1e9
-            # 在別台機器上的那一方不碰這張卡。本機 VRAM 降不降下來跟它無關，
-            # 等下去只是無端不能用。cut_gpu_block 早就這樣判了，這裡漏掉。
-            comfy_here, llama_here = cut_rivals_local()
-            if target == "llama":
-                if not llama_here:
-                    return self.send_json({"ready": True, "state": "llama_remote", "gpu": mem})
-                if in_flight:
-                    # 另一個 llama 呼叫正在跑：同對象直接放行
-                    return self.send_json({"ready": True, "state": "llama_resident", "gpu": mem})
-                if since_llama < 8 and not comfy_busy():
-                    # 權重還在卡上（idle 卸載前）且 ComfyUI 沒在算圖：連續呼叫不用等
-                    return self.send_json({"ready": True, "state": "llama_resident", "gpu": mem})
-                if used <= thr:
-                    return self.send_json({"ready": True, "state": "gpu_free", "gpu": mem})
-                busy = comfy_busy()
-                if busy:
-                    return self.send_json({"ready": False, "state": "comfy_busy", "gpu": mem})
-                # 去背服務也押著 VRAM（BiRefNet 約 4.4GB），而 comfy_free 卸不到它。
-                # 不叫它的話用量永遠降不到門檻以下，這裡會空轉到逾時。
-                freed = []
-                if cut_unload() is not None:
-                    freed.append("cutout")
-                try:
-                    comfy_free()
-                    freed.append("comfy")
-                except Exception as e:
-                    freed.append("comfy失敗(%s)" % str(e)[:40])
-                state = "freeing_" + "+".join(freed) if freed else "nothing_to_free"
-                time.sleep(1.5)
-                mem = gpu_mem()
-                return self.send_json({"ready": (mem.get("used_mb") or 0) <= thr, "state": state, "gpu": mem})
-            if target == "comfy":
-                if not comfy_here:
-                    return self.send_json({"ready": True, "state": "comfy_remote", "gpu": mem})
-                if in_flight and llama_here:
-                    return self.send_json({"ready": False, "state": "llama_in_use", "gpu": mem})
-                if used <= thr:
-                    return self.send_json({"ready": True, "state": "gpu_free", "gpu": mem})
-                if comfy_busy():
-                    # 高 VRAM 是 ComfyUI 自己在用：直接排進它的佇列即可
-                    return self.send_json({"ready": True, "state": "comfy_owns_gpu", "gpu": mem})
-                if since_llama < 90 and llama_here:
-                    return self.send_json({"ready": False, "state": "waiting_llama_unload", "gpu": mem})
-                # 沒人聲稱佔用：多半是 ComfyUI 閒置駐留的模型，送單無妨
-                return self.send_json({"ready": True, "state": "assume_comfy_resident", "gpu": mem})
-            return self.send_json({"error": "target 必須是 llama 或 comfy"}, 400)
+            d = gpu_prepare_step(str(body.get("target") or ""))
+            return self.send_json(d, 400 if d.get("error") else 200)
 
         if p == "/api/history/clear":
             # SAFETY: "clear all" is the single most destructive action in the app. It never deletes -
@@ -4741,6 +6016,21 @@ class H(SimpleHTTPRequestHandler):
             except OSError as e:
                 return self.send_json({"error": str(e)}, 500)
             return self.send_json({"ok": True})
+        m = re.match(r"^/api/continues/([^/]+)$", pth)
+        if m and ID_RE.match(m.group(1)):
+            rid = m.group(1)
+            if ic_active(rid):
+                return self.send_json({"error": "這筆正在排隊或生成中，請先停止"}, 409)
+            with LOCK:
+                import glob as _g
+                for fp in _g.glob(os.path.join(CONTINUES, rid + ".*")):
+                    try:
+                        os.remove(fp)
+                    except OSError:
+                        pass
+                _atomic_json(CINDEX, [r for r in load_cindex() if r.get("id") != rid])
+            return self.send_json({"ok": True})
+
         m = re.match(r"^/api/movies/([^/]+)$", pth)
         if m and ID_RE.match(m.group(1)):
             rid = m.group(1)
@@ -4845,7 +6135,7 @@ class H(SimpleHTTPRequestHandler):
 
 
 def main():
-    global MEDIA_ROOT, COMFY_URL
+    global MEDIA_ROOT, COMFY_URL, WS_CLIENT_ID
     ap = argparse.ArgumentParser(description="H3 Storyboard - MiniMax H3 prompt director")
     ap.add_argument("--version", action="version", version="%s v%s (%s, %s License)"
                     % (APP_NAME, APP_VERSION, APP_REPO_URL, APP_LICENSE))
@@ -4855,6 +6145,8 @@ def main():
     ap.add_argument("--comfy", default=CONFIG["comfy_url"], help="ComfyUI API URL")
     ap.add_argument("--media-root", default=CONFIG["media_root"], help="folder browsed by the media view")
     a = ap.parse_args()
+    if a.port != 9998:
+        WS_CLIENT_ID = "h3-webui-%d" % a.port
     CONFIG["llama_url"] = a.llama.rstrip("/")
     CONFIG["comfy_url"] = a.comfy.rstrip("/")
     MEDIA_ROOT = a.media_root
@@ -4897,6 +6189,8 @@ def main():
     try:
         qload_all()
         threading.Thread(target=qworker, daemon=True).start()
+        ic_boot()
+        threading.Thread(target=icworker, daemon=True).start()
         threading.Thread(target=wsworker, daemon=True).start()
         print("  queue    : %d 筆任務，派工已啟動" % len(QROWS))
         srv.serve_forever()
