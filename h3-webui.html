@@ -1536,6 +1536,27 @@ function sharedShotRules(core){
   const j = b.indexOf("### 4.4", i + 1);
   return (i >= 0 && j > i) ? b.slice(i, j).trim() : "";
 }
+/* skill 自己寫了「官方 Case 刻意寫短、長度與動作密度照 references/examples.md」，
+   但以前只送 SKILL.md 與指南，那份從來沒到過模型。於是模型最後看到的範例
+   是指南結尾那四則 81-98 字的 Case，就照那個長度寫：SKILL.md 換成要求
+   10 秒 200-300 字之後，同一張圖仍然只寫 147-193 字。
+   只送目前模式那一則（整份 11K 字，一則約 2-3K），放在指南後面，讓它比官方 Case 更靠近輸出。
+   T2VA 沒有自己的範例，借 I2VA 那則——欄位一樣，只是要拿掉首幀那行與 <Picture N>。
+   沒有 examples.md（repo 預設就沒有）時什麼都不加。 */
+const SKILL_EXAMPLE_FOR = {t2va:"I2VA", i2va:"I2VA", fl2va:"FL2VA", l2va:"L2VA", ref2va:"Ref2VA"};
+function skillExample(core, mode){
+  const t = (core && core.references && core.references["examples.md"]) || "";
+  const tag = SKILL_EXAMPLE_FOR[mode];
+  if (!t || !tag) return "";
+  /* 標題是「## Example 1: I2VA, 10 seconds, one shot」。錨在冒號後面，
+     I2VA 才不會吃到 FL2VA；不分大小寫是因為 app 這邊寫 REF2VA、檔案裡寫 Ref2VA。 */
+  const m = new RegExp("^#{2,3}\\s*Example\\s*\\d*\\s*:\\s*" + tag + "\\b.*$", "mi").exec(t);
+  if (!m) return "";
+  const rest = t.slice(m.index + m[0].length);
+  const end = rest.search(/^#{1,2}\s/m);
+  return (m[0].replace(/^#+\s*/, "") + (end >= 0 ? rest.slice(0, end) : rest))
+    .replace(/\n-{3,}\s*$/, "").trim();
+}
 function officialSys(mode, variant){
   const core = SKILLSET.cache["h3-prompt-writing"];
   if (!core) return appRules(mode, variant);
@@ -1551,6 +1572,17 @@ function officialSys(mode, variant){
            + "The guide above states that shots, cuts and camera movement follow the base guide"
            + " and to consult it for the camera vocabulary. These are those sections:\n\n" + shared;
   }
+  const ex = skillExample(core, mode);
+  if (ex)
+    sys += "\n\n===== FULL-LENGTH EXAMPLE (references/examples.md) =====\n"
+         + "The guide's cases above are deliberately short and show format only. Take length, beat count"
+         + " and action density from this example instead, scaled to the requested duration with the"
+         + " skill's duration table. Never reuse its content."
+         + (mode === "t2va"
+            ? " It was written for I2VA; you are writing T2VA, so leave out its first-frame instruction"
+              + " line and every <Picture N> reference, and build the opening from the text alone."
+            : "")
+         + "\n\n" + ex;
   // 疊加所有啟用的附加 skill（風格/知識皆可、可多個）；不適用目前模式的自動忽略
   for (const st of currentSkillIds()){
     if (st === "h3-prompt-writing" || !skillFits(st, mode)) continue;
