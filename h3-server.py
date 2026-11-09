@@ -4418,7 +4418,9 @@ class H(SimpleHTTPRequestHandler):
                     with QLOCK:
                         cur = any(x.get("prompt_id") == r["prompt_id"] and x.get("state") == "running"
                                   for x in QROWS.values())
-                    if cur: comfy_api("/interrupt", {}, timeout=15)
+                    # 一定要帶 prompt_id。不帶就是全域中斷，當下在跑誰就停誰——ComfyUI 同時
+                    # 服務好幾條路（I2VA Continue 的章節不在這張清單裡），實測砍過別人的工作。
+                    if cur: comfy_api("/interrupt", {"prompt_id": r["prompt_id"]}, timeout=15)
                 except Exception: pass
             qset(r["id"], state="canceled", t_end=int(time.time()))
             QWAKE.set()
