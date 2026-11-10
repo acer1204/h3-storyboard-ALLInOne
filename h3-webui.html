@@ -848,6 +848,12 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div class="icaddr">
         <div class="note-wrap"><label>大概的劇情（行為與對白的細節由 LLM 補完）</label>
           <textarea class="note" id="icStory" rows="5" placeholder="例如：她在書房等人回來，心神不寧，起身走到窗邊張望，聽到腳步聲以為他回來了，轉身卻只是風吹動門簾"></textarea></div>
+        <div class="row" id="icVoiceRow" style="display:none;margin-top:8px;gap:8px;align-items:center">
+          <span class="small">🎙 聲音參考（選填，2–15 秒）</span>
+          <button class="ghost mini" id="icVoiceBtn" type="button">選擇音檔</button>
+          <span class="small" id="icVoiceName"></span>
+          <input type="text" id="icVoiceHint" placeholder="提示：這段聲音是誰、要參考什麼，例如「她的聲音，冷靜低沉、語速偏慢」" style="flex:1;min-width:220px">
+        </div>
         <div class="row" style="margin-top:10px">
           <label class="small" style="display:inline-flex;align-items:center;gap:6px">目標總秒數
             <input type="number" id="icTarget" min="1" max="720" step="1" value="40" style="width:84px"></label>
@@ -875,7 +881,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div id="icLrBox"></div>
       <button class="ghost mini" id="icApplyLr" title="把左邊選的配方套到每一章">LoRA 套用到全部章節</button>
       <label class="small" id="icFaceWrap" style="display:inline-flex;align-items:center;gap:5px" title="下一章只看得到上一章的最後一幀，沒拍到臉，臉就會變成隨機的。看不到臉時會往前找畫面或重算這一章"><input type="checkbox" id="icFace" checked> 確保結尾看得到臉</label>
-      <label class="small" id="icAllRefWrap" style="display:none;align-items:center;gap:5px" title="每一章都用參考接法：角色最穩，但每個接點都會輕微跳動、算圖也比較久。不勾的話，看得到臉的接點會鎖住第一幀"><input type="checkbox" id="icAllRef"> 全部用 REF2VA</label>
+      <label class="small" id="icAllRefWrap" style="display:none;align-items:center;gap:5px" title="每一章（含第 1 章）都走 REF2VA：角色最穩、聲音參考每章都用得到；但第 1 章的開頭不會跟起始圖完全一樣，每個接點也會輕微跳動、算圖比較久。不勾的話第 1 章用 I2VA，之後看得到臉的接點鎖住第一幀"><input type="checkbox" id="icAllRef"> 全部用 REF2VA</label>
       <button class="ghost mini" id="icReplan">🧠 重新規劃章節</button>
       <button id="icGo">▶ 開始生成</button>
       <button id="icMerge" disabled>🧵 合併成長片</button>
@@ -900,6 +906,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
 </section>
 <input type="file" id="icFile" accept="image/*" hidden>
 <input type="file" id="icRefFile" accept="image/*" hidden>
+<input type="file" id="icVoiceFile" accept="audio/*" hidden>
 
 <!-- ============ I2VA Continue 歷史 ============ -->
 <section class="view" id="v-ichist">
@@ -7417,7 +7424,7 @@ const IC = {kind: "i2va", bags: {i2va: [], ref: []}, curs: {i2va: 0, ref: 0}, re
 const icP = () => IC.items[IC.cur] || null;
 const icNewCh = () => ({beats: "", dialogue: "", ends_on: "", hint: "", recipe: "", use_snap: false, snap: null,
   content: "", zh: "", edited: false, stale: false, state: "", attempts: 0, dur_gen: 0, pid: "", video: "",
-  sent: "", parent: "", hard: false, v_e: [], v_w: [], join: "", last_frame: "", cut: 0, face_checked: false, face_skip: false, face_fail: false, face_tries: 0,
+  sent: "", parent: "", hard: false, v_e: [], v_w: [], join: "", join_src: "", last_frame: "", cut: 0, face_checked: false, face_skip: false, face_fail: false, face_tries: 0,
   takes: [], error: "", vstate: ""});
 const icPath = rel => String(rel).replace(/\\/g, "/").split("/").map(encodeURIComponent).join("/");
 const icLast = v => String(v).replace(/\\/g, "/").replace(VIDEO_RE, "-last-frame.png");
@@ -7465,6 +7472,7 @@ function icSetKind(k){
   $("#icRefSlot").style.display = r ? "" : "none";
   $("#icFaceWrap").style.display = r ? "none" : "inline-flex";
   $("#icAllRefWrap").style.display = r ? "inline-flex" : "none";
+  $("#icVoiceRow").style.display = r ? "flex" : "none";
 }
 const IC_REF_EMPTY = $("#icRefSlot").innerHTML;
 function icSetRef(f){
@@ -7472,6 +7480,21 @@ function icSetRef(f){
   IC.refFile = f || null; IC.refUrl = f ? URL.createObjectURL(f) : "";
   $("#icRefSlot").innerHTML = f ? `<img src="${IC.refUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:inherit" alt="">` : IC_REF_EMPTY;
 }
+/* 聲音參考：只有走 REF2VA 的章節用得到（I2VA 節點沒有聲音的入口） */
+function icSetVoice(v){
+  IC.voice = v || null;
+  $("#icVoiceName").textContent = v ? `${v.name}（${v.dur.toFixed(1)} 秒）` : "";
+  $("#icVoiceBtn").textContent = v ? "移除音檔" : "選擇音檔";
+}
+$("#icVoiceBtn").onclick = () => { if (IC.voice) icSetVoice(null); else $("#icVoiceFile").click(); };
+$("#icVoiceFile").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = "";
+  if (!f) return;
+  const url = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(f); });
+  const dur = await audDuration(url);
+  if (dur && (dur < AUD_MIN_ONE || dur > AUD_MAX_ONE + 0.05)){ alert(`聲音參考要在 ${AUD_MIN_ONE}–${AUD_MAX_ONE} 秒之間，這個檔案是 ${dur.toFixed(1)} 秒`); return; }
+  icSetVoice({url, dur: dur || 0, name: f.name});
+};
 $("#icRefSlot").onclick = () => $("#icRefFile").click();
 $("#icRefSlot").ondragover = e => e.preventDefault();
 $("#icRefSlot").ondrop = e => { e.preventDefault(); const f = [...e.dataTransfer.files].find(x => x.type.startsWith("image/")); if (f) icSetRef(f); };
@@ -7495,10 +7518,11 @@ $("#icAdd").onclick = async () => {
     catch(e){ icStat("✘ 角色參考圖：" + e.message); icDrawAdd(); return; }
   }
   /* id 由這邊產生：第一次存檔逾時但其實存成功的話，重送才不會變成兩筆 */
-  const p = {id: (Date.now().toString(16) + Math.random().toString(16).slice(2, 10)).slice(0, 20), kind: IC.kind, refEnc, file: IC.file, enc, title: story.replace(/\s+/g, " ").slice(0, 40), story, target: x.t, seg: x.seg, n: x.n,
+  const p = {id: (Date.now().toString(16) + Math.random().toString(16).slice(2, 10)).slice(0, 20), kind: IC.kind, refEnc, voiceUrl: IC.kind === "ref" && IC.voice ? IC.voice.url : "", voice: IC.kind === "ref" && !!IC.voice,
+    voice_dur: IC.voice ? IC.voice.dur : 0, voice_hint: IC.kind === "ref" ? $("#icVoiceHint").value.trim() : "", file: IC.file, enc, title: story.replace(/\s+/g, " ").slice(0, 40), story, target: x.t, seg: x.seg, n: x.n,
     w: enc.w, h: enc.h, ar: "auto", recipe: "", plan: {}, chapters: [], status: "new", final: "", open: true, msg: ""};
   IC.items.push(p); IC.cur = IC.items.length - 1; IC.ch = 0;
-  IC.file = null; IC.url = ""; $("#icStory").value = ""; icSetRef(null);
+  IC.file = null; IC.url = ""; $("#icStory").value = ""; icSetRef(null); icSetVoice(null); $("#icVoiceHint").value = "";
   icDrawAdd(); icDraw();
   await icSave(p, true);
   icPlan(p);
@@ -7507,17 +7531,17 @@ $("#icAdd").onclick = async () => {
 /* ---- 專案存檔：防重入。每一步都存，疊起來會佔滿瀏覽器對這個 origin 的六條連線 ---- */
 const icChOut = s => ({beats: s.beats, dialogue: s.dialogue, ends_on: s.ends_on, hint: s.hint, recipe: s.recipe,
   use_snap: s.use_snap, snap: s.snap, content: s.content, zh: s.zh, edited: s.edited, stale: s.stale, state: s.state,
-  attempts: s.attempts, dur_gen: s.dur_gen, pid: s.pid, video: s.video, sent: s.sent, parent: s.parent, hard: s.hard, join: s.join, v_e: s.v ? s.v.E : [], v_w: s.v ? s.v.W : [], last_frame: s.last_frame, cut: s.cut, face_checked: s.face_checked, face_skip: s.face_skip, face_fail: s.face_fail, face_tries: s.face_tries, takes: s.takes, error: s.error});
+  attempts: s.attempts, dur_gen: s.dur_gen, pid: s.pid, video: s.video, sent: s.sent, parent: s.parent, hard: s.hard, join: s.join, join_src: s.join_src, v_e: s.v ? s.v.E : [], v_w: s.v ? s.v.W : [], last_frame: s.last_frame, cut: s.cut, face_checked: s.face_checked, face_skip: s.face_skip, face_fail: s.face_fail, face_tries: s.face_tries, takes: s.takes, error: s.error});
 async function icSave(p){
   if (!onServer || !p || p._deleted || icBusy(p)) return;    // 跑的時候內容由伺服器負責
   if (p._saving){ p._again = true; return; }
   p._saving = true;
   const body = {id: p.id, kind: p.kind || "i2va", base_rev: p.rev == null ? undefined : p.rev, title: p.title, story: p.story, target: p.target, seg: p.seg, aspect: p.ar || "auto",
-    recipe: p.recipe || "", w: p.w, h: p.h, status: p.status, final: p.final || "", msg: p.msg || "", n: p.n || p.chapters.length, face_guard: p.face_guard !== false, all_ref: !!p.all_ref, plan: p.plan, open: p.open !== false,
+    recipe: p.recipe || "", w: p.w, h: p.h, status: p.status, final: p.final || "", msg: p.msg || "", n: p.n || p.chapters.length, face_guard: p.face_guard !== false, all_ref: !!p.all_ref, voice_hint: p.voice_hint || "", voice_dur: p.voice_dur || 0, plan: p.plan, open: p.open !== false,
     chapters: p.chapters.map(icChOut)};
   /* 圖還沒確定存上去之前每次都帶，第一次失敗也補得回來 */
   const sendImg = !p._imgSaved && !!p.enc;
-  if (sendImg){ body.image = p.enc.orig || p.enc.b64; body.thumb = p.enc.thumb; if (p.refEnc) body.ref_image = p.refEnc.orig || p.refEnc.b64; }
+  if (sendImg){ body.image = p.enc.orig || p.enc.b64; body.thumb = p.enc.thumb; if (p.refEnc) body.ref_image = p.refEnc.orig || p.refEnc.b64; if (p.voiceUrl) body.voice = p.voiceUrl; }
   try{
     const resp = await fetch("/api/continues", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     const r = await resp.json().catch(() => ({error: "HTTP " + resp.status}));
@@ -7557,16 +7581,17 @@ async function icSkillRef(){
 const icFill = (t, m) => String(t).replace(/\{(\w+)\}/g, (a, k) => (k in m ? m[k] : a));
 const icBeatRange = sec => sec <= 6 ? "2–3" : sec <= 10 ? "4–5" : sec <= 15 ? "5–7" : `${Math.round(sec / 2.5)}–${Math.round(sec / 2)}`;
 /* 寫手規則分成幾節，依這一章的位置組合（第一章／後續章／最後一章） */
-function icWriterRules(sk, i, n, sec){
+function icWriterRules(sk, i, n, sec, voice, refFirst){
   const sect = {};
   String(sk.skill).replace(/^---[\s\S]*?\n---\s*/, "").split(/^## /m).slice(1).forEach(b => {
     const k = b.indexOf("\n");
     sect[b.slice(0, k).trim().toLowerCase()] = b.slice(k + 1).trim();
   });
-  const parts = [sect["every chapter"], i === 0 ? sect["first chapter"] : sect["later chapters"],
+  const parts = [sect["every chapter"], i === 0 ? sect[refFirst ? "first chapter (reference)" : "first chapter"] : sect["later chapters"],
+                 voice != null ? sect["voice reference"] : "",
                  i === n - 1 ? sect["final chapter"] : sect["not the final chapter"]].filter(Boolean);
   return "\n\n===== CONTINUATION MODE: chapter " + (i + 1) + " of " + n + " =====\n"
-       + icFill(parts.join("\n"), {CHAPTER: i + 1, TOTAL: n, SECONDS: sec});
+       + icFill(parts.join("\n"), {CHAPTER: i + 1, TOTAL: n, SECONDS: sec, VOICE: voice || "no description was given; treat it as the main character's voice"});
 }
 
 /* ---- 規劃：先把整條故事拆成各章的拍點（便宜；看過才花算圖的時間） ---- */
@@ -7617,7 +7642,8 @@ async function icPlan(p){
       ? `使用者的劇情已照原文順序分成 ${seg.length} 段，順序不可調換。` + (seg.length === n ? "第 k 段就是第 k 章。"
         : seg.length < n ? "段數比章數少：把一段拆成相鄰的幾章，不要跨段混用。" : "段數比章數多：把相鄰的段合併成一章，不要跳過或調換。")
         + "\n" + seg.map((s, k) => `段 ${k + 1}：${s}`).join("\n")
-      : `使用者的劇情（照原文先後分配到各章）：${p.story}`);
+      : `使用者的劇情（照原文先後分配到各章）：${p.story}`)
+      + (p.voice && p.voice_hint ? `\n角色的聲音另有參考錄音，聲線照這個描述寫：${p.voice_hint}` : "");
     await icPost(`/api/continues/${p.id}/plan`, {sys, user, n, story: p.story});
     IC.gen++; IC.planning.add(p.id); p.msg = "規劃章節中…";
   }catch(e){ p.msg = "✘ 規劃失敗：" + e.message; }
@@ -7663,14 +7689,17 @@ async function icSpec(p, only){
   if (pg && pg.text == null && !pg.builtin) pg.text = (await (await fetch(PAPI + "/" + pg.id)).json()).text;
   if (pg && pg.text == null && !pg.builtin) throw new Error("讀不到目前選的 Prompt 組，已中止，沒有用空的 system prompt 跑下去");
   /* 第 1 章還是 I2VA，第 2 章起才是 REF2VA，所以兩份 system prompt 都要帶 */
-  const icRefNote = "\n\nThis chapter continues <Video 1>, the ending of the previous chapter. Two images are attached: the first is the actual last frame of the previous chapter, so you can see where the action stands, and it has no label. The second is <Picture 1>, which supplies the character's appearance only.";
+  const icRefNote0 = "\n\nThis is the opening chapter, so there is no earlier video. Two images are attached in order: <Picture 1> is the opening frame of the film, and <Picture 2> supplies the character's appearance only. They may be the same picture.";
+  const icRefNote = "\n\nThis chapter continues <Video 1>, the ending of the previous chapter. Two images are attached in order: <Picture 1> is the actual last frame of the previous chapter and the first frame of this shot; <Picture 2> supplies the character's appearance only.";
   return {sys: activeText("i2va", pick) + loraSystemSuffix() + lessonSuffix("i2va") + requiredSuffix(),
     sys_ref: isRef ? activeText("ref2va", pick) + loraSystemSuffix() + lessonSuffix("ref2va") + requiredSuffix() : "",
     tr: $("#tr").value === "1", tr_sys: TR_SYS, retry: retryCfg(), face_guard: !isRef && p.face_guard !== false, write_only: only == null ? null : only,
-    chapters: p.chapters.map((s, i) => ({utext: isRef && i > 0 ? userNote({mode: "ref2va", imgs: [1], note: icNote(p, i), dur: p.seg}) + icRefNote : userNote({mode: "i2va", note: icNote(p, i), dur: p.seg}),
-      utext_i2va: isRef && i > 0 ? userNote({mode: "i2va", note: icNote(p, i), dur: p.seg}) : "",
-      extra_i2va: isRef && i > 0 ? icWriterRules(ski, i, n, p.seg) : "",
-      extra: icWriterRules(sk, i, n, p.seg), snap: icSnapNow(s),
+    /* REF2VA Continue 的每一章都帶兩份：走 REF2VA（勾了全部用、或接點看不到臉）與走 I2VA 的。
+       哪一份由伺服器跑到那一章才決定，所以兩份都要先算好。第 1 章的 I2VA 版用這個 skill 的 first chapter 規則 */
+    chapters: p.chapters.map((s, i) => ({utext: isRef ? userNote({mode: "ref2va", imgs: [1, 1], auds: p.voice ? [{desc: p.voice_hint, dur: p.voice_dur}] : [], note: icNote(p, i), dur: p.seg}) + (i > 0 ? icRefNote : icRefNote0) : userNote({mode: "i2va", note: icNote(p, i), dur: p.seg}),
+      utext_i2va: isRef ? userNote({mode: "i2va", note: icNote(p, i), dur: p.seg}) : "",
+      extra_i2va: isRef ? icWriterRules(i > 0 ? ski : sk, i, n, p.seg) : "",
+      extra: icWriterRules(sk, i, n, p.seg, isRef && p.voice ? (p.voice_hint || "") : null, isRef), snap: icSnapNow(s),
       wf: {...(wfOverrides() || {}), ...arPayload(p), ...icLoraPayload(s)}}))};
 }
 async function icEnqueue(p, only){
@@ -8198,7 +8227,7 @@ const EN = {
 "新增一筆":"New item","起始圖":"Start image","大概的劇情（行為與對白的細節由 LLM 補完）":"Rough story (the LLM fills in action and dialogue)","目標總秒數":"Total seconds",
 "生成清單":"Generation list","▶ 全部開始":"▶ Start all","⏹ 這一章完成後停止":"⏹ Stop after this chapter","LoRA 套用到全部章節":"Apply LoRA to all chapters","🧠 重新規劃章節":"🧠 Re-plan chapters",
 "▶ 開始生成":"▶ Start","▶ 繼續生成":"▶ Continue","🧵 合併成長片":"🧵 Merge into one film","整體劇情（LLM 規劃的結果，可編輯）":"Overall story (planned by the LLM, editable)","🎉 合併後的長片":"🎉 Merged film",
-"⏹ 停止這一章":"⏹ Stop this chapter","確保結尾看得到臉":"Keep the face in the last frame","仍用這一幀繼續":"Continue with this frame anyway","仍用這支繼續":"Continue with this clip","全部用 REF2VA":"Use REF2VA for every chapter","角色參考圖（選填）":"Character reference (optional)","REF2VA Continue 紀錄":"REF2VA Continue history","⏹ 停止":"⏹ Stop","排隊中":"Queued","生成中":"Generating","規劃中":"Planning","第一幀":"First frame","最後一幀":"Last frame","上一章的最後一幀":"Last frame of previous chapter","生成後的最後一幀":"Last frame after generation","🗣 本章台詞":"🗣 Dialogue","補充提示（選填，寫 prompt 時會帶上）":"Extra note (optional, used when writing the prompt)","本章 LoRA":"Chapter LoRA",
+"⏹ 停止這一章":"⏹ Stop this chapter","確保結尾看得到臉":"Keep the face in the last frame","仍用這一幀繼續":"Continue with this frame anyway","仍用這支繼續":"Continue with this clip","選擇音檔":"Choose audio","移除音檔":"Remove audio","全部用 REF2VA":"Use REF2VA for every chapter","角色參考圖（選填）":"Character reference (optional)","REF2VA Continue 紀錄":"REF2VA Continue history","⏹ 停止":"⏹ Stop","排隊中":"Queued","生成中":"Generating","規劃中":"Planning","第一幀":"First frame","最後一幀":"Last frame","上一章的最後一幀":"Last frame of previous chapter","生成後的最後一幀":"Last frame after generation","🗣 本章台詞":"🗣 Dialogue","補充提示（選填，寫 prompt 時會帶上）":"Extra note (optional, used when writing the prompt)","本章 LoRA":"Chapter LoRA",
 "✍️ 只寫 prompt":"✍️ Write prompt only","🎲 用這份 prompt 重新生成":"🎲 Regenerate with this prompt","♻️ 重寫 prompt 並重新生成":"♻️ Rewrite prompt and regenerate","H3 Prompt（第一幀拿到後才會寫；可直接修改）":"H3 Prompt (written once the first frame is ready; editable)","🎞 產出紀錄":"🎞 Takes","改用這支":"Use this one","▶ 看這章":"▶ Watch","還原":"Restore","改用配方":"Use a recipe","等待上一章":"Waiting for previous chapter","待生成":"Pending","✅ 完成":"✅ Done","還沒有保存的接龍專案":"No saved projects yet",
 "保存的長片專案：分鏡圖、各片段劇情與影片、完成的長片。點「開啟」載回 Movie 頁查看或繼續。":"Saved film projects: storyboard, per-segment stories and videos, and the finished film. \"Open\" loads one back into the Movie page.",
 "存在伺服器的 history 資料夾，區網上任何裝置看到的都是同一份。點縮圖看當時的完整結果。":"Stored in the server's history folder — every device on your LAN sees the same list. Click a thumbnail for the full result.",

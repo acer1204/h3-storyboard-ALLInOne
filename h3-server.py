@@ -474,7 +474,7 @@ def ic_chapter(c):
             # 真正送出去的文字與它接的前一章影片。content 之後可能被編輯，不能當成這支影片的 prompt
             "sent": str(c.get("sent") or ""), "parent": _s(c.get("parent"), 300), "hard": bool(c.get("hard")),
             "vstate": _s(c.get("vstate"), 12),
-            "join": _s(c.get("join"), 6),
+            "join": _s(c.get("join"), 6), "join_src": _s(c.get("join_src"), 4),
             # 結尾沒有臉時改接的畫面與它的秒數；合併時要剪到這裡
             "last_frame": _s(c.get("last_frame"), 300), "cut": _f(c.get("cut")),
             "face_checked": bool(c.get("face_checked")), "face_skip": bool(c.get("face_skip")),
@@ -543,6 +543,7 @@ def ic_save(body):
     img, ext = parse_data_image(body.pop("image", None))
     thumb, _t = parse_data_image(body.pop("thumb", None))
     ref_img, ref_ext = parse_data_image(body.pop("ref_image", None))
+    voice_blob, voice_ext = parse_data_audio(body.pop("voice", None))
     fp = os.path.join(CONTINUES, rid + ".json")
     plan = body.get("plan") if isinstance(body.get("plan"), dict) else {}
     chs = body.get("chapters") if isinstance(body.get("chapters"), list) else []
@@ -555,6 +556,7 @@ def ic_save(body):
            "status": _s(body.get("status") or "new", 20), "final": _s(body.get("final"), 300),
            "msg": _s(body.get("msg"), 300), "face_guard": bool(body.get("face_guard", True)),
            "all_ref": bool(body.get("all_ref")),
+           "voice_hint": _s(body.get("voice_hint"), 300), "voice_dur": _f(body.get("voice_dur")),
            "plan": {k: _s(plan.get(k), 2000) for k in
                     ("story", "style", "identity", "voice", "setting", "soundscape", "music")},
            "chapters": [ic_chapter(c) for c in chs[:IC_MAX_CHAPTERS]]}
@@ -582,6 +584,10 @@ def ic_save(body):
         if ref_img:
             with open(os.path.join(CONTINUES, "%s.ref.%s" % (rid, ref_ext or "jpg")), "wb") as f:
                 f.write(ref_img)
+        if voice_blob:
+            with open(os.path.join(CONTINUES, "%s.voice.%s" % (rid, voice_ext or "mp3")), "wb") as f:
+                f.write(voice_blob)
+        rec["voice"] = bool(voice_blob) or bool(old.get("voice"))
         rec["ts"] = old.get("ts") or time.strftime("%Y-%m-%d %H:%M:%S")
         rec["rev"] = int(old.get("rev") or 0)
         rec["open"] = bool(body["open"]) if "open" in body else bool(old.get("open", True))
@@ -3182,7 +3188,7 @@ def ic_speaker_issues(c):
     return list(dict.fromkeys(out))
 
 
-def ic_validate(c, seg, i, n, dialogue, ref=False):
+def ic_validate(c, seg, i, n, dialogue, ref=False, voice=False):
     """跟網頁 validate() + 接龍的檢查同一套規則。E 會帶著問題清單重寫，W 只提醒。"""
     E, W = [], []
     if "<think>" in c:
@@ -3195,11 +3201,14 @@ def ic_validate(c, seg, i, n, dialogue, ref=False):
             E.append("缺欄位 " + l)
     if ref:
         # 少了這幾個標籤，模型就不知道該接影片、該照圖認人，算出來等於白算
-        for t in ("<Video 1>", "<Picture 1>", "[video continuation"):
+        need = ("<Video 1>", "[video continuation") if i > 0 else ("[keyframe completion",)
+        for t in ("<Picture 1>", "<Picture 2>") + need + (("<Audio 1>",) if voice else ()):
             if t not in c:
                 E.append("缺欄位 " + t)
-        if re.search(r"<Picture\s*[2-9]>|<Video\s*[2-9]>", c):
-            E.append("只有一張參考圖和一支參考影片，不能出現 <Picture 2>、<Video 2> 這類編號")
+        if i == 0 and "<Video" in c:
+            E.append("第 1 章沒有前一段影片，不能出現 <Video 1>")
+        if re.search(r"<Picture\s*[3-9]>|<Video\s*[2-9]>|<Audio\s*[2-9]>", c) or (not voice and "<Audio" in c):
+            E.append("標籤只能用 <Picture 1>、<Picture 2>、<Video 1>%s，不能出現 <Picture 3> 這類多出來的編號" % ("、<Audio 1>" if voice else ""))
     W.extend(ic_speaker_issues(c))
     m = re.search(("detailed_description" if ref else "integrated_multimodal_description") + r":?\s*([\s\S]*?)\s*overall_soundscape", c)
     body = m.group(1) if m else c
@@ -3267,11 +3276,13 @@ def ic_gen_prompt(rid, i, img_url, spec, rec):
     mx, lvl = _i(cfg.get("max"), 0, 20, 3), str(cfg.get("lvl") or "noerr")
     best, prev = None, None
     ref = ic_join_ref(rec, i)
-    pin = rec.get("kind") == "ref" and i > 0 and not ref   # REF2VA Continue 裡看得到臉、改走 I2VA 的章節
-    parts = [{"type": "text", "text": str(cs.get("utext_i2va") if pin else cs.get("utext") or "")}, {"type": "image_url", "image_url": {"url": img_url}}]
+    pin = rec.get("kind") == "ref" and not ref   # REF2VA Continue 裡走 I2VA 的章節（第 1 章，或看得到臉的接點）
+    # 舊的設定檔沒有 *_i2va，退回原本那份（舊版第 1 章的 utext 本來就是 I2VA 的）
+    parts = [{"type": "text", "text": str((cs.get("utext_i2va") if pin else None) or cs.get("utext") or "")},
+             {"type": "image_url", "image_url": {"url": img_url}}]
     if ref:                       # 第二張是 <Picture 1>；第一張只是讓寫手看到動作停在哪裡
         parts.append({"type": "image_url", "image_url": {"url": ic_llm_image(ic_ref_image(rid))}})
-    sys0 = str((spec.get("sys_ref") if ref else spec.get("sys")) or "") + str((cs.get("extra_i2va") if pin else cs.get("extra")) or "")
+    sys0 = str((spec.get("sys_ref") if ref else spec.get("sys")) or "") + str(((cs.get("extra_i2va") if pin else None) or cs.get("extra")) or "")
     for a in range(mx + 1):
         ic_check_stop(rid)
         ic_stat(rid, "第 %d/%d 章：寫 prompt 中…%s" % (i + 1, n, ("（重試 %d/%d）" % (a, mx)) if a else ""))
@@ -3282,7 +3293,7 @@ def ic_gen_prompt(rid, i, img_url, spec, rec):
                          + "\n\n重新輸出**完整**的 prompt（所有欄位都要），只修正上面列的問題，其他內容保持不變。只輸出修正後的 prompt，不要任何說明。"})
         j = ic_llm(msgs, 0.7, 4000, rid=rid)
         content = ic_repair(ic_trim(j["choices"][0]["message"].get("content") or ""))
-        E, W = ic_validate(content, seg, i, n, dialogue, ref)
+        E, W = ic_validate(content, seg, i, n, dialogue, ref, ref and bool(rec.get("voice")))
         cur = {"content": content, "E": E, "W": W, "score": len(E) * 100 + len(W), "attempts": a + 1}
         prev = {"content": content, "issues": ["[錯誤] " + e for e in E] + (["[警告] " + w for w in W] if lvl == "ok" else [])}
         if best is None or cur["score"] < best["score"]:
@@ -3368,9 +3379,15 @@ IC_JOINT_FAIL = "第 %d 章的開頭接不上上一章，重算了還是一樣�
 
 
 def ic_join_ref(rec, i):
-    """這一章是不是用參考影片接。REF2VA Continue 的第 2 章起才有可能；
-    看得到臉的接點改走 I2VA（第一幀鎖死，背景不會跳），join 記在章節上，重算時才不會換接法。"""
-    return rec.get("kind") == "ref" and i > 0 and rec["chapters"][i].get("join") != "i2va"
+    """這一章是不是走 REF2VA。第 2 章起：看得到臉的接點改走 I2VA（第一幀鎖死，背景不會跳）；
+    第 1 章只有勾了「全部用 REF2VA」才走，起始圖同時當開頭畫面與認人的依據，聲音參考也才用得到。
+    join 記在章節上，重算時才不會換接法。"""
+    if rec.get("kind") != "ref":
+        return False
+    j = rec["chapters"][i].get("join")
+    if i == 0:
+        return j == "ref" if j else bool(rec.get("all_ref"))
+    return j != "i2va"
 
 
 def ic_ref_image(rid):
@@ -3381,6 +3398,31 @@ def ic_ref_image(rid):
         raise IOError("找不到這個專案的角色參考圖")
     with open(hits[0], "rb") as f:
         return f.read()
+
+
+def ic_voice(rid):
+    """聲音參考的 data URL。節點對參考音訊有 2-15 秒的限制，超過整筆拒收，所以送之前剪到 15 秒內。"""
+    import glob as _g, shutil, tempfile
+    hits = _g.glob(os.path.join(CONTINUES, rid + ".voice.*"))
+    if not hits:
+        return None
+    ff = find_ffmpeg()
+    if ff:
+        td = tempfile.mkdtemp(prefix="h3voice")
+        try:
+            out = os.path.join(td, "v.wav")
+            r = subprocess.run([ff, "-y", "-v", "error", "-i", hits[0], "-t", "14.9", "-ac", "1", out], capture_output=True, timeout=60)
+            if r.returncode == 0 and os.path.getsize(out) > 1000:
+                with open(out, "rb") as f:
+                    return "data:audio/wav;base64," + base64.b64encode(f.read()).decode()
+        except Exception:
+            pass
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+    ext = os.path.splitext(hits[0])[1].lstrip(".").lower()
+    mime = next((k for k, v in AUDIO_EXT_BY_MIME.items() if v == ext), "audio/mpeg")
+    with open(hits[0], "rb") as f:
+        return "data:%s;base64,%s" % (mime, base64.b64encode(f.read()).decode())
 
 
 def ic_tail(rec, i):
@@ -3501,7 +3543,7 @@ def ic_render(rid, i, raw, spec):
         na = lambda t: "N/A" if re.match(r"^n/a\.?$", t.strip(), re.I) else t
         ref = ic_join_ref(rec, i)
         tail = ""
-        if ref:
+        if ref and i > 0:
             ic_stat(rid, "第 %d/%d 章：切出上一章的結尾…" % (i + 1, len(rec["chapters"])))
             tail = ic_tail(rec, i)
             ic_check_stop(rid)
@@ -3514,8 +3556,20 @@ def ic_render(rid, i, raw, spec):
             if ref:
                 ri = ic_ref_image(rid)
                 rm = "image/png" if ri[:4] == b"\x89PNG" else ("image/webp" if ri[8:12] == b"WEBP" else "image/jpeg")
-                comfy_submit({"prompt_id": pid, "image": "data:%s;base64,%s" % (rm, base64.b64encode(ri).decode()), "mode": "ref2va",
-                              "content": content, "dur": "%d seconds" % rec["seg"], "wf": wf, "video_names": [tail]})
+                durl = lambda b, mm: "data:%s;base64,%s" % (mm, base64.b64encode(b).decode())
+                body = {"prompt_id": pid, "mode": "ref2va", "content": content, "dur": "%d seconds" % rec["seg"],
+                        "wf": wf, "video_names": [tail] if tail else []}
+                # 模型偶爾會拿 <Picture 1> 當開頭畫面。讓它就是上一章的最後一幀，拿錯了也是對的開頭；
+                # 認人交給 <Picture 2>。實測接點 9 支都不輸只給起始圖的做法。
+                # 舊格式的 prompt（<Picture 1> 是角色）沒有 <Picture 2>，照舊只送起始圖，標籤才對得上。
+                if "<Picture 2>" in content:
+                    body.update(image=durl(raw, mime), more=[durl(ri, rm)])
+                else:
+                    body["image"] = durl(ri, rm)
+                vo = ic_voice(rid) if "<Audio 1>" in content else None
+                if vo:
+                    body["audios"] = [vo]
+                comfy_submit(body)
             else:
                 comfy_submit({"prompt_id": pid, "image": "data:%s;base64,%s" % (mime, base64.b64encode(raw).decode()), "mode": "i2va",
                               "content": content, "dur": "%d seconds" % rec["seg"], "wf": wf,
@@ -3705,8 +3759,21 @@ def ic_do_chapter(rid, i, spec):
     s = rec["chapters"][i]
     # 接法要在寫 prompt 之前決定：兩種格式不一樣。看得到臉就鎖第一幀，判斷不出來當成看不到，
     # 寧可接點有一點跳動，也不要臉跑掉。
+    # join_src 記這個接法是怎麼決定的：因為勾了「全部用 REF2VA」才走參考的，取消勾選後要重新看臉，
+    # 否則已經寫好 prompt 的章節會一直卡在參考接法（實際發生過：接點連續三次接不上，取消勾選也救不回來）
+    if ref and i == 0 and not s["pid"]:
+        # 第 1 章沒有接點：勾了全部用 REF2VA 才走參考，否則照舊 I2VA。勾選改了就重寫，兩種格式不一樣
+        join, src = ("ref", "all") if rec.get("all_ref") else ("i2va", "first")
+        if s.get("join") != join:
+            if s["content"] and not s["stale"]:
+                s["stale"] = True
+                ic_ch(rid, i, stale=True)
+            rec = ic_ch(rid, i, join=join, join_src=src)
+            s = rec["chapters"][i]
     if ref and i > 0 and not s["pid"] and (not s["content"] or s["stale"] or not s.get("join")
-                                           or (rec.get("all_ref") and s.get("join") != "ref")):
+                                           or (rec.get("all_ref") and s.get("join") != "ref")
+                                           or (not rec.get("all_ref") and s.get("join_src") == "all")):
+        src = "all" if rec.get("all_ref") else "face"
         if rec.get("all_ref"):                     # 使用者選了全部用參考接法：角色最穩，接點會有小跳動
             join = "ref"
         else:
@@ -3717,7 +3784,7 @@ def ic_do_chapter(rid, i, spec):
         if s.get("join") != join and s["content"] and not s["stale"]:
             s["stale"] = True                      # 舊的 prompt 是另一種格式，不能照送
             ic_ch(rid, i, stale=True)
-        rec = ic_ch(rid, i, join=join)
+        rec = ic_ch(rid, i, join=join, join_src=src)
         s = rec["chapters"][i]
     if not s["pid"] and (not s["content"] or s["stale"]):
         ic_write(rid, i, raw, spec)
@@ -3727,7 +3794,7 @@ def ic_do_chapter(rid, i, spec):
         ic_ch(rid, i, stale=True, vstate="")       # 下次按繼續就重寫，不會卡在同一份壞掉的內容
         raise IOError("prompt 沒通過檢查：" + "；".join(s.get("v_e") or ["請重寫或手動修改"])[:120])
     ic_render(rid, i, raw, spec)
-    if ic_join_ref(ic_load(rid), i):              # 鎖第一幀的章節不用查，它的接點本來就對
+    if i > 0 and ic_join_ref(ic_load(rid), i):    # 鎖第一幀的章節不用查，它的接點本來就對；第 1 章沒有接點
         ic_joint_guard(rid, i)
 
 
