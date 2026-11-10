@@ -875,6 +875,7 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
       <div id="icLrBox"></div>
       <button class="ghost mini" id="icApplyLr" title="把左邊選的配方套到每一章">LoRA 套用到全部章節</button>
       <label class="small" id="icFaceWrap" style="display:inline-flex;align-items:center;gap:5px" title="下一章只看得到上一章的最後一幀，沒拍到臉，臉就會變成隨機的。看不到臉時會往前找畫面或重算這一章"><input type="checkbox" id="icFace" checked> 確保結尾看得到臉</label>
+      <label class="small" id="icAllRefWrap" style="display:none;align-items:center;gap:5px" title="每一章都用參考接法：角色最穩，但每個接點都會輕微跳動、算圖也比較久。不勾的話，看得到臉的接點會鎖住第一幀"><input type="checkbox" id="icAllRef"> 全部用 REF2VA</label>
       <button class="ghost mini" id="icReplan">🧠 重新規劃章節</button>
       <button id="icGo">▶ 開始生成</button>
       <button id="icMerge" disabled>🧵 合併成長片</button>
@@ -7463,6 +7464,7 @@ function icSetKind(k){
   $("#icTitle").textContent = t[0]; $("#icDesc").textContent = t[1]; $("#ichTitle").textContent = t[2];
   $("#icRefSlot").style.display = r ? "" : "none";
   $("#icFaceWrap").style.display = r ? "none" : "inline-flex";
+  $("#icAllRefWrap").style.display = r ? "inline-flex" : "none";
 }
 const IC_REF_EMPTY = $("#icRefSlot").innerHTML;
 function icSetRef(f){
@@ -7511,7 +7513,7 @@ async function icSave(p){
   if (p._saving){ p._again = true; return; }
   p._saving = true;
   const body = {id: p.id, kind: p.kind || "i2va", base_rev: p.rev == null ? undefined : p.rev, title: p.title, story: p.story, target: p.target, seg: p.seg, aspect: p.ar || "auto",
-    recipe: p.recipe || "", w: p.w, h: p.h, status: p.status, final: p.final || "", msg: p.msg || "", n: p.n || p.chapters.length, face_guard: p.face_guard !== false, plan: p.plan, open: p.open !== false,
+    recipe: p.recipe || "", w: p.w, h: p.h, status: p.status, final: p.final || "", msg: p.msg || "", n: p.n || p.chapters.length, face_guard: p.face_guard !== false, all_ref: !!p.all_ref, plan: p.plan, open: p.open !== false,
     chapters: p.chapters.map(icChOut)};
   /* 圖還沒確定存上去之前每次都帶，第一次失敗也補得回來 */
   const sendImg = !p._imgSaved && !!p.enc;
@@ -7590,14 +7592,33 @@ async function icFlush(p){
   if (p._saving) throw new Error("存檔還沒完成，請稍後再按一次");
   if (p._saveErr) throw new Error("存檔失敗：" + p._saveErr);
 }
+const IC_END_I2VA = "最後一幀是下一章唯一的依據。每章結尾時主要人物的臉要清楚可見（正面或四分之三側面，不被手或物體擋住），頭與上半身在畫面內。不可以結束在背對鏡頭、離開畫面、或只拍局部的特寫，否則下一章就認不出這個人。";
+const IC_END_REF = "結尾盡量讓主要人物的臉清楚可見（正面或四分之三側面），下一章就能直接從那一幀接，背景不會跳。但劇情要求背對鏡頭或離開畫面時就照劇情寫，不要為了露臉改動或搬動劇情。";
+/* 使用者的分段：「第一章／第2段」、行首編號「1.」「2、」，都沒有就看換行 */
+function icSegments(story){
+  const t = String(story || "").trim();
+  let ps = t.split(/(?=第\s*[一二三四五六七八九十百零〇\d]+\s*[章段幕])/);
+  if (ps.length < 2) ps = t.split(/\n+(?=\s*\d+\s*[.、．:：)）])/);
+  if (ps.length < 2) ps = t.split(/\n+/);
+  ps = ps.map(s => s.trim()).filter(Boolean);
+  return ps.length >= 2 ? ps : [];
+}
 async function icPlan(p){
   if (icBusy(p)) return false;
   try{
     await icFlush(p);
     const sk = await icSkill();
     const n = p.n || p.chapters.length || Math.ceil(p.target / p.seg);
-    const sys = icFill(sk.references["planner.md"], {CHAPTERS: n, SECONDS: p.seg, BEATS: icBeatRange(p.seg), LANG: icLang()});
-    await icPost(`/api/continues/${p.id}/plan`, {sys, user: `共 ${n} 章，每章 ${p.seg} 秒。使用者的劇情：${p.story}`, n});
+    const sys = icFill(sk.references["planner.md"], {CHAPTERS: n, SECONDS: p.seg, BEATS: icBeatRange(p.seg), LANG: icLang(),
+      ENDING: p.kind === "ref" ? IC_END_REF : IC_END_I2VA});
+    /* 使用者自己分好段的話先照原文切開：只給一整段文字，LLM 會為了戲劇效果把後面的事提前 */
+    const seg = icSegments(p.story);
+    const user = `共 ${n} 章，每章 ${p.seg} 秒。` + (seg.length
+      ? `使用者的劇情已照原文順序分成 ${seg.length} 段，順序不可調換。` + (seg.length === n ? "第 k 段就是第 k 章。"
+        : seg.length < n ? "段數比章數少：把一段拆成相鄰的幾章，不要跨段混用。" : "段數比章數多：把相鄰的段合併成一章，不要跳過或調換。")
+        + "\n" + seg.map((s, k) => `段 ${k + 1}：${s}`).join("\n")
+      : `使用者的劇情（照原文先後分配到各章）：${p.story}`);
+    await icPost(`/api/continues/${p.id}/plan`, {sys, user, n, story: p.story});
     IC.gen++; IC.planning.add(p.id); p.msg = "規劃章節中…";
   }catch(e){ p.msg = "✘ 規劃失敗：" + e.message; }
   icDraw(); icTick();
@@ -7836,6 +7857,7 @@ $("#icApplyLr").onclick = () => {
   p.msg = done ? `已套用到全部章節；已完成的 ${done} 章要重新生成才會生效` : "已套用到全部章節";
   icDraw(); icSave(p, false);
 };
+$("#icAllRef").onchange = () => { const p = icP(); if (p && !icBusy(p)){ p.all_ref = $("#icAllRef").checked; icSaveSoon(p); } };
 $("#icFace").onchange = () => { const p = icP(); if (p && !icBusy(p)){ p.face_guard = $("#icFace").checked; icSaveSoon(p); } };
 $("#icPlanStory").oninput = () => { const p = icP(); if (p){ p.plan.story = $("#icPlanStory").value; icSaveSoon(p); } };
 $("#icMerge").onclick = async () => {
@@ -7963,6 +7985,7 @@ function icDraw(){
   $("#icLrBox").innerHTML = lrSel(0, p, "icp");
   $("#icApplyLr").disabled = !n || icBusy(p);
   $("#icFace").checked = p.face_guard !== false; $("#icFace").disabled = icBusy(p);
+  $("#icAllRef").checked = !!p.all_ref; $("#icAllRef").disabled = icBusy(p);
   $("#icReplan").disabled = busy;
   $("#icGo").disabled = busy || !!p.merging || !!p._starting || !n || doneN === n;
   $("#icGo").textContent = IC.planning.has(p.id) ? icPlanWord(p) + "…" : IC.queueIds.includes(p.id) ? "排隊中…" : IC.active.has(p.id) ? "生成中…"
@@ -8175,7 +8198,7 @@ const EN = {
 "新增一筆":"New item","起始圖":"Start image","大概的劇情（行為與對白的細節由 LLM 補完）":"Rough story (the LLM fills in action and dialogue)","目標總秒數":"Total seconds",
 "生成清單":"Generation list","▶ 全部開始":"▶ Start all","⏹ 這一章完成後停止":"⏹ Stop after this chapter","LoRA 套用到全部章節":"Apply LoRA to all chapters","🧠 重新規劃章節":"🧠 Re-plan chapters",
 "▶ 開始生成":"▶ Start","▶ 繼續生成":"▶ Continue","🧵 合併成長片":"🧵 Merge into one film","整體劇情（LLM 規劃的結果，可編輯）":"Overall story (planned by the LLM, editable)","🎉 合併後的長片":"🎉 Merged film",
-"⏹ 停止這一章":"⏹ Stop this chapter","確保結尾看得到臉":"Keep the face in the last frame","仍用這一幀繼續":"Continue with this frame anyway","仍用這支繼續":"Continue with this clip","角色參考圖（選填）":"Character reference (optional)","REF2VA Continue 紀錄":"REF2VA Continue history","⏹ 停止":"⏹ Stop","排隊中":"Queued","生成中":"Generating","規劃中":"Planning","第一幀":"First frame","最後一幀":"Last frame","上一章的最後一幀":"Last frame of previous chapter","生成後的最後一幀":"Last frame after generation","🗣 本章台詞":"🗣 Dialogue","補充提示（選填，寫 prompt 時會帶上）":"Extra note (optional, used when writing the prompt)","本章 LoRA":"Chapter LoRA",
+"⏹ 停止這一章":"⏹ Stop this chapter","確保結尾看得到臉":"Keep the face in the last frame","仍用這一幀繼續":"Continue with this frame anyway","仍用這支繼續":"Continue with this clip","全部用 REF2VA":"Use REF2VA for every chapter","角色參考圖（選填）":"Character reference (optional)","REF2VA Continue 紀錄":"REF2VA Continue history","⏹ 停止":"⏹ Stop","排隊中":"Queued","生成中":"Generating","規劃中":"Planning","第一幀":"First frame","最後一幀":"Last frame","上一章的最後一幀":"Last frame of previous chapter","生成後的最後一幀":"Last frame after generation","🗣 本章台詞":"🗣 Dialogue","補充提示（選填，寫 prompt 時會帶上）":"Extra note (optional, used when writing the prompt)","本章 LoRA":"Chapter LoRA",
 "✍️ 只寫 prompt":"✍️ Write prompt only","🎲 用這份 prompt 重新生成":"🎲 Regenerate with this prompt","♻️ 重寫 prompt 並重新生成":"♻️ Rewrite prompt and regenerate","H3 Prompt（第一幀拿到後才會寫；可直接修改）":"H3 Prompt (written once the first frame is ready; editable)","🎞 產出紀錄":"🎞 Takes","改用這支":"Use this one","▶ 看這章":"▶ Watch","還原":"Restore","改用配方":"Use a recipe","等待上一章":"Waiting for previous chapter","待生成":"Pending","✅ 完成":"✅ Done","還沒有保存的接龍專案":"No saved projects yet",
 "保存的長片專案：分鏡圖、各片段劇情與影片、完成的長片。點「開啟」載回 Movie 頁查看或繼續。":"Saved film projects: storyboard, per-segment stories and videos, and the finished film. \"Open\" loads one back into the Movie page.",
 "存在伺服器的 history 資料夾，區網上任何裝置看到的都是同一份。點縮圖看當時的完整結果。":"Stored in the server's history folder — every device on your LAN sees the same list. Click a thumbnail for the full result.",

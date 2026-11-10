@@ -554,6 +554,7 @@ def ic_save(body):
            "w": _i(body.get("w"), 0, 20000), "h": _i(body.get("h"), 0, 20000),
            "status": _s(body.get("status") or "new", 20), "final": _s(body.get("final"), 300),
            "msg": _s(body.get("msg"), 300), "face_guard": bool(body.get("face_guard", True)),
+           "all_ref": bool(body.get("all_ref")),
            "plan": {k: _s(plan.get(k), 2000) for k in
                     ("story", "style", "identity", "voice", "setting", "soundscape", "music")},
            "chapters": [ic_chapter(c) for c in chs[:IC_MAX_CHAPTERS]]}
@@ -3704,11 +3705,15 @@ def ic_do_chapter(rid, i, spec):
     s = rec["chapters"][i]
     # 接法要在寫 prompt 之前決定：兩種格式不一樣。看得到臉就鎖第一幀，判斷不出來當成看不到，
     # 寧可接點有一點跳動，也不要臉跑掉。
-    if ref and i > 0 and not s["pid"] and (not s["content"] or s["stale"] or not s.get("join")):
-        ic_stat(rid, "第 %d 章：檢查上一章結尾看不看得到臉…" % (i + 1))
-        ic_gpu_wait(rid, "llama", i)
-        ok = ic_face_ok(rid, raw, rec["plan"].get("identity"))
-        join = "i2va" if ok else "ref"
+    if ref and i > 0 and not s["pid"] and (not s["content"] or s["stale"] or not s.get("join")
+                                           or (rec.get("all_ref") and s.get("join") != "ref")):
+        if rec.get("all_ref"):                     # 使用者選了全部用參考接法：角色最穩，接點會有小跳動
+            join = "ref"
+        else:
+            ic_stat(rid, "第 %d 章：檢查上一章結尾看不看得到臉…" % (i + 1))
+            ic_gpu_wait(rid, "llama", i)
+            ok = ic_face_ok(rid, raw, rec["plan"].get("identity"))
+            join = "i2va" if ok else "ref"
         if s.get("join") != join and s["content"] and not s["stale"]:
             s["stale"] = True                      # 舊的 prompt 是另一種格式，不能照送
             ic_ch(rid, i, stale=True)
@@ -3863,12 +3868,36 @@ def ic_parse_plan(text, n):
     for x in chs[:n]:
         b = x.get("beats")
         b = b if isinstance(b, list) else [b or x.get("beat") or ""]
-        out.append({"beats": "\n".join(str(y).strip() for y in b if str(y).strip()),
+        out.append({"source": str(x.get("source") or "").strip(),
+                    "beats": "\n".join(str(y).strip() for y in b if str(y).strip()),
                     "dialogue": str(x.get("dialogue") or "").strip(), "ends_on": str(x.get("ends_on") or "").strip()})
     return plan, out
 
 
-def ic_plan_job(rid, sys_text, user_text, n):
+def ic_plan_order(story, chs):
+    """各章摘錄的原文要照順序出現。LLM 會為了戲劇效果把後面的事件提前，規則寫了也會發生，所以要查。
+    摘錄可能被改了幾個字，找不到的章節跳過，只抓得到位置卻倒過來的。回傳問題描述，沒問題回空字串。"""
+    import difflib
+    st = re.sub(r"\s+", "", story or "")
+    last_k, last_p = None, -1
+    for k, c in enumerate(chs):
+        src = re.sub(r"\s+", "", c.get("source") or "")
+        if len(src) < 4 or not st:
+            continue
+        p = st.find(src[:12])
+        if p < 0:
+            m = difflib.SequenceMatcher(None, st, src, autojunk=False).find_longest_match(0, len(st), 0, len(src))
+            p = m.a if m.size >= max(4, min(8, len(src) // 3)) else -1
+        if p < 0:
+            continue
+        if p < last_p:
+            return "第 %d 章用的「%s」在原文裡排在第 %d 章「%s」的前面" % (
+                k + 1, c["source"][:24], last_k + 1, chs[last_k]["source"][:24])
+        last_k, last_p = k, p
+    return ""
+
+
+def ic_plan_job(rid, sys_text, user_text, n, story=""):
     prior = "new"
     try:
         prior = ic_load(rid).get("status") or "new"
@@ -3876,19 +3905,28 @@ def ic_plan_job(rid, sys_text, user_text, n):
         rec = ic_load(rid)
         ic_gpu_wait(rid, "llama", 0)
         url = ic_llm_image(ic_first_frame(rid, rec, 0))
-        got, err = None, ""
+        got, err, warn = None, "", ""
+        msgs = [{"role": "system", "content": sys_text},
+                {"role": "user", "content": [{"type": "text", "text": user_text},
+                                             {"type": "image_url", "image_url": {"url": url}}]}]
         for a in range(3):
             if a:
-                ic_update(rid, msg="規劃結果不完整（%s），重試 %d/2…" % (err, a))
-            j = ic_llm([{"role": "system", "content": sys_text},
-                        {"role": "user", "content": [{"type": "text", "text": user_text},
-                                                     {"type": "image_url", "image_url": {"url": url}}]}],
-                       0.8, min(16000, 1500 + n * 500))
+                ic_update(rid, msg="規劃結果%s（%s），重試 %d/2…" % ("順序不對" if got else "不完整", err, a))
+            j = ic_llm(msgs, 0.8, min(16000, 1500 + n * 500))
+            text = j["choices"][0]["message"].get("content") or ""
             try:
-                got = ic_parse_plan(j["choices"][0]["message"].get("content"), n)
-                break
+                got = ic_parse_plan(text, n)
             except Exception as e:
+                got = None
                 err = "回覆被截斷" if j["choices"][0].get("finish_reason") == "length" else str(e)[:120]
+                continue
+            warn = ic_plan_order(story, got[1])
+            if not warn:
+                break
+            # 順序錯了就把問題講給它聽再來一次；最後一次還是錯就照用，但要讓使用者知道
+            err = warn
+            msgs = msgs[:2] + [{"role": "assistant", "content": text},
+                               {"role": "user", "content": "順序錯了：" + warn + "。照使用者原文的先後重新分配各章，不要調換、提前或重複任何事件。完整重新輸出 JSON。"}]
         if not got:
             raise IOError("LLM 沒有給出可用的章節規劃（%s）" % err)
         plan, chs = got
@@ -3905,7 +3943,8 @@ def ic_plan_job(rid, sys_text, user_text, n):
             # 新規劃到手才動舊章節：LLM 失敗時原本的影片與 prompt 都還在。
             # 舊影片不留在產出紀錄——那是舊劇情的東西，改用會接回舊的故事。
             rec.update(plan=plan, chapters=new, final="", status="planned", n=n,
-                       msg="規劃完成——看過各章內容後按「開始生成」")
+                       msg=("⚠ 規劃完成，但章節順序可能跟劇情不一致（%s），請檢查各章內容" % warn) if warn
+                       else "規劃完成——看過各章內容後按「開始生成」")
             ic_commit(rec)
         for pid in pids:
             try:
@@ -5528,7 +5567,7 @@ class H(SimpleHTTPRequestHandler):
             if act == "plan":
                 threading.Thread(target=ic_plan_job, daemon=True,
                                  args=(rid, str(body.get("sys") or ""), str(body.get("user") or ""),
-                                       _i(body.get("n"), 1, IC_MAX_CHAPTERS, 1))).start()
+                                       _i(body.get("n"), 1, IC_MAX_CHAPTERS, 1), str(body.get("story") or ""))).start()
             IC_WAKE.set()
             return self.send_json({"ok": True})
 
