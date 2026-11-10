@@ -474,6 +474,7 @@ def ic_chapter(c):
             # 真正送出去的文字與它接的前一章影片。content 之後可能被編輯，不能當成這支影片的 prompt
             "sent": str(c.get("sent") or ""), "parent": _s(c.get("parent"), 300), "hard": bool(c.get("hard")),
             "vstate": _s(c.get("vstate"), 12),
+            "join": _s(c.get("join"), 6),
             # 結尾沒有臉時改接的畫面與它的秒數；合併時要剪到這裡
             "last_frame": _s(c.get("last_frame"), 300), "cut": _f(c.get("cut")),
             "face_checked": bool(c.get("face_checked")), "face_skip": bool(c.get("face_skip")),
@@ -496,7 +497,8 @@ def ic_commit(rec):
     row = {"id": rec["id"], "ts": rec.get("ts"), "up_ts": rec["up_ts"], "title": rec.get("title"),
            "target": rec.get("target"), "seg": rec.get("seg"), "n_ch": len(rec["chapters"]),
            "n_done": sum(1 for c in rec["chapters"] if c["video"]),
-           "status": rec.get("status"), "final": rec.get("final"), "open": rec.get("open"), "rev": rec["rev"]}
+           "status": rec.get("status"), "final": rec.get("final"), "open": rec.get("open"), "rev": rec["rev"],
+           "kind": rec.get("kind") or "i2va"}
     rows = load_cindex()
     for k, r in enumerate(rows):
         if r.get("id") == rec["id"]:
@@ -540,10 +542,12 @@ def ic_save(body):
         return rid, None
     img, ext = parse_data_image(body.pop("image", None))
     thumb, _t = parse_data_image(body.pop("thumb", None))
+    ref_img, ref_ext = parse_data_image(body.pop("ref_image", None))
     fp = os.path.join(CONTINUES, rid + ".json")
     plan = body.get("plan") if isinstance(body.get("plan"), dict) else {}
     chs = body.get("chapters") if isinstance(body.get("chapters"), list) else []
-    rec = {"id": rid, "title": _s(body.get("title"), 80), "story": _s(body.get("story"), 6000),
+    rec = {"id": rid, "kind": "ref" if body.get("kind") == "ref" else "i2va",
+           "title": _s(body.get("title"), 80), "story": _s(body.get("story"), 6000),
            "target": _i(body.get("target"), 1, 3600), "seg": _i(body.get("seg"), 1, 120, 10),
            "n": _i(body.get("n"), 0, IC_MAX_CHAPTERS),
            "aspect": _s(body.get("aspect") or "auto", 12), "recipe": _s(body.get("recipe"), 40),
@@ -574,6 +578,9 @@ def ic_save(body):
         if thumb:
             with open(os.path.join(CONTINUES, rid + ".thumb.jpg"), "wb") as f:
                 f.write(thumb)
+        if ref_img:
+            with open(os.path.join(CONTINUES, "%s.ref.%s" % (rid, ref_ext or "jpg")), "wb") as f:
+                f.write(ref_img)
         rec["ts"] = old.get("ts") or time.strftime("%Y-%m-%d %H:%M:%S")
         rec["rev"] = int(old.get("rev") or 0)
         rec["open"] = bool(body["open"]) if "open" in body else bool(old.get("open", True))
@@ -2702,7 +2709,8 @@ def comfy_submit(body):
                                    up_name, dur,
                                    body.get("wf"), blob,
                                    mode=run_mode, extra_names=extra_names, full_prompt=full_prompt,
-                                   audio_names=audio_names)
+                                   audio_names=audio_names,
+                                   video_names=[str(x) for x in (body.get("video_names") or [])][:3])
         payload = {"prompt": graph, "client_id": WS_CLIENT_ID}
         if body.get("prompt_id"):
             payload["prompt_id"] = str(body["prompt_id"])
@@ -3138,7 +3146,7 @@ def ic_repair(c):
                                 "subject_definitions", "integrated_multimodal_description") if c.find(x) >= 0]
     if hits and min(hits) > 0:
         c = c[min(hits):]
-    c = re.sub(r"^(integrated_multimodal_description|overall_soundscape|non_diegetic_music)\s*$", r"\1:", c, flags=re.M)
+    c = re.sub(r"^(integrated_multimodal_description|overall_soundscape|non_diegetic_music|subject_definitions|summary|retention_analysis|detailed_description)\s*$", r"\1:", c, flags=re.M)
     return c.strip()
 
 
@@ -3173,18 +3181,26 @@ def ic_speaker_issues(c):
     return list(dict.fromkeys(out))
 
 
-def ic_validate(c, seg, i, n, dialogue):
+def ic_validate(c, seg, i, n, dialogue, ref=False):
     """跟網頁 validate() + 接龍的檢查同一套規則。E 會帶著問題清單重寫，W 只提醒。"""
     E, W = [], []
     if "<think>" in c:
         E.append("<think> 洩漏進 content")
     if re.search(r"^\s*```", c, re.M):
         E.append("輸出含程式碼框")
-    for l in ("integrated_multimodal_description", "overall_soundscape", "non_diegetic_music"):
+    for l in (("subject_definitions", "summary", "retention_analysis", "detailed_description", "overall_soundscape", "non_diegetic_music")
+              if ref else ("integrated_multimodal_description", "overall_soundscape", "non_diegetic_music")):
         if l not in c:
             E.append("缺欄位 " + l)
+    if ref:
+        # 少了這幾個標籤，模型就不知道該接影片、該照圖認人，算出來等於白算
+        for t in ("<Video 1>", "<Picture 1>", "[video continuation"):
+            if t not in c:
+                E.append("缺欄位 " + t)
+        if re.search(r"<Picture\s*[2-9]>|<Video\s*[2-9]>", c):
+            E.append("只有一張參考圖和一支參考影片，不能出現 <Picture 2>、<Video 2> 這類編號")
     W.extend(ic_speaker_issues(c))
-    m = re.search(r"integrated_multimodal_description:?\s*([\s\S]*?)\s*overall_soundscape", c)
+    m = re.search(("detailed_description" if ref else "integrated_multimodal_description") + r":?\s*([\s\S]*?)\s*overall_soundscape", c)
     body = m.group(1) if m else c
     dall = re.findall(r"<d>[\s\S]*?</d>", c)
     try:
@@ -3239,7 +3255,7 @@ def ic_validate(c, seg, i, n, dialogue):
 
 def ic_hard(E):
     # 字數／漏台詞是品質問題：修正重試用完還是不夠就照送。少了欄位或多個鏡頭才是壞掉，要停。
-    return any(re.search(r"缺欄位|程式碼框|<think>|一個鏡頭", e) for e in E)
+    return any(re.search(r"缺欄位|程式碼框|<think>|一個鏡頭|不能出現 <Picture", e) for e in E)
 
 
 def ic_gen_prompt(rid, i, img_url, spec, rec):
@@ -3249,19 +3265,23 @@ def ic_gen_prompt(rid, i, img_url, spec, rec):
     cfg = spec.get("retry") or {}
     mx, lvl = _i(cfg.get("max"), 0, 20, 3), str(cfg.get("lvl") or "noerr")
     best, prev = None, None
+    ref = ic_join_ref(rec, i)
+    pin = rec.get("kind") == "ref" and i > 0 and not ref   # REF2VA Continue 裡看得到臉、改走 I2VA 的章節
+    parts = [{"type": "text", "text": str(cs.get("utext_i2va") if pin else cs.get("utext") or "")}, {"type": "image_url", "image_url": {"url": img_url}}]
+    if ref:                       # 第二張是 <Picture 1>；第一張只是讓寫手看到動作停在哪裡
+        parts.append({"type": "image_url", "image_url": {"url": ic_llm_image(ic_ref_image(rid))}})
+    sys0 = str((spec.get("sys_ref") if ref else spec.get("sys")) or "") + str((cs.get("extra_i2va") if pin else cs.get("extra")) or "")
     for a in range(mx + 1):
         ic_check_stop(rid)
         ic_stat(rid, "第 %d/%d 章：寫 prompt 中…%s" % (i + 1, n, ("（重試 %d/%d）" % (a, mx)) if a else ""))
-        msgs = [{"role": "system", "content": str(spec.get("sys") or "") + str(cs.get("extra") or "")},
-                {"role": "user", "content": [{"type": "text", "text": str(cs.get("utext") or "")},
-                                             {"type": "image_url", "image_url": {"url": img_url}}]}]
+        msgs = [{"role": "system", "content": sys0}, {"role": "user", "content": parts}]
         if prev and prev["issues"]:
             msgs.append({"role": "assistant", "content": prev["content"]})
             msgs.append({"role": "user", "content": "你的上一版輸出沒有通過檢查：\n" + "\n".join(prev["issues"])
                          + "\n\n重新輸出**完整**的 prompt（所有欄位都要），只修正上面列的問題，其他內容保持不變。只輸出修正後的 prompt，不要任何說明。"})
         j = ic_llm(msgs, 0.7, 4000, rid=rid)
         content = ic_repair(ic_trim(j["choices"][0]["message"].get("content") or ""))
-        E, W = ic_validate(content, seg, i, n, dialogue)
+        E, W = ic_validate(content, seg, i, n, dialogue, ref)
         cur = {"content": content, "E": E, "W": W, "score": len(E) * 100 + len(W), "attempts": a + 1}
         prev = {"content": content, "issues": ["[錯誤] " + e for e in E] + (["[警告] " + w for w in W] if lvl == "ok" else [])}
         if best is None or cur["score"] < best["score"]:
@@ -3340,6 +3360,120 @@ def ic_wait_job(rid, i, pid, resuming):
     raise IOError("等待影片逾時（8 小時）")
 
 
+IC_TAIL_MAX = 124                # 參考影片用的幀數上限（17*7+5，約 5.2 秒）
+IC_JOINT_MIN = 0.85              # 接點相似度門檻。實測壞掉的 0.77-0.78，正常的 0.89 以上，相鄰兩幀約 0.99
+IC_JOINT_RETRIES = 2
+IC_JOINT_FAIL = "第 %d 章的開頭接不上上一章，重算了還是一樣，已暫停。可以改 prompt 後重新生成，或確定要接就按「仍用這支繼續」"
+
+
+def ic_join_ref(rec, i):
+    """這一章是不是用參考影片接。REF2VA Continue 的第 2 章起才有可能；
+    看得到臉的接點改走 I2VA（第一幀鎖死，背景不會跳），join 記在章節上，重算時才不會換接法。"""
+    return rec.get("kind") == "ref" and i > 0 and rec["chapters"][i].get("join") != "i2va"
+
+
+def ic_ref_image(rid):
+    """整部片認人用的圖：使用者另外給的優先，沒給就用起始圖。"""
+    import glob as _g
+    hits = _g.glob(os.path.join(CONTINUES, rid + ".ref.*")) or _g.glob(os.path.join(CONTINUES, rid + ".img.*"))
+    if not hits:
+        raise IOError("找不到這個專案的角色參考圖")
+    with open(hits[0], "rb") as f:
+        return f.read()
+
+
+def ic_tail(rec, i):
+    """切出上一章的結尾、傳到 ComfyUI，回傳它在 input 裡的檔名。
+    節點會把參考影片從頭截到 17k+5 幀，多出來的是結尾被丟掉，而這裡要的正是結尾，所以先切成剛好的長度。"""
+    import shutil, tempfile
+    ff, vp = find_ffmpeg(), media_fetch(rec["chapters"][i - 1]["video"].replace("\\", "/"))
+    if not ff or not vp:
+        raise IOError("讀不到第 %d 章的影片，沒辦法接下一章" % i)
+    r = subprocess.run([ff, "-hide_banner", "-i", vp, "-map", "0:v:0", "-c", "copy", "-f", "null", "-"],
+                       capture_output=True, timeout=120)
+    got = re.findall(r"frame=\s*(\d+)", r.stderr.decode("utf-8", "replace"))
+    total = int(got[-1]) if got else 0
+    use = min(total, IC_TAIL_MAX)
+    use -= (use - 5) % 17
+    if use < 56:                 # 節點要求參考影片至少 2 秒
+        raise IOError("第 %d 章的影片太短（%d 幀），沒辦法當接續的參考" % (i, total))
+    td = tempfile.mkdtemp(prefix="h3tail")
+    try:
+        out = os.path.join(td, "tail.mp4")
+        r = subprocess.run([ff, "-y", "-v", "error", "-i", vp, "-an", "-vf",
+                            r"select=gte(n\,%d),setpts=N/24/TB,scale=w='trunc(sqrt(1100000*a)/2)*2':h=-2:flags=lanczos" % (total - use),
+                            "-r", "24", "-frames:v", str(use), "-c:v", "libx264", "-crf", "14", "-pix_fmt", "yuv420p", out],
+                           capture_output=True, timeout=240)
+        if r.returncode != 0:
+            raise IOError("切不出上一章的結尾：" + r.stderr.decode("utf-8", "replace")[-300:])
+        with open(out, "rb") as f:
+            name = "h3webui_%s_tail.mp4" % new_id()
+            return comfy_upload(name, f.read(), "video/mp4").get("name", name)
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def ic_joint_score(rec, i):
+    """上一章最後一幀 vs 這一章第一幀的 SSIM。量的是編碼後的影片，合併之後觀眾看到的就是這些。讀不到回 None。"""
+    import shutil, tempfile
+    ff = find_ffmpeg()
+    a = media_fetch(rec["chapters"][i - 1]["video"].replace("\\", "/"))
+    b = media_fetch(rec["chapters"][i]["video"].replace("\\", "/"))
+    if not (ff and a and b):
+        return None
+    td = tempfile.mkdtemp(prefix="h3joint")
+    try:
+        pa, pb = os.path.join(td, "a.png"), os.path.join(td, "b.png")
+        subprocess.run([ff, "-y", "-v", "error", "-sseof", "-0.25", "-i", a, "-vf", "scale=1184:-2", "-update", "1", pa],
+                       capture_output=True, timeout=120)
+        subprocess.run([ff, "-y", "-v", "error", "-i", b, "-vf", "scale=1184:-2", "-frames:v", "1", pb],
+                       capture_output=True, timeout=120)
+        r = subprocess.run([ff, "-hide_banner", "-i", pa, "-i", pb, "-lavfi",
+                            "[0:v]format=yuv444p[a];[1:v]format=yuv444p[b];[a][b]ssim", "-f", "null", "-"],
+                           capture_output=True, timeout=60)
+        m = re.search(r"All:([0-9.]+)", r.stderr.decode("utf-8", "replace"))
+        return float(m.group(1)) if m else None
+    except Exception:
+        return None
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def ic_joint_guard(rid, i):
+    """REF2VA 的第一幀沒有被釘住，實測 9 個接點有 2 個整個壞掉（背景被重畫、跳回參考圖的構圖）。
+    這條線沒有臉部檢查，face_* 那組欄位拿來記接點，頁面的暫停與「仍用這支繼續」才能共用。
+    回傳 True＝可以往下；False＝這一章退回重算了。"""
+    rec = ic_load(rid)
+    s = rec["chapters"][i]
+    if not s["video"] or s.get("face_checked") or s.get("face_skip"):
+        return True
+    if s.get("face_fail"):
+        raise IOError(IC_JOINT_FAIL % (i + 1))
+    ic_stat(rid, "檢查第 %d 章的接點…" % (i + 1))
+    v = ic_joint_score(rec, i)
+    if v is None:
+        return True                  # 這次量不出來：放行但不記成已檢查，下次還會再看
+    if v >= IC_JOINT_MIN:
+        ic_ch(rid, i, face_checked=True)
+        return True
+    tries = int(s.get("face_tries") or 0)
+    if tries >= IC_JOINT_RETRIES:
+        ic_ch(rid, i, face_fail=True)
+        raise IOError(IC_JOINT_FAIL % (i + 1))
+    with LOCK:
+        rec = ic_load(rid)
+        c = rec["chapters"][i]
+        c["takes"] = (c["takes"] + [{"video": c["video"], "ts": time.strftime("%Y/%m/%d %H:%M:%S"),
+                                     "content": c.get("sent") or c["content"], "snap": c.get("snap"),
+                                     "parent": c.get("parent") or "", "last_frame": "", "cut": 0, "face_rejected": True}])[-30:]
+        c.update(video="", pid="", face_tries=tries + 1)
+        rec["msg"] = "第 %d 章接點相似度 %.2f，換 seed 重算（第 %d 次）" % (i + 1, v, tries + 1)
+        ic_commit(rec)
+    if i + 1 < len(rec["chapters"]):
+        ic_mark_next_stale(rid, i)
+    return False
+
+
 def ic_render(rid, i, raw, spec):
     ic_ch(rid, i, vstate="rendering", error="")
     rec = ic_load(rid)
@@ -3364,17 +3498,29 @@ def ic_render(rid, i, raw, spec):
         content = rec["chapters"][i]["content"]
         mime = "image/png" if raw[:4] == b"\x89PNG" else ("image/webp" if raw[8:12] == b"WEBP" else "image/jpeg")
         na = lambda t: "N/A" if re.match(r"^n/a\.?$", t.strip(), re.I) else t
+        ref = ic_join_ref(rec, i)
+        tail = ""
+        if ref:
+            ic_stat(rid, "第 %d/%d 章：切出上一章的結尾…" % (i + 1, len(rec["chapters"])))
+            tail = ic_tail(rec, i)
+            ic_check_stop(rid)
         # prompt_id 由這邊先決定並先存檔：對方收下了、回應卻斷在路上的話，
         # 下次還認得出這一支，不會變成沒人管的工作再重送一支。
         pid = str(uuid.uuid4())
         ic_ch(rid, i, pid=pid, snap=ic_snap(cs.get("snap")), sent=content,
               parent=rec["chapters"][i - 1]["video"] if i > 0 else "")
         try:
-            comfy_submit({"prompt_id": pid, "image": "data:%s;base64,%s" % (mime, base64.b64encode(raw).decode()), "mode": "i2va",
-                            "content": content, "dur": "%d seconds" % rec["seg"], "wf": wf,
-                          "imd": ic_field(content, "integrated_multimodal_description:", "overall_soundscape:"),
-                          "soundscape": na(ic_field(content, "overall_soundscape:", "non_diegetic_music:")),
-                          "music": na(ic_field(content, "non_diegetic_music:", None))})
+            if ref:
+                ri = ic_ref_image(rid)
+                rm = "image/png" if ri[:4] == b"\x89PNG" else ("image/webp" if ri[8:12] == b"WEBP" else "image/jpeg")
+                comfy_submit({"prompt_id": pid, "image": "data:%s;base64,%s" % (rm, base64.b64encode(ri).decode()), "mode": "ref2va",
+                              "content": content, "dur": "%d seconds" % rec["seg"], "wf": wf, "video_names": [tail]})
+            else:
+                comfy_submit({"prompt_id": pid, "image": "data:%s;base64,%s" % (mime, base64.b64encode(raw).decode()), "mode": "i2va",
+                              "content": content, "dur": "%d seconds" % rec["seg"], "wf": wf,
+                              "imd": ic_field(content, "integrated_multimodal_description:", "overall_soundscape:"),
+                              "soundscape": na(ic_field(content, "overall_soundscape:", "non_diegetic_music:")),
+                              "music": na(ic_field(content, "non_diegetic_music:", None))})
         except SubmitError as e:
             if e.code < 500:              # 對方明確拒收，這個 id 不會存在
                 ic_ch(rid, i, pid="")
@@ -3547,11 +3693,27 @@ def ic_face_guard(rid, i, spec):
 def ic_do_chapter(rid, i, spec):
     with IC_LOCK:
         IC_CUR["ch"] = i
+    ref = ic_load(rid).get("kind") == "ref"
     if i > 0 and not ic_face_guard(rid, i - 1, spec):
         return                                     # 上一章退回重算，主迴圈會回頭做它
+    # 算完當下檢查過，但重啟可能剛好夾在中間，這裡再確認一次（檢查過的會直接放行）
+    if i > 1 and ic_join_ref(ic_load(rid), i - 1) and not ic_joint_guard(rid, i - 1):
+        return
     rec = ic_ch(rid, i, error="", vstate="")
     raw = ic_first_frame(rid, rec, i)
     s = rec["chapters"][i]
+    # 接法要在寫 prompt 之前決定：兩種格式不一樣。看得到臉就鎖第一幀，判斷不出來當成看不到，
+    # 寧可接點有一點跳動，也不要臉跑掉。
+    if ref and i > 0 and not s["pid"] and (not s["content"] or s["stale"] or not s.get("join")):
+        ic_stat(rid, "第 %d 章：檢查上一章結尾看不看得到臉…" % (i + 1))
+        ic_gpu_wait(rid, "llama", i)
+        ok = ic_face_ok(rid, raw, rec["plan"].get("identity"))
+        join = "i2va" if ok else "ref"
+        if s.get("join") != join and s["content"] and not s["stale"]:
+            s["stale"] = True                      # 舊的 prompt 是另一種格式，不能照送
+            ic_ch(rid, i, stale=True)
+        rec = ic_ch(rid, i, join=join)
+        s = rec["chapters"][i]
     if not s["pid"] and (not s["content"] or s["stale"]):
         ic_write(rid, i, raw, spec)
         ic_check_stop(rid)
@@ -3560,6 +3722,8 @@ def ic_do_chapter(rid, i, spec):
         ic_ch(rid, i, stale=True, vstate="")       # 下次按繼續就重寫，不會卡在同一份壞掉的內容
         raise IOError("prompt 沒通過檢查：" + "；".join(s.get("v_e") or ["請重寫或手動修改"])[:120])
     ic_render(rid, i, raw, spec)
+    if ic_join_ref(ic_load(rid), i):              # 鎖第一幀的章節不用查，它的接點本來就對
+        ic_joint_guard(rid, i)
 
 
 def ic_clear_vstate(rid):
@@ -3622,7 +3786,7 @@ def ic_run_project(rid):
             if IC_STOP_AFTER[0]:
                 raise IcPaused()
             tries = rec["chapters"][i].get("face_tries") or 0
-            ic_update(rid, msg="第 %d/%d 章%s" % (i + 1, len(rec["chapters"]), ("（結尾看不到臉，第 %d 次重算）" % tries) if tries else ""))
+            ic_update(rid, msg="第 %d/%d 章%s" % (i + 1, len(rec["chapters"]), (("（接點對不上，第 %d 次重算）" if rec.get("kind") == "ref" else "（結尾看不到臉，第 %d 次重算）") % tries) if tries else ""))
             ic_do_chapter(rid, i, spec)
     except IcStopped:
         with LOCK:
@@ -4143,7 +4307,7 @@ def strip_latent_resamplers(g, warn):
 
 
 def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, image_blob=None,
-                mode=None, extra_names=None, full_prompt=None, audio_names=None):
+                mode=None, extra_names=None, full_prompt=None, audio_names=None, video_names=None):
     """載模板，換圖與欄位（＋影片秒數），其餘照舊；種子隨機化避免重複送出被去重。
     extra_data（UI 工作流）同步替換相同欄位——save_metadata 嵌進影片的是它。
     mode/extra_names/full_prompt：四模式支援 —— 設 Director 的 mode、重建 timeline 的圖片清單
@@ -4258,7 +4422,15 @@ def comfy_build(imd, soundscape, music, image_name, duration=None, wf=None, imag
             aud_items.append({"id": "h3web-aud-%d" % (k + 1), "type": "audio", "value": nm,
                               "order": len(img_items) + k, "enabled": True,
                               "trim_start": 0, "trim_end": None, "thumbnail": None})
-        tl["items"] = img_items + aud_items + keep
+        # 參考影片（接龍的上一章結尾）。模板快照裡留著的影片項目要拿掉，否則 <Video N> 的編號會對不上
+        vid_items = []
+        for k, nm in enumerate(list(video_names or [])):
+            vid_items.append({"id": "h3web-vid-%d" % (k + 1), "type": "video", "value": nm, "media_mode": "video",
+                              "order": len(img_items) + len(aud_items) + k, "enabled": True,
+                              "trim_start": 0, "trim_end": None, "thumbnail": None})
+        if vid_items:
+            keep = [it for it in keep if it.get("type") != "video"]
+        tl["items"] = img_items + aud_items + vid_items + keep
         done = bool(img_items)
     else:
         done = False

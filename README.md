@@ -109,6 +109,9 @@ Before a chapter continues, the page checks that the last frame still shows the 
 The writing rules live in `skills/i2va-continue/` and can be edited there.  
 寫作規則放在 `skills/i2va-continue/`，可以直接修改。
 
+**REF2VA Continue** sits under REF2VA and keeps a character consistent even when the face leaves the frame. Before each chapter it looks at the end of the previous one: if the face is visible it continues from that exact frame, so the background cannot jump; if not, it uses the last five seconds of the previous chapter plus the original image, and re-renders automatically when the join is too far off. You provide one image with a clear face, a rough story and a total length; a separate character reference is optional. Character sheets are not needed.
+**REF2VA Continue** 在 REF2VA 底下，角色中途背對鏡頭也不會跑掉。每接一章前會先看上一章的結尾：看得到臉就從那一幀接，背景不會跳；看不到臉才改參考上一章最後五秒的影片與原圖，接點差太多會自動重算。要提供的是一張臉部清楚的圖、大概的劇情與總秒數，另外的角色參考圖可有可無，不需要三視圖。
+
 ---
 
 ## Story quality guarantees 劇情品質保證
