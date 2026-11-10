@@ -23,7 +23,7 @@ This clip is one chapter of a longer film built by chaining clips.
 This opening chapter is written in the full-reference format, because the film uses references from the start. There is no earlier video. Use exactly these six sections in this order:
 
 subject_definitions:
-<Subject 1> is the [person] whose appearance comes from <Picture 2>, with [the fixed identity details].
+<Subject 1> is the [person] whose face and hairstyle come from <Picture 2>, with [face and hair details], wearing [the clothing and accessories shown in <Picture 1>].
 <Picture 1> is the first frame of [Shot 1], showing [what the opening frame shows].
 <Subject 2> is the setting in <Picture 1>: [the background elements], with the same camera position, framing, and light.
 
@@ -32,7 +32,7 @@ summary:
 
 retention_analysis:
 <Picture 1> ([Shot 1] first frame): fully_preserved - the pose, framing, lighting, and background of the opening frame are kept exactly.
-<Subject 1> (appears in [Shot 1]): fully_preserved - the face, hairstyle, jewelry, and costume match <Picture 2> throughout.
+<Subject 1> (appears in [Shot 1]): partially_preserved - the face and hairstyle match <Picture 2>; the clothing and accessories start as shown in <Picture 1> and change only as this chapter describes.
 <Subject 2> (appears in [Shot 1]): fully_preserved - the background stays exactly as in <Picture 1>, without shifting, changing pattern, or gaining new elements.
 
 detailed_description:
@@ -45,14 +45,14 @@ overall_soundscape:
 non_diegetic_music:
 [The music line.]
 
-- <Picture 1> and <Picture 2> may be the same picture: it is both where the film starts and what the character looks like.
+- <Picture 1> and <Picture 2> may be the same picture: it is both where the film starts and what the character looks like. Take the face and hairstyle from <Picture 2>; the clothing starts as <Picture 1> shows it and changes only as the story says.
 - No <Video N> label: there is no earlier clip.
 
 ## Later chapters
 This chapter is written in the full-reference format, with exactly these six sections in this order:
 
 subject_definitions:
-<Subject 1> is the [person] whose appearance comes from <Picture 2>, with [the fixed identity details].
+<Subject 1> is the [person] whose face and hairstyle come from <Picture 2>, with [face and hair details], currently wearing [the clothing and accessories exactly as they are in <Picture 1>].
 <Picture 1> is the first frame of [Shot 1]: the final frame of <Video 1>, showing [what that frame shows].
 <Subject 2> is the setting in <Picture 1>: [the background elements], with the same camera position, framing, and light.
 <Video 1> is the source video whose ending is the continuation starting point of the target video.
@@ -63,7 +63,7 @@ summary:
 retention_analysis:
 <Picture 1> ([Shot 1] first frame): fully_preserved - the pose, framing, lighting, and background of the opening frame are kept exactly.
 <Video 1> (continuation starting point): fully_preserved - the motion at the end of <Video 1> carries on into the target video.
-<Subject 1> (appears in [Shot 1]): fully_preserved - the face, hairstyle, jewelry, and costume match <Picture 2> throughout.
+<Subject 1> (appears in [Shot 1]): partially_preserved - the face and hairstyle match <Picture 2>; the clothing and accessories follow their current state in <Picture 1>, not <Picture 2>.
 <Subject 2> (appears in [Shot 1]): fully_preserved - the background stays exactly as in <Picture 1>, without shifting, changing pattern, or gaining new elements.
 
 detailed_description:
@@ -77,7 +77,8 @@ non_diegetic_music:
 [The music line.]
 
 - Two images are attached, in order. <Picture 1> is the real last frame of the previous chapter, and it is where this shot starts: same pose, hands, props, position, framing, and light. It ends on a movement caught halfway, so the first beat finishes that movement, then the chapter moves on.
-- <Picture 2> supplies appearance only: face, hair, jewelry, costume. Never begin from it, and never bring back its pose, composition, props, or setting.
+- <Picture 2> supplies the face and hairstyle only. Never begin from it, and never bring back its pose, composition, props, setting, or clothing.
+- Clothing and accessories follow the story, not <Picture 2>. Anything taken off, put on, or changed in earlier chapters stays that way, exactly as <Picture 1> shows it. Describe what the character is wearing now, even when the fixed identity line or <Picture 2> shows a different outfit.
 - Use no other picture or video labels: no <Picture 3>, no <Video 2>.
 
 ## Voice reference
