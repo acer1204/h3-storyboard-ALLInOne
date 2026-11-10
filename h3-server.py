@@ -61,7 +61,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # ---- 關於：版本與開源資訊 ----
 # 發佈新版時要跟著改，而且要跟 h3-webui.html 的 H3_VERSION 一致——「關於」頁會比對兩邊，
 # 不一致就提示瀏覽器還拿著舊網頁（伺服器沒有關掉快取，換版後常常要 Ctrl+F5）。
-APP_VERSION = "2.6"
+APP_VERSION = "2.7"
 APP_NAME = "H3 Storyboard"
 APP_AUTHOR = "acer1204"
 APP_REPO = "acer1204/h3-storyboard-ALLInOne"
@@ -3964,6 +3964,35 @@ def ic_plan_order(story, chs):
     return ""
 
 
+def ic_plan_cover(story, chs):
+    """使用者寫的內容有沒有被漏掉：各章摘錄的原文要把整段劇情涵蓋起來。
+    逐句看被摘錄到的比例，一半以上沒被任何一章用到的句子就算漏掉。摘錄可能被改了幾個字，所以用相似比對，不要求逐字。"""
+    import difflib
+    st = re.sub(r"\s+", "", story or "")
+    if len(st) < 8:
+        return ""
+    hit = [False] * len(st)
+    for c in chs:
+        src = re.sub(r"\s+", "", c.get("source") or "")
+        if len(src) < 3:
+            continue
+        for b in difflib.SequenceMatcher(None, st, src, autojunk=False).get_matching_blocks():
+            if b.size >= 2:          # 改寫常把四字詞縮成兩字（打開門 -> 開門），三字以上才算會誤報漏句
+                for k in range(b.a, b.a + b.size):
+                    hit[k] = True
+    miss, pos = [], 0
+    for cl in re.split(r"[，。！？；、,.!?;：:「」『』（）()]+", st):
+        if not cl:
+            continue
+        p = st.find(cl, pos)
+        if p < 0:
+            continue
+        pos = p + len(cl)
+        if len(cl) >= 4 and sum(hit[p:p + len(cl)]) < len(cl) / 2:
+            miss.append(cl)
+    return ("原文這幾句沒有分到任何一章：" + "、".join("「%s」" % m[:20] for m in miss[:4])) if miss else ""
+
+
 def ic_plan_job(rid, sys_text, user_text, n, story=""):
     prior = "new"
     try:
@@ -3978,7 +4007,7 @@ def ic_plan_job(rid, sys_text, user_text, n, story=""):
                                              {"type": "image_url", "image_url": {"url": url}}]}]
         for a in range(3):
             if a:
-                ic_update(rid, msg="規劃結果%s（%s），重試 %d/2…" % ("順序不對" if got else "不完整", err, a))
+                ic_update(rid, msg="規劃結果%s（%s），重試 %d/2…" % ("跟劇情對不上" if got else "不完整", err, a))
             j = ic_llm(msgs, 0.8, min(16000, 1500 + n * 500))
             text = j["choices"][0]["message"].get("content") or ""
             try:
@@ -3987,13 +4016,13 @@ def ic_plan_job(rid, sys_text, user_text, n, story=""):
                 got = None
                 err = "回覆被截斷" if j["choices"][0].get("finish_reason") == "length" else str(e)[:120]
                 continue
-            warn = ic_plan_order(story, got[1])
+            warn = ic_plan_order(story, got[1]) or ic_plan_cover(story, got[1])
             if not warn:
                 break
             # 順序錯了就把問題講給它聽再來一次；最後一次還是錯就照用，但要讓使用者知道
             err = warn
             msgs = msgs[:2] + [{"role": "assistant", "content": text},
-                               {"role": "user", "content": "順序錯了：" + warn + "。照使用者原文的先後重新分配各章，不要調換、提前或重複任何事件。完整重新輸出 JSON。"}]
+                               {"role": "user", "content": warn + "。照使用者原文的先後重新分配各章：每一個事件都要分到某一章，不要省略、調換、提前或重複。完整重新輸出 JSON。"}]
         if not got:
             raise IOError("LLM 沒有給出可用的章節規劃（%s）" % err)
         plan, chs = got
@@ -4010,7 +4039,7 @@ def ic_plan_job(rid, sys_text, user_text, n, story=""):
             # 新規劃到手才動舊章節：LLM 失敗時原本的影片與 prompt 都還在。
             # 舊影片不留在產出紀錄——那是舊劇情的東西，改用會接回舊的故事。
             rec.update(plan=plan, chapters=new, final="", status="planned", n=n,
-                       msg=("⚠ 規劃完成，但章節順序可能跟劇情不一致（%s），請檢查各章內容" % warn) if warn
+                       msg=("⚠ 規劃完成，但可能跟你寫的劇情對不上（%s），請檢查各章內容" % warn) if warn
                        else "規劃完成——看過各章內容後按「開始生成」")
             ic_commit(rec)
         for pid in pids:

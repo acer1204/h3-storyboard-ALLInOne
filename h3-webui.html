@@ -888,6 +888,11 @@ th{color:var(--faint);font-size:11px;letter-spacing:.05em;text-transform:upperca
     </div>
     <div class="note-wrap" style="margin-top:10px"><label>整體劇情（LLM 規劃的結果，可編輯）</label>
       <textarea class="note" id="icPlanStory" rows="2"></textarea></div>
+    <div class="note-wrap" style="margin-top:10px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><label style="margin:0">你輸入的劇情（改完按「🧠 重新規劃章節」才會照新的內容拆章）</label>
+        <button class="ghost mini" id="icOrigCopy" type="button">📋 複製</button>
+        <button class="ghost mini" id="icOrigToAdd" type="button" title="填進上方「新增一筆」的劇情欄，換一張圖就能開新的專案">⤴ 帶到新增</button></div>
+      <textarea class="note" id="icOrigStory" rows="3"></textarea></div>
     <div class="iccards" id="icCards"></div>
     <div id="icTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"></div>
     <div id="icDetail"></div>
@@ -2273,7 +2278,7 @@ function setView(v){
 /* ================= 關於 =================
    版本以伺服器為準（/api/about）。網頁這邊也記一份：兩邊不一樣就代表瀏覽器
    還拿著換版前的網頁——伺服器沒有關掉快取，這種情況實際發生過。 */
-const H3_VERSION = "2.6";
+const H3_VERSION = "2.7";
 /* 以 file:// 開啟時沒有伺服器可問，這幾項由網頁自己帶 */
 const H3_ABOUT = {author: "acer1204", repo_url: "https://github.com/acer1204/h3-storyboard-ALLInOne", license: "MIT"};
 let AB_INFO = null, AB_UPD = null;
@@ -7888,6 +7893,32 @@ $("#icApplyLr").onclick = () => {
 };
 $("#icAllRef").onchange = () => { const p = icP(); if (p && !icBusy(p)){ p.all_ref = $("#icAllRef").checked; icSaveSoon(p); } };
 $("#icFace").onchange = () => { const p = icP(); if (p && !icBusy(p)){ p.face_guard = $("#icFace").checked; icSaveSoon(p); } };
+/* 剪貼簿 API 只在 https 或 localhost 能用；用區網 IP 開網頁時退回舊的 execCommand */
+function icCopy(t){
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(t);
+  const ta = document.createElement("textarea");
+  ta.value = t; ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand("copy"); } finally { ta.remove(); }
+  return Promise.resolve();
+}
+$("#icOrigCopy").onclick = async () => {
+  const p = icP(), b = $("#icOrigCopy");
+  if (!p) return;
+  try{ await icCopy($("#icOrigStory").value || p.story || ""); b.textContent = "✓ 已複製"; }
+  catch(e){ b.textContent = "✘ 複製失敗"; }
+  setTimeout(() => { b.textContent = "📋 複製"; }, 1500);
+};
+$("#icOrigToAdd").onclick = () => {
+  const p = icP();
+  if (!p) return;
+  $("#icStory").value = $("#icOrigStory").value || p.story || "";
+  $("#icStory").dispatchEvent(new Event("input"));
+  icDrawAdd();
+  $("#icStory").scrollIntoView({behavior: "smooth", block: "center"});
+  $("#icStory").focus();
+};
+$("#icOrigStory").oninput = () => { const p = icP(); if (p && !icBusy(p)){ p.story = $("#icOrigStory").value; icSaveSoon(p); } };
 $("#icPlanStory").oninput = () => { const p = icP(); if (p){ p.plan.story = $("#icPlanStory").value; icSaveSoon(p); } };
 $("#icMerge").onclick = async () => {
   const p = icP();
@@ -8020,6 +8051,8 @@ function icDraw(){
   $("#icGo").textContent = IC.planning.has(p.id) ? icPlanWord(p) + "…" : IC.queueIds.includes(p.id) ? "排隊中…" : IC.active.has(p.id) ? "生成中…"
     : doneN || p.status === "paused" || p.chapters.some(s => s.pid) ? "▶ 繼續生成" : "▶ 開始生成";
   $("#icPlanStory").disabled = busy;
+  $("#icOrigStory").disabled = busy;
+  if (document.activeElement !== $("#icOrigStory")) $("#icOrigStory").value = p.story || "";
   $("#icMerge").disabled = busy || !prefix || !!p.merging;
   $("#icMerge").textContent = prefix && prefix < n ? `🧵 合併前 ${prefix} 章` : "🧵 合併成長片";
   if (document.activeElement !== $("#icPlanStory")) $("#icPlanStory").value = (p.plan && p.plan.story) || "";
@@ -8227,7 +8260,7 @@ const EN = {
 "新增一筆":"New item","起始圖":"Start image","大概的劇情（行為與對白的細節由 LLM 補完）":"Rough story (the LLM fills in action and dialogue)","目標總秒數":"Total seconds",
 "生成清單":"Generation list","▶ 全部開始":"▶ Start all","⏹ 這一章完成後停止":"⏹ Stop after this chapter","LoRA 套用到全部章節":"Apply LoRA to all chapters","🧠 重新規劃章節":"🧠 Re-plan chapters",
 "▶ 開始生成":"▶ Start","▶ 繼續生成":"▶ Continue","🧵 合併成長片":"🧵 Merge into one film","整體劇情（LLM 規劃的結果，可編輯）":"Overall story (planned by the LLM, editable)","🎉 合併後的長片":"🎉 Merged film",
-"⏹ 停止這一章":"⏹ Stop this chapter","確保結尾看得到臉":"Keep the face in the last frame","仍用這一幀繼續":"Continue with this frame anyway","仍用這支繼續":"Continue with this clip","選擇音檔":"Choose audio","移除音檔":"Remove audio","全部用 REF2VA":"Use REF2VA for every chapter","角色參考圖（選填）":"Character reference (optional)","REF2VA Continue 紀錄":"REF2VA Continue history","⏹ 停止":"⏹ Stop","排隊中":"Queued","生成中":"Generating","規劃中":"Planning","第一幀":"First frame","最後一幀":"Last frame","上一章的最後一幀":"Last frame of previous chapter","生成後的最後一幀":"Last frame after generation","🗣 本章台詞":"🗣 Dialogue","補充提示（選填，寫 prompt 時會帶上）":"Extra note (optional, used when writing the prompt)","本章 LoRA":"Chapter LoRA",
+"⏹ 停止這一章":"⏹ Stop this chapter","確保結尾看得到臉":"Keep the face in the last frame","仍用這一幀繼續":"Continue with this frame anyway","仍用這支繼續":"Continue with this clip","📋 複製":"📋 Copy","⤴ 帶到新增":"⤴ Use for a new one","選擇音檔":"Choose audio","移除音檔":"Remove audio","全部用 REF2VA":"Use REF2VA for every chapter","角色參考圖（選填）":"Character reference (optional)","REF2VA Continue 紀錄":"REF2VA Continue history","⏹ 停止":"⏹ Stop","排隊中":"Queued","生成中":"Generating","規劃中":"Planning","第一幀":"First frame","最後一幀":"Last frame","上一章的最後一幀":"Last frame of previous chapter","生成後的最後一幀":"Last frame after generation","🗣 本章台詞":"🗣 Dialogue","補充提示（選填，寫 prompt 時會帶上）":"Extra note (optional, used when writing the prompt)","本章 LoRA":"Chapter LoRA",
 "✍️ 只寫 prompt":"✍️ Write prompt only","🎲 用這份 prompt 重新生成":"🎲 Regenerate with this prompt","♻️ 重寫 prompt 並重新生成":"♻️ Rewrite prompt and regenerate","H3 Prompt（第一幀拿到後才會寫；可直接修改）":"H3 Prompt (written once the first frame is ready; editable)","🎞 產出紀錄":"🎞 Takes","改用這支":"Use this one","▶ 看這章":"▶ Watch","還原":"Restore","改用配方":"Use a recipe","等待上一章":"Waiting for previous chapter","待生成":"Pending","✅ 完成":"✅ Done","還沒有保存的接龍專案":"No saved projects yet",
 "保存的長片專案：分鏡圖、各片段劇情與影片、完成的長片。點「開啟」載回 Movie 頁查看或繼續。":"Saved film projects: storyboard, per-segment stories and videos, and the finished film. \"Open\" loads one back into the Movie page.",
 "存在伺服器的 history 資料夾，區網上任何裝置看到的都是同一份。點縮圖看當時的完整結果。":"Stored in the server's history folder — every device on your LAN sees the same list. Click a thumbnail for the full result.",
